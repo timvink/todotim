@@ -38,8 +38,13 @@ public enum JSONCoding {
 extension JSONEncoder.DateEncodingStrategy {
     static var iso8601WithFractionalSeconds: Self {
         .custom { date, encoder in
+            // Milliseconds are formatted by hand: the fractional-seconds FormatStyle truncates the
+            // binary value, so decode → encode could drift by 1 ms and break sync idempotence.
+            let ms = (date.timeIntervalSince1970 * 1000).rounded()
+            let seconds = (ms / 1000).rounded(.down)
+            let whole = Date(timeIntervalSince1970: seconds).formatted(.iso8601.year().month().day().time(includingFractionalSeconds: false))
             var c = encoder.singleValueContainer()
-            try c.encode(date.formatted(.iso8601.year().month().day().time(includingFractionalSeconds: true)))
+            try c.encode(whole + String(format: ".%03d", Int(ms - seconds * 1000)))
         }
     }
 }

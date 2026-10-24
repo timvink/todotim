@@ -1,0 +1,56 @@
+name: Dependency audit
+
+# Runs on the 1st and 15th of every month (roughly every two weeks).
+on:
+  schedule:
+    - cron: "0 6 1,15 * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  issues: write
+
+jobs:
+  audit:
+    runs-on: macos-26
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Swift package dependencies
+        id: spm
+        run: |
+          swift package resolve
+          deps=$(swift package show-dependencies --format json | python3 -c 'import json,sys; print(len(json.load(sys.stdin).get("dependencies", [])))')
+          echo "count=$deps" >> "$GITHUB_OUTPUT"
+          {
+            echo "## Swift packages"
+            echo "Direct dependencies: $deps"
+          } >> report.md
+          if [ "$deps" -gt 0 ]; then
+            swift package update --dry-run 2>&1 | tee spm-updates.txt
+            if grep -q "would be updated\|Updating" spm-updates.txt; then
+              echo "updates=true" >> "$GITHUB_OUTPUT"
+              { echo '```'; cat spm-updates.txt; echo '```'; } >> report.md
+            fi
+          fi
+
+      - name: Security advisories for GitHub Actions and Swift packages
+        id: advisories
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          # Dependabot alerts need the repo setting "Dependabot alerts" enabled.
+          alerts=$(gh api "repos/${GITHUB_REPOSITORY}/dependabot/alerts?state=open" --jq 'length' 2>/dev/null || echo "unavailable")
+          echo "alerts=$alerts" >> "$GITHUB_OUTPUT"
+          { echo "## Open Dependabot alerts"; echo "$alerts"; } >> report.md
+
+      - name: Open an issue when something needs attention
+        if: steps.spm.outputs.updates == 'true' || (steps.advisories.outputs.alerts != '0' && steps.advisories.outputs.alerts != 'unavailable')
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh issue create --title "Dependency audit $(date +%Y-%m-%d)" --body-file report.md --label dependencies || \
+          gh issue create --title "Dependency audit $(date +%Y-%m-%d)" --body-file report.md
+
+      - name: Summary
+        run: cat report.md >> "$GITHUB_STEP_SUMMARY"
