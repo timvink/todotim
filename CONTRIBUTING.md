@@ -43,10 +43,10 @@ Releases are built by GitHub Actions (`.github/workflows/release.yml`) when a ve
 
 Users verify a download with `gh attestation verify TodoTim-v0.2.0.zip --repo timvink/todotim`.
 
-The app is ad-hoc signed with the hardened runtime (`scripts/bundle.sh`), not Developer ID signed or
-notarized. On first launch users approve it in **System Settings › Privacy & Security › Open Anyway**; don't
-tell them to remove the quarantine attribute. Developer ID signing and notarization would be better, but need
-a paid Apple Developer account.
+The app is signed with the hardened runtime (`scripts/bundle.sh`). When the repository has the signing
+secrets, the build job signs it with a Developer ID, notarizes and staples it; without them it is ad-hoc signed,
+and on first launch users approve it in **System Settings › Privacy & Security › Open Anyway** (don't tell them
+to remove the quarantine attribute). See [docs/signing.md](docs/signing.md) for the setup.
 
 Workflow actions are pinned to full commit SHAs with a `# vX.Y.Z` comment; Dependabot proposes updates.
 

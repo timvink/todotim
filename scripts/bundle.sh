@@ -1,10 +1,11 @@
 #!/usr/bin/env bash
-# Builds build/TodoTim.app from the SwiftPM executable (release), with icon and ad-hoc signature (hardened runtime).
+# Builds build/TodoTim.app from the SwiftPM executable (release), with icon and a hardened-runtime signature.
 # Usage: scripts/bundle.sh
 # Env: SCRATCH_PATH=.build-foo  private build dir
 #      APP=build/x/TodoTim.app  output bundle path (default build/TodoTim.app)
 #      VERSION=1.2.3            CFBundleShortVersionString (default 0.0.0-dev)
 #      UNIVERSAL=1              build for arm64 and x86_64
+#      SIGN_IDENTITY="Developer ID Application: Name (TEAMID)"  sign with it (default: ad-hoc)
 set -euo pipefail
 
 cd "$(dirname "$0")/.."
@@ -60,7 +61,15 @@ cat > "$APP/Contents/Info.plist" <<PLIST
 </plist>
 PLIST
 
-# Ad-hoc signature with the hardened runtime (no Developer ID: the app is not notarized).
-codesign --force --options runtime --timestamp=none -s - "$APP"
+# Signature with the hardened runtime. With SIGN_IDENTITY: Developer ID plus a secure timestamp, as
+# notarization requires (see docs/signing.md). Otherwise ad-hoc, which cannot be notarized.
+# No entitlements file: the app is not sandboxed and needs no hardened-runtime exception (no JIT, unsigned
+# executable memory, disabled library validation, DYLD variables or Apple Events). Outgoing network and its
+# own legacy Keychain items need no entitlement outside the sandbox.
+if [[ -n "${SIGN_IDENTITY:-}" ]]; then
+    codesign --force --options runtime --timestamp -s "$SIGN_IDENTITY" "$APP"
+else
+    codesign --force --options runtime --timestamp=none -s - "$APP"
+fi
 codesign --verify --strict "$APP"
 echo "Built $APP"
