@@ -26,27 +26,6 @@ struct SectionEditorTarget: Equatable {
 
 enum TaskPopover: Equatable { case date, labels, move }
 
-struct RowItem: Identifiable {
-    var task: TodoTask
-    var depth: Int
-    var subtaskTotal: Int
-    var subtaskDone: Int
-    /// True when the task has subtasks that would be shown when expanded.
-    var hasChildren: Bool
-    var id: EntityID { task.id }
-}
-
-enum ListItem: Identifiable {
-    case task(RowItem)
-    case editor(depth: Int)
-    var id: String {
-        switch self {
-        case .task(let r): r.id
-        case .editor: "__editor__"
-        }
-    }
-}
-
 struct ToastInfo: Identifiable {
     let id = UUID()
     var message: String
@@ -71,22 +50,50 @@ final class AppModel {
     }
 
     var selectedTaskID: EntityID? {
-        didSet { if selectedTaskID != oldValue { popover = nil } }
+        didSet {
+            guard selectedTaskID != oldValue else { return }
+            if popover != nil { popover = nil }
+            if hasSelection != (selectedTaskID != nil) { hasSelection = selectedTaskID != nil }
+        }
     }
 
     /// Task shown in the detail sheet.
-    var detailTaskID: EntityID?
+    var detailTaskID: EntityID? {
+        didSet {
+            guard detailTaskID != oldValue else { return }
+            if oldValue != nil { flushDetailEdits() }
+        }
+    }
+
+    /// `selectedTaskID != nil`, as its own observable value so menus and other views that only
+    /// care whether something is selected are not invalidated by every j/k press.
+    private(set) var hasSelection = false
+    /// Whether menu task actions have a target (open sheet or selection). Cheap; does not read the store.
+    var hasActionTask: Bool { detailTaskID != nil || hasSelection }
     var showQuickAdd = false
     var showShortcuts = false
     var showAddProject = false
     var confirmDeleteTaskID: EntityID?
     var showCompletedProjects: Set<EntityID> = []
     var collapsedSections: Set<EntityID> = []
-    var editor: EditorTarget?
+    var editor: EditorTarget? {
+        didSet {
+            guard let e = editor else { return }
+            if let o = oldValue, o.projectId == e.projectId, o.sectionId == e.sectionId, o.parentId == e.parentId { return }
+            editorDraft.reset(projectId: e.projectId, sectionId: e.sectionId)
+        }
+    }
+    /// Draft of the inline "Add task" editor. Kept here, not in view state, because the editor
+    /// row lives in a lazy list and may be destroyed while scrolled out of view.
+    @ObservationIgnored let editorDraft = InlineEditorDraft()
     var sectionEditor: SectionEditorTarget?
     var renamingSectionID: EntityID?
     var popover: TaskPopover?
     var toast: ToastInfo?
+    /// Shown once at launch when the local database or the config file could not be loaded.
+    var startupError: String?
+    /// Opened by Help › TodoTim on GitHub (`repository` in the config file).
+    @ObservationIgnored var repositoryURL = AppConfig.defaultRepository
     var searchQuery = ""
     /// Incremented to ask the search field to take focus.
     var searchFocusRequest = 0
@@ -94,6 +101,10 @@ final class AppModel {
     @ObservationIgnored weak var mainWindow: NSWindow?
     @ObservationIgnored weak var undoManager: UndoManager?
     @ObservationIgnored private var toastTask: Task<Void, Never>?
+    /// Commits the open task sheet's pending title/description draft (set by the sheet).
+    @ObservationIgnored var detailFlush: (taskID: EntityID, flush: () -> Void)?
+    /// Rows of the list currently on screen; see `display()`.
+    @ObservationIgnored private var displayCache: DisplayModel?
 
     init(store: TodoStore, sync: SyncController) {
         self.store = store
@@ -123,84 +134,52 @@ final class AppModel {
         return nil
     }
 
+    /// Palette keys for label names ("" when the label does not exist).
+    func labelColorKeys(_ names: [String]) -> [String] {
+        guard !names.isEmpty else { return [] }
+        let labels = store.labels
+        return names.map { n in labels.first { $0.name == n }?.color ?? "" }
+    }
+
     func showsCompleted(_ projectId: EntityID) -> Bool { showCompletedProjects.contains(projectId) }
 
-    /// Flattened rows for one task area (project top area when `sectionId` is nil),
-    /// honoring collapsed parents, the completed toggle and the inline editor position.
-    func rows(projectId: EntityID, sectionId: EntityID?) -> [ListItem] {
-        let showCompleted = showsCompleted(projectId)
-        var out: [ListItem] = []
-        let editorHere = editor.map { $0.parentId == nil && $0.projectId == projectId && $0.sectionId == sectionId } ?? false
-        if editorHere, editor?.atTop == true { out.append(.editor(depth: 0)) }
-        for t in store.tasks(projectId: projectId, sectionId: sectionId, includeCompleted: showCompleted) {
-            appendTree(t, depth: 0, showCompleted: showCompleted, into: &out)
-        }
-        if editorHere, editor?.atTop == false { out.append(.editor(depth: 0)) }
-        return out
+    /// Commits any pending edit in the task sheet.
+    func flushDetailEdits() { detailFlush?.flush() }
+
+    /// Flattened rows of the current view. List views call this from `body` (so it is rebuilt
+    /// whenever anything it read changes); keyboard navigation reuses the last result as long as
+    /// the store structure and the view inputs are unchanged.
+    func display() -> DisplayModel {
+        let key = currentDisplayKey()
+        var builder = DisplayBuilder(model: self, store: store)
+        let d = Perf.measureIfSlow("build rows") { builder.build(key) }
+        displayCache = d
+        return d
     }
 
-    func rowItem(_ t: TodoTask, depth: Int = 0, showCompleted: Bool = false) -> RowItem {
-        let all = store.subtasks(of: t.id, includeCompleted: true)
-        let done = all.filter(\.isCompleted).count
-        let shown = showCompleted ? all.count : all.count - done
-        return RowItem(task: t, depth: depth, subtaskTotal: all.count, subtaskDone: done, hasChildren: shown > 0)
+    /// Cached rows for navigation: rebuilt only when the structure or view inputs changed.
+    func cachedDisplay() -> DisplayModel {
+        let key = currentDisplayKey()
+        if let c = displayCache, c.key == key { return c }
+        return display()
     }
 
-    private func appendTree(_ t: TodoTask, depth: Int, showCompleted: Bool, into out: inout [ListItem]) {
-        let item = rowItem(t, depth: depth, showCompleted: showCompleted)
-        out.append(.task(item))
-        if !t.collapsed {
-            for c in store.subtasks(of: t.id, includeCompleted: showCompleted) {
-                appendTree(c, depth: depth + 1, showCompleted: showCompleted, into: &out)
-            }
-        }
-        if editor?.parentId == t.id { out.append(.editor(depth: depth + 1)) }
-    }
-
-    func searchGroups() -> [(project: Project, tasks: [TodoTask])] {
-        let results = store.search(searchQuery)
-        return allProjects.compactMap { p in
-            let ts = results.filter { $0.projectId == p.id }
-            return ts.isEmpty ? nil : (p, ts)
-        }
-    }
-
-    func labelGroups(_ name: String) -> [(project: Project, tasks: [TodoTask])] {
-        let results = store.tasks(withLabel: name)
-        return allProjects.compactMap { p in
-            let ts = results.filter { $0.projectId == p.id }
-            return ts.isEmpty ? nil : (p, ts)
-        }
+    private func currentDisplayKey() -> DisplayKey {
+        DisplayKey(structureVersion: store.structureVersion, sidebar: sidebar, editor: editor,
+                   collapsedSections: collapsedSections, showCompleted: showCompletedProjects,
+                   searchQuery: sidebar == .search ? searchQuery : "")
     }
 
     /// Task ids in on-screen order for the current view (used by ↑/↓ navigation).
-    func visibleTaskIDs() -> [EntityID] {
-        switch sidebar {
-        case .project(let pid):
-            var ids: [EntityID] = []
-            func collect(_ items: [ListItem]) {
-                for case .task(let r) in items { ids.append(r.id) }
-            }
-            collect(rows(projectId: pid, sectionId: nil))
-            for s in store.sections(in: pid) where !collapsedSections.contains(s.id) {
-                collect(rows(projectId: pid, sectionId: s.id))
-            }
-            return ids
-        case .label(let name):
-            return labelGroups(name).flatMap { $0.tasks.map(\.id) }
-        case .search:
-            return searchGroups().flatMap { $0.tasks.map(\.id) }
-        case nil:
-            return []
-        }
-    }
+    func visibleTaskIDs() -> [EntityID] { cachedDisplay().taskIDs }
 
     // MARK: - Navigation
 
     func moveSelection(_ delta: Int) {
-        let ids = visibleTaskIDs()
+        let d = cachedDisplay()
+        let ids = d.taskIDs
         guard !ids.isEmpty else { return }
-        guard let cur = selectedTaskID, let i = ids.firstIndex(of: cur) else {
+        guard let cur = selectedTaskID, let i = d.position[cur] else {
             selectedTaskID = delta > 0 ? ids.first : ids.last
             return
         }
@@ -210,17 +189,18 @@ final class AppModel {
     /// Moves the detail sheet to the previous/next task in the list.
     func moveDetail(_ delta: Int) {
         guard let cur = detailTaskID else { return }
-        let ids = visibleTaskIDs()
-        if let i = ids.firstIndex(of: cur) {
+        let d = cachedDisplay()
+        let ids = d.taskIDs
+        if let i = d.position[cur] {
             let j = i + delta
             guard j >= 0, j < ids.count else { return }
             detailTaskID = ids[j]
             selectedTaskID = ids[j]
         } else if let t = store.task(cur), let pid = t.parentId {
             // A subtask opened from the sheet that is hidden in the list: walk its siblings.
-            let sibs = store.subtasks(of: pid, includeCompleted: true)
-            if let i = sibs.firstIndex(where: { $0.id == cur }), sibs.indices.contains(i + delta) {
-                detailTaskID = sibs[i + delta].id
+            let sibs = store.subtaskIDs(of: pid, includeCompleted: true)
+            if let i = sibs.firstIndex(of: cur), sibs.indices.contains(i + delta) {
+                detailTaskID = sibs[i + delta]
             }
         }
     }
@@ -308,7 +288,9 @@ final class AppModel {
         store.toggleComplete(id)
         let restore: () -> Void = { [weak self] in
             guard let self else { return }
-            for tid in affected { self.store.updateTask(tid) { $0.isCompleted = false; $0.completedAt = nil } }
+            self.store.performBatch {
+                for tid in affected { self.store.updateTask(tid) { $0.isCompleted = false; $0.completedAt = nil } }
+            }
         }
         registerUndo("Complete Task", restore)
         showToast(affected.count == 1 ? "1 task completed" : "\(affected.count) tasks completed", undo: restore)
@@ -326,7 +308,9 @@ final class AppModel {
         store.deleteTask(id)
         let restore: () -> Void = { [weak self] in
             guard let self else { return }
-            for tid in affected { self.store.updateTask(tid) { $0.deleted = false } }
+            self.store.performBatch {
+                for tid in affected { self.store.updateTask(tid) { $0.deleted = false } }
+            }
         }
         registerUndo("Delete Task", restore)
         showToast("1 task deleted", undo: restore)
@@ -349,9 +333,9 @@ final class AppModel {
         for id in ids where id != target.id {
             guard store.task(id) != nil else { continue }
             if store.descendantIDs(of: id).contains(target.id) { continue }
-            let sibs = target.parentId.map { store.subtasks(of: $0) }
-                ?? store.tasks(projectId: target.projectId, sectionId: target.sectionId)
-            let index = sibs.filter { $0.id != id }.firstIndex { $0.id == target.id }
+            let sibs = target.parentId.map { store.subtaskIDs(of: $0) }
+                ?? store.taskIDs(projectId: target.projectId, sectionId: target.sectionId)
+            let index = sibs.filter { $0 != id }.firstIndex(of: target.id)
             store.moveTask(id, projectId: target.projectId, sectionId: target.sectionId, parentId: target.parentId, at: index)
             moved = true
         }
@@ -369,8 +353,9 @@ final class AppModel {
     }
 
     private func neighbor(of id: EntityID) -> EntityID? {
-        let ids = visibleTaskIDs()
-        guard let i = ids.firstIndex(of: id) else { return nil }
+        let d = cachedDisplay()
+        let ids = d.taskIDs
+        guard let i = d.position[id] else { return nil }
         let descendants = Set(store.descendantIDs(of: id))
         if let next = ids[(i + 1)...].first(where: { !descendants.contains($0) }) { return next }
         return i > 0 ? ids[i - 1] : nil

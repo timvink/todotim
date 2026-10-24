@@ -45,7 +45,10 @@ enum Palette {
     ]
 
     /// Accepts "olive_green", "olive green", "olivegreen" and "mint" (Todoist's short names).
+    private static let byKey: [String: Entry] = Dictionary(uniqueKeysWithValues: entries.map { ($0.key, $0) })
+
     static func entry(_ key: String) -> Entry {
+        if let e = byKey[key] { return e }
         let k = key.lowercased().replacingOccurrences(of: " ", with: "_")
         if let e = entries.first(where: { $0.key == k }) { return e }
         let squashed = k.replacingOccurrences(of: "_", with: "")
@@ -117,20 +120,12 @@ extension DueDate {
         DueDate(Calendar.current.date(byAdding: .day, value: days, to: Date())!)
     }
 
-    /// Next Monday (Todoist "Next week").
-    static var nextWeek: DueDate {
-        let cal = Calendar.current
-        let next = cal.nextDate(after: Date(), matching: DateComponents(weekday: 2), matchingPolicy: .nextTime)!
-        return DueDate(next)
-    }
+    /// Monday of next week (Todoist "Next week"). Same rule as typing "next week".
+    static var nextWeek: DueDate { DateParser.parse("next week") ?? .offset(days: 7) }
 
-    /// Coming Saturday (Todoist "This weekend").
-    static var weekend: DueDate {
-        let cal = Calendar.current
-        if cal.component(.weekday, from: Date()) == 7 { return DueDate(Date()) }
-        let sat = cal.nextDate(after: Date(), matching: DateComponents(weekday: 7), matchingPolicy: .nextTime)!
-        return DueDate(sat)
-    }
+    /// Todoist "This weekend": the coming Saturday, or today on a Saturday or Sunday. Same rule
+    /// as typing "this weekend".
+    static var weekend: DueDate { DateParser.parse("this weekend") ?? .offset(days: 0) }
 }
 
 /// Todoist-style red filled button.

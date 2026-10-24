@@ -66,7 +66,7 @@ struct SidebarView: View {
                                 .frame(width: 18)
                             Text(l.name)
                             Spacer()
-                            let n = store.tasks(withLabel: l.name).count
+                            let n = store.openTaskCount(label: l.name)
                             if n > 0 { Text("\(n)").foregroundStyle(.secondary).font(.system(size: 12)) }
                         }
                         .tag(SidebarItem.label(l.name))

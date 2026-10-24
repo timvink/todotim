@@ -35,8 +35,16 @@ struct DueDatePicker: View {
     let due: DueDate?
     let onPick: (DueDate?) -> Void
     @State private var text = ""
-    @State private var day = Date()
+    /// Initialised here, not in `onAppear`: setting it there fired `onChange(of: day)`, which
+    /// saved the existing date and closed the popover as soon as it opened.
+    @State private var day: Date
     @FocusState private var focused: Bool
+
+    init(due: DueDate?, onPick: @escaping (DueDate?) -> Void) {
+        self.due = due
+        self.onPick = onPick
+        _day = State(initialValue: due?.day() ?? Calendar.current.startOfDay(for: Date()))
+    }
 
     var body: some View {
         let parsed = DateParser.parse(text)
@@ -73,13 +81,13 @@ struct DueDatePicker: View {
                 .labelsHidden()
                 .padding(8)
                 .frame(maxWidth: .infinity)
-                .onChange(of: day) { _, d in onPick(DueDate(d)) }
+                .onChange(of: day) { _, d in
+                    let picked = DueDate(d)
+                    if picked != due { onPick(picked) }
+                }
         }
         .frame(width: 250)
-        .onAppear {
-            if let d = due?.day() { day = d }
-            focused = true
-        }
+        .onAppear { focused = true }
     }
 
     private func quick(_ title: String, icon: String, color: Color, _ value: DueDate?) -> some View {

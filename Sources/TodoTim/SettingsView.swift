@@ -7,7 +7,9 @@ struct SettingsView: View {
     @Environment(AppModel.self) private var model
     @State private var serverURL = ""
     @State private var username = ""
+    /// A new password typed by the user. The saved one is never loaded into the view.
     @State private var password = ""
+    @State private var hasStoredPassword = false
     @State private var folder = "TodoTim"
     @State private var enabled = false
     @State private var testing = false
@@ -17,11 +19,23 @@ struct SettingsView: View {
     var body: some View {
         Form {
             SwiftUI.Section {
-                TextField("Server URL", text: $serverURL, prompt: Text("https://cloud.example.com/remote.php/dav/files/USERNAME/"))
-                TextField("Username", text: $username)
-                SecureField("App password", text: $password)
-                TextField("Folder", text: $folder, prompt: Text("TodoTim"))
-                Toggle("Enable sync", isOn: $enabled)
+                if let managed = sync.managedConfigPath {
+                    // Settings come from the config file; only the password can be changed here.
+                    LabeledContent("Server URL", value: serverURL.isEmpty ? "—" : serverURL)
+                    LabeledContent("Username", value: username.isEmpty ? "—" : username)
+                    SecureField("App password", text: $password, prompt: Text(hasStoredPassword ? "Saved in Keychain" : ""))
+                    LabeledContent("Folder", value: folder)
+                    LabeledContent("Sync", value: enabled ? "Enabled" : "Disabled")
+                    Text("Managed by \(Self.abbreviatingHome(managed))")
+                        .font(.system(size: 11))
+                        .foregroundStyle(.secondary)
+                } else {
+                    TextField("Server URL", text: $serverURL, prompt: Text("https://cloud.example.com/remote.php/dav/files/USERNAME/"))
+                    TextField("Username", text: $username)
+                    SecureField("App password", text: $password, prompt: Text(hasStoredPassword ? "Saved in Keychain" : ""))
+                    TextField("Folder", text: $folder, prompt: Text("TodoTim"))
+                    Toggle("Enable sync", isOn: $enabled)
+                }
             } header: {
                 Text("WebDAV (Nextcloud)")
             } footer: {
@@ -50,7 +64,8 @@ struct SettingsView: View {
                     testing = true
                     testResult = nil
                     let s = currentSettings
-                    let pw = password
+                    // Use the newly typed password, or else the one saved in the Keychain.
+                    let pw = password.isEmpty ? (sync.storedPassword() ?? "") : password
                     Task {
                         let err = await sync.testConnection(s, password: pw)
                         testResult = err == nil ? (true, "Connection works.") : (false, err!)
@@ -64,6 +79,10 @@ struct SettingsView: View {
                 if saved { Text("Saved").foregroundStyle(.secondary).font(.system(size: 12)) }
                 Button("Save") {
                     sync.configure(currentSettings, password: password.isEmpty ? nil : password)
+                    if !password.isEmpty {
+                        password = ""
+                        hasStoredPassword = true
+                    }
                     saved = true
                     if currentSettings.enabled { model.syncNow() }
                 }
@@ -79,9 +98,18 @@ struct SettingsView: View {
             username = s.username
             folder = s.folder.isEmpty ? "TodoTim" : s.folder
             enabled = s.enabled
-            password = sync.storedPassword() ?? ""
+            password = ""
+            hasStoredPassword = !(sync.storedPassword() ?? "").isEmpty
         }
         .onChange(of: currentSettings) { saved = false }
+    }
+
+    /// "/Users/tim/.todotim.toml" → "~/.todotim.toml".
+    static func abbreviatingHome(_ path: String) -> String {
+        let home = FileManager.default.homeDirectoryForCurrentUser.path
+        if path == home { return "~" }
+        if path.hasPrefix(home + "/") { return "~" + path.dropFirst(home.count) }
+        return path
     }
 
     private var currentSettings: SyncSettings {

@@ -1,3 +1,4 @@
+import QuartzCore
 import SwiftUI
 import TodoCore
 
@@ -5,56 +6,137 @@ import TodoCore
 struct ProjectView: View {
     @Environment(AppModel.self) private var model
     @Environment(TodoStore.self) private var store
-    let project: Project
+    let projectId: EntityID
 
     var body: some View {
-        let sections = store.sections(in: project.id)
+        // Rebuilt only when structure, sections, parents' collapsed state or view inputs change;
+        // never on selection changes (rows observe the selection themselves).
+        TaskListView(items: model.display().items)
+            .navigationTitle(store.project(projectId)?.name ?? "")
+    }
+}
+
+/// Renders a flattened `DisplayItem` list in one `LazyVStack`, so only rows near the viewport
+/// are built. Shared by project, label and search views.
+struct TaskListView: View {
+    let items: [DisplayItem]
+    var topPadding: CGFloat = 12
+    @State private var visible = VisibleRows()
+
+    var body: some View {
         ScrollViewReader { proxy in
             ScrollView {
-                VStack(alignment: .leading, spacing: 0) {
-                    HStack(alignment: .firstTextBaseline) {
-                        Text(project.name)
-                            .font(.system(size: 26, weight: .bold))
-                        Spacer()
-                        moreMenu
+                LazyVStack(alignment: .leading, spacing: 0) {
+                    ForEach(items) { item in
+                        DisplayItemView(item: item)
                     }
-                    .padding(.leading, Theme.gutter)
-                    .padding(.top, 8).padding(.bottom, 18)
-
-                    TaskArea(projectId: project.id, sectionId: nil)
-
-                    ForEach(Array(sections.enumerated()), id: \.element.id) { i, s in
-                        AddSectionGap(projectId: project.id, index: i)
-                        SectionHeaderView(section: s)
-                        if !model.collapsedSections.contains(s.id) {
-                            TaskArea(projectId: project.id, sectionId: s.id)
-                        }
-                    }
-                    AddSectionGap(projectId: project.id, index: nil)
-                    Spacer(minLength: 80)
                 }
+                .scrollTargetLayout()
                 .frame(maxWidth: Theme.contentMaxWidth, alignment: .leading)
                 .padding(.horizontal, 32)
-                .padding(.top, 12)
+                .padding(.top, topPadding)
+                .padding(.bottom, 80)
                 .frame(maxWidth: .infinity)
             }
-            .onChange(of: model.selectedTaskID) { _, id in
-                guard let id else { return }
-                withAnimation(.easeOut(duration: 0.15)) { proxy.scrollTo(id) }
+            .onScrollTargetVisibilityChange(idType: String.self, threshold: 0.9) { ids in
+                visible.ids = Set(ids)
             }
+            .background { SelectionScroller(proxy: proxy, visible: visible) }
         }
-        .navigationTitle(project.name)
+        .onAppear { Perf.firstListAppeared() }
+    }
+}
+
+/// Fully visible row ids and the last scroll time. A plain reference so that scrolling does not
+/// invalidate any view.
+final class VisibleRows {
+    var ids: Set<String> = []
+    var lastScroll: CFTimeInterval = 0
+}
+
+/// Keeps the selected row on screen. Lives in its own view so that only this tiny body depends on
+/// the selection, not the list.
+private struct SelectionScroller: View {
+    @Environment(AppModel.self) private var model
+    let proxy: ScrollViewProxy
+    let visible: VisibleRows
+
+    var body: some View {
+        Color.clear
+            .onChange(of: model.selectedTaskID) { _, id in
+                guard let id, !visible.ids.contains(id) else { return }
+                let now = CACurrentMediaTime()
+                // While a key is held, jump without animation instead of restarting one per press.
+                let repeating = now - visible.lastScroll < 0.25
+                visible.lastScroll = now
+                if repeating {
+                    proxy.scrollTo(id)
+                } else {
+                    withAnimation(.easeOut(duration: 0.12)) { proxy.scrollTo(id) }
+                }
+            }
+    }
+}
+
+private struct DisplayItemView: View {
+    @Environment(AppModel.self) private var model
+    let item: DisplayItem
+
+    var body: some View {
+        switch item {
+        case .projectHeader(let pid):
+            ProjectHeaderView(projectId: pid)
+        case .labelHeader(let name):
+            LabelHeaderView(name: name)
+        case .task(let r):
+            TaskRowHost(item: r).equatable()
+        case .editor(let depth):
+            InlineTaskEditor(depth: depth)
+        case .addTask(let pid, let sid):
+            AddTaskRow {
+                model.selectedTaskID = nil
+                model.editor = EditorTarget(projectId: pid, sectionId: sid)
+            }
+            .dropDestination(for: String.self) { ids, _ in
+                model.drop(ids, projectId: pid, sectionId: sid)
+            }
+        case .sectionGap(let pid, let index):
+            AddSectionGap(projectId: pid, index: index)
+        case .sectionHeader(let section, let count, let collapsed):
+            SectionHeaderView(section: section, count: count, collapsed: collapsed)
+        case .groupHeader(let pid, let count):
+            GroupHeaderView(projectId: pid, count: count)
+        case .message(let text):
+            Text(text).foregroundStyle(.secondary).padding(.leading, Theme.gutter)
+        }
+    }
+}
+
+private struct ProjectHeaderView: View {
+    @Environment(AppModel.self) private var model
+    @Environment(TodoStore.self) private var store
+    let projectId: EntityID
+
+    var body: some View {
+        HStack(alignment: .firstTextBaseline) {
+            Text(store.project(projectId)?.name ?? "")
+                .font(.system(size: 26, weight: .bold))
+            Spacer()
+            moreMenu
+        }
+        .padding(.leading, Theme.gutter)
+        .padding(.top, 8).padding(.bottom, 18)
     }
 
     private var moreMenu: some View {
         Menu {
             Toggle("Show completed tasks", isOn: Binding(
-                get: { model.showsCompleted(project.id) },
+                get: { model.showsCompleted(projectId) },
                 set: { on in
-                    if on { model.showCompletedProjects.insert(project.id) }
-                    else { model.showCompletedProjects.remove(project.id) }
+                    if on { model.showCompletedProjects.insert(projectId) }
+                    else { model.showCompletedProjects.remove(projectId) }
                 }))
-            Button("Add section") { model.sectionEditor = SectionEditorTarget(projectId: project.id, index: nil) }
+            Button("Add section") { model.sectionEditor = SectionEditorTarget(projectId: projectId, index: nil) }
         } label: {
             Image(systemName: "ellipsis").font(.system(size: 15))
         }
@@ -62,39 +144,6 @@ struct ProjectView: View {
         .menuIndicator(.hidden)
         .fixedSize()
         .help("More actions")
-    }
-}
-
-/// Rows of one area (project top or a section) plus the "Add task" row.
-struct TaskArea: View {
-    @Environment(AppModel.self) private var model
-    let projectId: EntityID
-    let sectionId: EntityID?
-
-    var body: some View {
-        let items = model.rows(projectId: projectId, sectionId: sectionId)
-        let editorAtEnd = model.editor.map {
-            $0.parentId == nil && $0.projectId == projectId && $0.sectionId == sectionId && !$0.atTop
-        } ?? false
-        VStack(alignment: .leading, spacing: 0) {
-            ForEach(items) { item in
-                switch item {
-                case .task(let r):
-                    TaskRowView(item: r).id(r.id)
-                case .editor(let depth):
-                    InlineTaskEditor(depth: depth)
-                }
-            }
-            if !editorAtEnd {
-                AddTaskRow {
-                    model.selectedTaskID = nil
-                    model.editor = EditorTarget(projectId: projectId, sectionId: sectionId)
-                }
-                .dropDestination(for: String.self) { ids, _ in
-                    model.drop(ids, projectId: projectId, sectionId: sectionId)
-                }
-            }
-        }
     }
 }
 
@@ -131,13 +180,14 @@ struct SectionHeaderView: View {
     @Environment(AppModel.self) private var model
     @Environment(TodoStore.self) private var store
     let section: TodoCore.Section
+    let count: Int
+    let collapsed: Bool
     @State private var hovering = false
     @State private var name = ""
     @State private var confirmDelete = false
     @FocusState private var nameFocused: Bool
 
     var body: some View {
-        let collapsed = model.collapsedSections.contains(section.id)
         VStack(alignment: .leading, spacing: 0) {
             HStack(spacing: 0) {
                 Button {
@@ -167,7 +217,6 @@ struct SectionHeaderView: View {
                 } else {
                     Text(section.name)
                         .font(.system(size: 14, weight: .bold))
-                    let count = store.tasks(projectId: section.projectId, sectionId: section.id).count
                     if count > 0 {
                         Text("\(count)")
                             .font(.system(size: 13))

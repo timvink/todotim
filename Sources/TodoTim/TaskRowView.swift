@@ -29,17 +29,55 @@ struct CheckCircle: View {
     }
 }
 
-struct TaskRowView: View {
+/// Reads the row's task and selection state. Only this small body depends on the selection, so
+/// j/k re-renders the hosts of the rows on screen while `TaskRowView` (equatable) redraws only
+/// the old and new selected row.
+struct TaskRowHost: View, Equatable {
     @Environment(AppModel.self) private var model
     @Environment(TodoStore.self) private var store
     let item: RowItem
-    /// Show "# Project" at the right (label and search views).
-    var showProject = false
-    @State private var hovering = false
+
+    nonisolated static func == (a: Self, b: Self) -> Bool { a.item == b.item }
 
     var body: some View {
-        let t = item.task
-        let selected = model.selectedTaskID == t.id
+        if let task = store.task(item.id) {
+            let selected = model.selectedTaskID == item.id
+            TaskRowView(item: item, task: task, isSelected: selected,
+                        popover: selected && model.detailTaskID == nil ? model.popover : nil,
+                        labelColors: model.labelColorKeys(task.labels),
+                        project: item.showProject ? store.project(task.projectId).map(ProjectBadge.init) : nil)
+                .equatable()
+        }
+    }
+}
+
+struct ProjectBadge: Equatable {
+    var name: String
+    var color: String
+    var isInbox: Bool
+    init(_ p: Project) { name = p.name; color = p.color; isInbox = p.isInbox }
+}
+
+struct TaskRowView: View, Equatable {
+    @Environment(AppModel.self) private var model
+    let item: RowItem
+    let task: TodoTask
+    let isSelected: Bool
+    /// The open popover when this row is the selected one.
+    let popover: TaskPopover?
+    /// Palette keys parallel to `task.labels`.
+    let labelColors: [String]
+    /// Shown at the right in label and search views.
+    let project: ProjectBadge?
+    @State private var hovering = false
+
+    nonisolated static func == (a: Self, b: Self) -> Bool {
+        a.item == b.item && a.task == b.task && a.isSelected == b.isSelected && a.popover == b.popover
+            && a.labelColors == b.labelColors && a.project == b.project
+    }
+
+    var body: some View {
+        let t = task
         HStack(alignment: .top, spacing: 0) {
             chevron(t)
             VStack(alignment: .leading, spacing: 0) {
@@ -58,10 +96,11 @@ struct TaskRowView: View {
                                 .foregroundStyle(.secondary)
                                 .lineLimit(1)
                         }
-                        TaskMetaRow(task: t, subtaskTotal: item.subtaskTotal, subtaskDone: item.subtaskDone)
+                        TaskMetaRow(task: t, labelColors: labelColors,
+                                    subtaskTotal: item.subtaskTotal, subtaskDone: item.subtaskDone)
                     }
                     Spacer(minLength: 8)
-                    if showProject, let p = store.project(t.projectId) {
+                    if let p = project {
                         HStack(spacing: 4) {
                             Text(p.name).font(.system(size: 12)).foregroundStyle(.secondary)
                             Image(systemName: p.isInbox ? "tray" : "number")
@@ -70,8 +109,12 @@ struct TaskRowView: View {
                         }
                         .padding(.top, 2)
                     }
-                    actions(t)
-                        .opacity(hovering ? 1 : 0)
+                    // The action buttons (and their menu) are only built while hovering.
+                    if hovering {
+                        actions(t)
+                    } else {
+                        Color.clear.frame(width: 76, height: 22)
+                    }
                 }
                 .padding(.vertical, 8)
                 .padding(.horizontal, 4)
@@ -81,16 +124,17 @@ struct TaskRowView: View {
         .padding(.leading, CGFloat(item.depth) * Theme.indent)
         .background(
             RoundedRectangle(cornerRadius: 6)
-                .fill(selected ? Theme.accent.opacity(0.10) : .clear)
+                .fill(isSelected ? Theme.accent.opacity(0.10) : .clear)
                 .padding(.leading, CGFloat(item.depth) * Theme.indent + Theme.gutter - 4)
         )
         .contentShape(Rectangle())
         .onHover { hovering = $0 }
         .onTapGesture { model.openTask(t.id) }
         .contextMenu { TaskMenuItems(task: t) }
-        .popover(isPresented: popoverBinding(t.id), arrowEdge: .bottom) {
-            TaskPopoverContent(taskID: t.id, kind: model.popover ?? .date)
-                .environment(model).environment(store)
+        .popover(isPresented: Binding(get: { popover != nil }, set: { if !$0 { model.popover = nil } }),
+                 arrowEdge: .bottom) {
+            TaskPopoverContent(taskID: t.id, kind: popover ?? .date)
+                .environment(model).environment(model.store)
         }
         .draggable(t.id) {
             Text(t.content)
@@ -145,18 +189,13 @@ struct TaskRowView: View {
         .buttonStyle(.plain)
         .help(help)
     }
-
-    private func popoverBinding(_ id: EntityID) -> Binding<Bool> {
-        Binding(
-            get: { model.selectedTaskID == id && model.popover != nil && model.detailTaskID == nil },
-            set: { if !$0 { model.popover = nil } })
-    }
 }
 
 /// Subtask count, due chip and labels under the task title.
 struct TaskMetaRow: View {
-    @Environment(TodoStore.self) private var store
     let task: TodoTask
+    /// Palette keys parallel to `task.labels` (see `AppModel.labelColorKeys`).
+    let labelColors: [String]
     var subtaskTotal = 0
     var subtaskDone = 0
 
@@ -178,8 +217,8 @@ struct TaskMetaRow: View {
                     }
                     .foregroundStyle(task.isCompleted ? .secondary : due.chipColor)
                 }
-                ForEach(task.labels, id: \.self) { name in
-                    let color = store.labels.first { $0.name == name }.map { Palette.color($0.color) } ?? .secondary
+                ForEach(Array(task.labels.enumerated()), id: \.element) { i, name in
+                    let color = i < labelColors.count && !labelColors[i].isEmpty ? Palette.color(labelColors[i]) : .secondary
                     HStack(spacing: 2) {
                         Image(systemName: "tag").font(.system(size: 10))
                         Text(name)

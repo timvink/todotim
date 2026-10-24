@@ -9,15 +9,18 @@ struct TaskDetailView: View {
     @Environment(TodoStore.self) private var store
 
     var body: some View {
-        Group {
+        // A fixed size behind a GeometryReader (which never asks its content for a size): otherwise
+        // the sheet re-measured its whole content (both scroll views) on every keystroke.
+        GeometryReader { _ in
             if let id = model.detailTaskID, let task = store.task(id) {
+                // Not `.id(id)`: moving to the next task updates the sheet in place, which is much
+                // cheaper than rebuilding it. Per-task state is reset in `TaskDetailContent`.
                 TaskDetailContent(task: task)
-                    .id(id)
             } else {
                 Color.clear.onAppear { model.detailTaskID = nil }
             }
         }
-        .frame(minWidth: 680, idealWidth: 860, maxWidth: 900, minHeight: 480, idealHeight: 620, maxHeight: 760)
+        .frame(width: 860, height: 620)
     }
 }
 
@@ -26,15 +29,12 @@ private struct TaskDetailContent: View {
     @Environment(TodoStore.self) private var store
     let task: TodoTask
 
-    @State private var title = ""
-    @State private var details = ""
     @State private var dateText = ""
     @State private var newSubtask = ""
     @State private var addingSubtask = false
     @State private var showLabels = false
-    @FocusState private var focus: Field?
+    @FocusState private var focus: DetailField?
 
-    private enum Field { case title, details, date, subtask }
 
     var body: some View {
         VStack(spacing: 0) {
@@ -54,17 +54,14 @@ private struct TaskDetailContent: View {
             }
         }
         .onAppear {
-            title = task.content
-            details = task.description
             // Keep focus out of the title so ↑/↓/j/k navigate between tasks.
             DispatchQueue.main.async { (NSApp.keyWindow ?? model.mainWindow?.attachedSheet)?.makeFirstResponder(nil) }
         }
-        .onChange(of: title) { _, v in
-            let trimmed = v.trimmingCharacters(in: .whitespacesAndNewlines)
-            if !trimmed.isEmpty, trimmed != task.content { store.updateTask(task.id) { $0.content = trimmed } }
-        }
-        .onChange(of: details) { _, v in
-            if v != task.description { store.updateTask(task.id) { $0.description = v } }
+        .onChange(of: task.id) {
+            dateText = ""
+            newSubtask = ""
+            addingSubtask = false
+            showLabels = false
         }
     }
 
@@ -128,22 +125,9 @@ private struct TaskDetailContent: View {
             HStack(alignment: .top, spacing: 12) {
                 CheckCircle(priority: task.priority, completed: task.isCompleted, size: 22) { model.toggleComplete(task.id) }
                     .padding(.top, 3)
-                VStack(alignment: .leading, spacing: 8) {
-                    TextField("Task name", text: $title, axis: .vertical)
-                        .textFieldStyle(.plain)
-                        .font(.system(size: 20, weight: .semibold))
-                        .strikethrough(task.isCompleted)
-                        .focused($focus, equals: .title)
-                        .onSubmit { focus = nil }
-                    HStack(alignment: .top, spacing: 6) {
-                        Image(systemName: "text.alignleft").foregroundStyle(.secondary).font(.system(size: 12)).padding(.top, 2)
-                        TextField("Description", text: $details, axis: .vertical)
-                            .textFieldStyle(.plain)
-                            .font(.system(size: 13))
-                            .lineLimit(1...20)
-                            .focused($focus, equals: .details)
-                    }
-                }
+                DetailTextFields(taskID: task.id, content: task.content, description: task.description,
+                                 isCompleted: task.isCompleted, focus: $focus)
+                    .id(task.id)
             }
             subtasks.padding(.leading, 34)
         }
@@ -170,8 +154,9 @@ private struct TaskDetailContent: View {
                                 .font(.system(size: 13))
                                 .strikethrough(s.isCompleted)
                                 .foregroundStyle(s.isCompleted ? .secondary : .primary)
-                            TaskMetaRow(task: s, subtaskTotal: store.subtasks(of: s.id, includeCompleted: true).count,
-                                        subtaskDone: store.subtasks(of: s.id, includeCompleted: true).filter(\.isCompleted).count)
+                            let progress = store.subtaskProgress(of: s.id)
+                            TaskMetaRow(task: s, labelColors: model.labelColorKeys(s.labels),
+                                        subtaskTotal: progress.total, subtaskDone: progress.done)
                         }
                         Spacer()
                     }
@@ -242,7 +227,7 @@ private struct TaskDetailContent: View {
                     TextField("Type a date, e.g. next fri", text: $dateText)
                         .textFieldStyle(.roundedBorder)
                         .font(.system(size: 12))
-                        .focused($focus, equals: .date)
+                        .focused($focus, equals: DetailField.date)
                         .onSubmit {
                             if let d = DateParser.parse(dateText) {
                                 store.updateTask(task.id) { $0.due = d }
@@ -320,6 +305,108 @@ private struct TaskDetailContent: View {
                 .background(RoundedRectangle(cornerRadius: 5).fill(Color.primary.opacity(0.08)))
         }
         .buttonStyle(.plain)
+    }
+}
+
+enum DetailField { case title, details, date, subtask }
+
+/// Title and description of the task sheet. Typing edits a local draft; it is written to the
+/// store after a short pause, when the sheet closes or moves to another task, and on quit, so a
+/// keystroke only redraws this view. When the task changes elsewhere (sync) while the sheet is
+/// open, fields the user has not edited take the new value; an edited field keeps the draft,
+/// which is then saved (local edit wins).
+private struct DetailTextFields: View {
+    @Environment(AppModel.self) private var model
+    @Environment(TodoStore.self) private var store
+    let taskID: EntityID
+    let content: String
+    let description: String
+    let isCompleted: Bool
+    var focus: FocusState<DetailField?>.Binding
+
+    @State private var title: String
+    @State private var details: String
+    /// Store values the drafts were last synchronised with (title compared trimmed).
+    @State private var baseTitle: String
+    @State private var baseDetails: String
+    @State private var commitTask: Task<Void, Never>?
+
+    static let commitDelay: Duration = .milliseconds(300)
+
+    init(taskID: EntityID, content: String, description: String, isCompleted: Bool,
+         focus: FocusState<DetailField?>.Binding) {
+        self.taskID = taskID
+        self.content = content
+        self.description = description
+        self.isCompleted = isCompleted
+        self.focus = focus
+        _title = State(initialValue: content)
+        _details = State(initialValue: description)
+        _baseTitle = State(initialValue: content)
+        _baseDetails = State(initialValue: description)
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            TextField("Task name", text: $title, axis: .vertical)
+                .textFieldStyle(.plain)
+                .font(.system(size: 20, weight: .semibold))
+                .strikethrough(isCompleted)
+                .focused(focus, equals: .title)
+                .onSubmit { commit(); focus.wrappedValue = nil }
+            HStack(alignment: .top, spacing: 6) {
+                Image(systemName: "text.alignleft").foregroundStyle(.secondary).font(.system(size: 12)).padding(.top, 2)
+                TextField("Description", text: $details, axis: .vertical)
+                    .textFieldStyle(.plain)
+                    .font(.system(size: 13))
+                    .lineLimit(1...20)
+                    .focused(focus, equals: .details)
+            }
+        }
+        .onChange(of: title) { scheduleCommit() }
+        .onChange(of: details) { scheduleCommit() }
+        .onChange(of: content) { _, new in
+            if trimmed(title) == baseTitle, trimmed(title) != new { title = new }
+            baseTitle = new
+        }
+        .onChange(of: description) { _, new in
+            if details == baseDetails, details != new { details = new }
+            baseDetails = new
+        }
+        .onAppear { model.detailFlush = (taskID, { commit() }) }
+        .onDisappear {
+            commit()
+            // The next task's sheet may already have registered itself.
+            if model.detailFlush?.taskID == taskID { model.detailFlush = nil }
+        }
+    }
+
+    private func trimmed(_ s: String) -> String { s.trimmingCharacters(in: .whitespacesAndNewlines) }
+
+    private func scheduleCommit() {
+        commitTask?.cancel()
+        commitTask = Task {
+            try? await Task.sleep(for: Self.commitDelay)
+            guard !Task.isCancelled else { return }
+            commit()
+        }
+    }
+
+    /// Writes edited fields only, so an untouched field never overwrites a newer remote value.
+    private func commit() {
+        commitTask?.cancel()
+        commitTask = nil
+        let newTitle = trimmed(title)
+        let titleEdited = !newTitle.isEmpty && newTitle != baseTitle
+        let detailsEdited = details != baseDetails
+        guard titleEdited || detailsEdited, store.task(taskID) != nil else { return }
+        let newDetails = details
+        store.updateTask(taskID) {
+            if titleEdited { $0.content = newTitle }
+            if detailsEdited { $0.description = newDetails }
+        }
+        if titleEdited { baseTitle = newTitle }
+        if detailsEdited { baseDetails = newDetails }
     }
 }
 

@@ -39,26 +39,26 @@ struct AppCommands: Commands {
                 .disabled(model.currentProjectID == nil)
             Divider()
             Button("Open Task  ↩") { model.openSelected() }
-                .disabled(model.selectedTaskID == nil)
+                .disabled(!model.hasSelection)
             Button("Complete Task") { model.actionTaskID.map(model.toggleComplete) }
                 .keyboardShortcut(.return, modifiers: .command)
-                .disabled(model.actionTaskID == nil)
+                .disabled(!model.hasActionTask)
             Button("Indent") { model.indent() }
                 .keyboardShortcut("]", modifiers: .command)
-                .disabled(model.actionTaskID == nil)
+                .disabled(!model.hasActionTask)
             Button("Outdent") { model.outdent() }
                 .keyboardShortcut("[", modifiers: .command)
-                .disabled(model.actionTaskID == nil)
+                .disabled(!model.hasActionTask)
             Button("Move Up") {
                 textOr(#selector(NSResponder.moveToBeginningOfDocument(_:))) { model.shift(-1) }
             }
             .keyboardShortcut(.upArrow, modifiers: .command)
-            .disabled(model.actionTaskID == nil)
+            .disabled(!model.hasActionTask)
             Button("Move Down") {
                 textOr(#selector(NSResponder.moveToEndOfDocument(_:))) { model.shift(1) }
             }
             .keyboardShortcut(.downArrow, modifiers: .command)
-            .disabled(model.actionTaskID == nil)
+            .disabled(!model.hasActionTask)
             Divider()
             Menu("Priority") {
                 ForEach(Priority.allCases, id: \.self) { p in
@@ -66,22 +66,22 @@ struct AppCommands: Commands {
                         .keyboardShortcut(KeyEquivalent(Character(String(p.rawValue))), modifiers: [])
                 }
             }
-            .disabled(model.actionTaskID == nil)
+            .disabled(!model.hasActionTask)
             Button("Set Date…") { model.showPopover(.date) }
                 .keyboardShortcut("t", modifiers: [])
-                .disabled(model.selectedTaskID == nil)
+                .disabled(!model.hasSelection)
             Button("Labels…") { model.showPopover(.labels) }
                 .keyboardShortcut("l", modifiers: [])
-                .disabled(model.selectedTaskID == nil)
+                .disabled(!model.hasSelection)
             Button("Move to Project…") { model.showPopover(.move) }
                 .keyboardShortcut("v", modifiers: [])
-                .disabled(model.selectedTaskID == nil)
+                .disabled(!model.hasSelection)
             Divider()
             Button("Delete Task…") {
                 textOr(#selector(NSResponder.deleteToBeginningOfLine(_:))) { model.requestDelete() }
             }
             .keyboardShortcut(.delete, modifiers: .command)
-            .disabled(model.actionTaskID == nil)
+            .disabled(!model.hasActionTask)
         }
 
         CommandMenu("Navigate") {
@@ -106,6 +106,12 @@ struct AppCommands: Commands {
         CommandGroup(replacing: .help) {
             Button("Keyboard Shortcuts") { model.showShortcuts = true }
                 .keyboardShortcut("?", modifiers: [])
+            Divider()
+            Button("TodoTim on GitHub") {
+                if let url = URL(string: model.repositoryURL), url.scheme?.lowercased() == "https" {
+                    NSWorkspace.shared.open(url)
+                }
+            }
         }
     }
 

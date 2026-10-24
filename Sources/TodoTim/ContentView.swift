@@ -38,6 +38,12 @@ struct ContentView: View {
         .sheet(isPresented: $model.showAddProject) {
             ProjectFormView(project: nil).environment(model).environment(store)
         }
+        .alert("Problem at launch", isPresented: Binding(get: { model.startupError != nil },
+                                                                 set: { if !$0 { model.startupError = nil } })) {
+            Button("OK", role: .cancel) { model.startupError = nil }
+        } message: {
+            Text(model.startupError ?? "")
+        }
         .alert("Delete task?", isPresented: Binding(get: { model.confirmDeleteTaskID != nil },
                                                     set: { if !$0 { model.confirmDeleteTaskID = nil } })) {
             Button("Delete", role: .destructive) {
@@ -55,13 +61,13 @@ struct ContentView: View {
     @ViewBuilder private var detail: some View {
         switch model.sidebar {
         case .project(let id):
-            if let p = store.project(id) {
-                ProjectView(project: p)
+            if store.project(id) != nil {
+                ProjectView(projectId: id).id(id)
             } else {
                 emptyState
             }
         case .label(let name):
-            LabelView(name: name)
+            LabelView(name: name).id(name)
         case .search:
             SearchView()
         case nil:

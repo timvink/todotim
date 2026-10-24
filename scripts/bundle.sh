@@ -2,13 +2,14 @@
 # Builds build/TodoTim.app from the SwiftPM executable (release), with icon and ad-hoc signature.
 # Usage: scripts/bundle.sh
 # Env: SCRATCH_PATH=.build-foo  private build dir
+#      APP=build/x/TodoTim.app  output bundle path (default build/TodoTim.app)
 #      VERSION=1.2.3            CFBundleShortVersionString (default 0.0.0-dev)
 #      UNIVERSAL=1              build for arm64 and x86_64
 set -euo pipefail
 
 cd "$(dirname "$0")/.."
 SCRATCH_PATH="${SCRATCH_PATH:-.build}"
-APP="build/TodoTim.app"
+APP="${APP:-build/TodoTim.app}"
 
 VERSION="${VERSION:-0.0.0-dev}"
 BUILD_NUMBER="${BUILD_NUMBER:-$(git rev-list --count HEAD 2>/dev/null || echo 1)}"
@@ -19,7 +20,7 @@ swift build -c release --scratch-path "$SCRATCH_PATH" ${ARCH_FLAGS[@]+"${ARCH_FL
 BIN="$(swift build -c release --scratch-path "$SCRATCH_PATH" ${ARCH_FLAGS[@]+"${ARCH_FLAGS[@]}"} --show-bin-path)/TodoTim"
 
 rm -rf "$APP"
-mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
+mkdir -p "$(dirname "$APP")" "$APP/Contents/MacOS" "$APP/Contents/Resources"
 cp "$BIN" "$APP/Contents/MacOS/TodoTim"
 
 # App icon, regenerated only when the script changes.
