@@ -263,6 +263,7 @@ struct HoverRowButtonStyle: ButtonStyle {
         var body: some View {
             configuration.label
                 .background(RoundedRectangle(cornerRadius: 4).fill(Color.primary.opacity(hovering ? 0.08 : 0)).padding(.horizontal, 4))
+                .pointerStyle(.link)
                 .onHover { hovering = $0 }
         }
     }
@@ -301,6 +302,7 @@ struct ProjectSectionMenu: View {
         .menuIndicator(.visible)
         .tint(.primary)
         .fixedSize()
+        .pointerStyle(.link)
     }
 }
 
@@ -328,6 +330,7 @@ struct PriorityMenu: View {
         .menuIndicator(.hidden)
         .tint(priority == .p4 ? Color.secondary : priority.color)
         .fixedSize()
+        .pointerStyle(.link)
     }
 
     static func flag(_ p: Priority) -> NSImage {

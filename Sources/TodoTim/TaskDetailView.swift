@@ -2,25 +2,27 @@ import AppKit
 import SwiftUI
 import TodoCore
 
-/// Todoist's task modal: title, description and sub-tasks on the left; project, date,
-/// priority and labels on the right. ↑/↓ in the header move to the previous/next task.
+/// Todoist's task view, shown as a panel over the main window (see `ModalLayer`): project
+/// header with ⌃/⌄, "…" and close; one column with title, description, project, date, priority,
+/// labels and sub-tasks. ↑/↓/j/k move to the previous/next task.
 struct TaskDetailView: View {
     @Environment(AppModel.self) private var model
     @Environment(TodoStore.self) private var store
+    let size: CGSize
 
     var body: some View {
-        // A fixed size behind a GeometryReader (which never asks its content for a size): otherwise
-        // the sheet re-measured its whole content (both scroll views) on every keystroke.
+        // A fixed size behind a GeometryReader (which never asks its content for a size), so a
+        // keystroke never re-measures the whole panel.
         GeometryReader { _ in
             if let id = model.detailTaskID, let task = store.task(id) {
-                // Not `.id(id)`: moving to the next task updates the sheet in place, which is much
+                // Not `.id(id)`: moving to the next task updates the panel in place, which is much
                 // cheaper than rebuilding it. Per-task state is reset in `TaskDetailContent`.
                 TaskDetailContent(task: task)
             } else {
                 Color.clear.onAppear { model.detailTaskID = nil }
             }
         }
-        .frame(width: 860, height: 620)
+        .frame(width: size.width, height: size.height)
     }
 }
 
@@ -29,54 +31,63 @@ private struct TaskDetailContent: View {
     @Environment(TodoStore.self) private var store
     let task: TodoTask
 
-    @State private var dateText = ""
     @State private var newSubtask = ""
     @State private var addingSubtask = false
-    @State private var showLabels = false
+    /// The move popover opened from the header (else from the project row).
+    @State private var moveFromHeader = false
     @FocusState private var focus: DetailField?
-
 
     var body: some View {
         VStack(spacing: 0) {
             header
             Divider()
-            HStack(alignment: .top, spacing: 0) {
-                ScrollView {
-                    mainColumn.padding(24)
-                }
-                .frame(maxWidth: .infinity)
-                Divider()
-                ScrollView {
-                    sideColumn.padding(16)
-                }
-                .frame(width: 270)
-                .background(Color.primary.opacity(0.03))
+            ScrollView {
+                content
+                    .padding(.horizontal, 28)
+                    .padding(.top, 20)
+                    .padding(.bottom, 32)
+                    .frame(maxWidth: .infinity, alignment: .leading)
             }
         }
         .onAppear {
             // Keep focus out of the title so ↑/↓/j/k navigate between tasks.
-            DispatchQueue.main.async { (NSApp.keyWindow ?? model.mainWindow?.attachedSheet)?.makeFirstResponder(nil) }
+            DispatchQueue.main.async { model.mainWindow?.makeFirstResponder(nil) }
         }
         .onChange(of: task.id) {
-            dateText = ""
             newSubtask = ""
             addingSubtask = false
-            showLabels = false
         }
+        .onChange(of: model.popover) { _, p in if p == nil { moveFromHeader = false } }
+    }
+
+    private func popoverBinding(_ kind: TaskPopover, header: Bool = false) -> Binding<Bool> {
+        Binding(get: { model.popover == kind && (kind != .move || moveFromHeader == header) },
+                set: { if !$0, model.popover == kind { model.popover = nil } })
     }
 
     // MARK: Header
 
     private var header: some View {
-        HStack(spacing: 6) {
+        HStack(spacing: 4) {
             if let p = store.project(task.projectId) {
-                Image(systemName: p.isInbox ? "tray" : "number")
-                    .foregroundStyle(p.isInbox ? Color(hex: 0x246FE0) : Palette.color(p.color))
-                Text(p.name).font(.system(size: 13))
-                if let sid = task.sectionId, let s = store.sections(in: p.id).first(where: { $0.id == sid }) {
-                    Text("/").foregroundStyle(.secondary)
-                    Text(s.name).font(.system(size: 13)).foregroundStyle(.secondary)
+                Button {
+                    moveFromHeader = true
+                    model.popover = .move
+                } label: {
+                    HStack(spacing: 6) {
+                        projectIcon(p)
+                        Text(p.name).font(.system(size: 13))
+                        if let s = sectionName {
+                            Text("/").foregroundStyle(.secondary)
+                            Text(s).font(.system(size: 13)).foregroundStyle(.secondary)
+                        }
+                    }
+                    .padding(.horizontal, 6).padding(.vertical, 4)
+                    .contentShape(Rectangle())
                 }
+                .buttonStyle(HoverButtonStyle())
+                .help("Move to project (V)")
+                .popover(isPresented: popoverBinding(.move, header: true), arrowEdge: .bottom) { movePicker }
             }
             Spacer()
             headerButton("chevron.up", help: "Previous task (↑ / K)") { model.moveDetail(-1) }
@@ -84,43 +95,64 @@ private struct TaskDetailContent: View {
             Menu {
                 TaskMenuItems(task: task)
             } label: {
-                Image(systemName: "ellipsis").frame(width: 26, height: 24)
+                Image(systemName: "ellipsis").frame(width: 28, height: 26)
             }
             .menuStyle(.borderlessButton)
             .menuIndicator(.hidden)
             .fixedSize()
+            .pointerStyle(.link)
+            .help("More actions")
             headerButton("xmark", help: "Close (Esc)") { model.detailTaskID = nil }
-                .keyboardShortcut(.cancelAction)
         }
-        .padding(.horizontal, 16).padding(.vertical, 10)
+        .padding(.leading, 14).padding(.trailing, 10).padding(.vertical, 8)
+    }
+
+    private var sectionName: String? {
+        guard let sid = task.sectionId else { return nil }
+        return store.sections(in: task.projectId).first { $0.id == sid }?.name
+    }
+
+    private func projectIcon(_ p: Project) -> some View {
+        Image(systemName: p.isInbox ? "tray" : "number")
+            .foregroundStyle(p.isInbox ? Color(hex: 0x246FE0) : Palette.color(p.color))
     }
 
     private func headerButton(_ icon: String, help: String, action: @escaping () -> Void) -> some View {
         Button(action: action) {
             Image(systemName: icon)
                 .font(.system(size: 13, weight: .medium))
-                .frame(width: 26, height: 24)
+                .frame(width: 28, height: 26)
                 .contentShape(Rectangle())
         }
-        .buttonStyle(.plain)
+        .buttonStyle(HoverButtonStyle())
         .foregroundStyle(.secondary)
         .help(help)
     }
 
-    // MARK: Main column
+    private var movePicker: some View {
+        MovePicker(current: (task.projectId, task.sectionId)) { pid, sid in
+            model.popover = nil
+            model.move(task.id, toProject: pid, section: sid)
+        }
+        .environment(model).environment(store)
+    }
 
-    private var mainColumn: some View {
-        VStack(alignment: .leading, spacing: 14) {
+    // MARK: Body
+
+    private var content: some View {
+        VStack(alignment: .leading, spacing: 0) {
             if let pid = task.parentId, let parent = store.task(pid) {
                 Button { model.detailTaskID = parent.id } label: {
                     HStack(spacing: 4) {
                         Image(systemName: "arrow.turn.left.up")
-                        Text(parent.content).lineLimit(1)
+                        Text(String(RichText.render(parent.content).characters)).lineLimit(1)
                     }
                     .font(.system(size: 12))
                     .foregroundStyle(.secondary)
                 }
                 .buttonStyle(.plain)
+                .pointerStyle(.link)
+                .padding(.bottom, 10)
             }
             HStack(alignment: .top, spacing: 12) {
                 CheckCircle(priority: task.priority, completed: task.isCompleted, size: 22) { model.toggleComplete(task.id) }
@@ -129,31 +161,141 @@ private struct TaskDetailContent: View {
                                  isCompleted: task.isCompleted, focus: $focus)
                     .id(task.id)
             }
-            subtasks.padding(.leading, 34)
+            .padding(.bottom, 14)
+            Divider()
+            attributes
+            subtasks.padding(.top, 18)
         }
+    }
+
+    /// Project, date, priority and labels as Todoist-style list rows.
+    private var attributes: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            if let p = store.project(task.projectId) {
+                attributeRow(popover: popoverBinding(.move)) {
+                    moveFromHeader = false
+                    model.popover = .move
+                } label: {
+                    projectIcon(p).frame(width: 20)
+                    Text(p.name)
+                    if let s = sectionName { Text("/ \(s)").foregroundStyle(.secondary) }
+                } popoverContent: { movePicker }
+            }
+            Divider()
+            attributeRow(popover: popoverBinding(.date)) { model.popover = .date } label: {
+                Image(systemName: "calendar").frame(width: 20)
+                    .foregroundStyle(task.due?.chipColor ?? .secondary)
+                if let due = task.due {
+                    Text(due.displayString()).foregroundStyle(due.chipColor)
+                    Spacer()
+                    Button { store.updateTask(task.id) { $0.due = nil } } label: {
+                        Image(systemName: "xmark").font(.system(size: 10, weight: .bold))
+                            .frame(width: 20, height: 20).contentShape(Rectangle())
+                    }
+                    .buttonStyle(.plain)
+                    .foregroundStyle(.secondary)
+                    .help("Remove date")
+                } else {
+                    Text("Date").foregroundStyle(.secondary)
+                }
+            } popoverContent: {
+                DueDatePicker(due: task.due) { due in
+                    store.updateTask(task.id) { $0.due = due }
+                    model.popover = nil
+                }
+            }
+            Divider()
+            Menu {
+                ForEach(Priority.allCases, id: \.self) { p in
+                    Button { model.setPriority(p, for: task.id) } label: {
+                        SwiftUI.Label { Text(p.title) } icon: { Image(nsImage: PriorityMenu.flag(p)) }
+                    }
+                }
+            } label: {
+                HStack(spacing: 10) {
+                    Image(systemName: task.priority == .p4 ? "flag" : "flag.fill").frame(width: 20)
+                        .foregroundStyle(task.priority == .p4 ? Color.secondary : task.priority.color)
+                    Text(task.priority.title)
+                    Spacer()
+                }
+                .font(.system(size: 13))
+                .padding(.horizontal, 6).padding(.vertical, 9)
+                .contentShape(Rectangle())
+            }
+            .menuStyle(.button)
+            .buttonStyle(HoverButtonStyle())
+            .menuIndicator(.hidden)
+            .pointerStyle(.link)
+            Divider()
+            attributeRow(popover: popoverBinding(.labels)) { model.popover = .labels } label: {
+                Image(systemName: "tag").frame(width: 20).foregroundStyle(.secondary)
+                if task.labels.isEmpty {
+                    Text("Add labels").foregroundStyle(.secondary)
+                } else {
+                    FlowRow(task.labels) { name in
+                        HStack(spacing: 3) {
+                            Text(name)
+                            Button {
+                                store.updateTask(task.id) { $0.labels.removeAll { $0 == name } }
+                            } label: { Image(systemName: "xmark").font(.system(size: 8, weight: .bold)) }
+                            .buttonStyle(.plain)
+                        }
+                        .font(.system(size: 12))
+                        .padding(.horizontal, 7).padding(.vertical, 3)
+                        .background(Capsule().fill(labelColor(name).opacity(0.18)))
+                        .foregroundStyle(labelColor(name))
+                    }
+                }
+            } popoverContent: {
+                LabelsPicker(selection: Binding(
+                    get: { store.task(task.id)?.labels ?? [] },
+                    set: { new in store.updateTask(task.id) { $0.labels = new } }))
+                .environment(store)
+            }
+            Divider()
+        }
+        .padding(.top, 6)
+    }
+
+    private func attributeRow<Label: View, Pop: View>(
+        popover: Binding<Bool>, action: @escaping () -> Void,
+        @ViewBuilder label: () -> Label, @ViewBuilder popoverContent: @escaping () -> Pop
+    ) -> some View {
+        Button(action: action) {
+            HStack(spacing: 10) {
+                label()
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .font(.system(size: 13))
+            .padding(.horizontal, 6).padding(.vertical, 9)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(HoverButtonStyle())
+        .popover(isPresented: popover, arrowEdge: .bottom, content: popoverContent)
     }
 
     private var subtasks: some View {
         let subs = store.subtasks(of: task.id, includeCompleted: true)
         let done = subs.filter(\.isCompleted).count
         return VStack(alignment: .leading, spacing: 0) {
-            HStack(spacing: 6) {
-                Text("Sub-tasks").font(.system(size: 13, weight: .semibold))
-                if !subs.isEmpty {
+            if !subs.isEmpty {
+                HStack(spacing: 6) {
+                    Text("Sub-tasks").font(.system(size: 13, weight: .semibold))
                     Text("\(done)/\(subs.count)").font(.system(size: 12)).foregroundStyle(.secondary)
                 }
+                .padding(.bottom, 6)
+                Divider()
             }
-            .padding(.bottom, 6)
-            Divider()
             ForEach(subs) { s in
                 VStack(spacing: 0) {
                     HStack(alignment: .top, spacing: 10) {
                         CheckCircle(priority: s.priority, completed: s.isCompleted) { model.toggleComplete(s.id) }
                         VStack(alignment: .leading, spacing: 2) {
-                            Text(s.content)
+                            Text(RichText.render(s.content))
                                 .font(.system(size: 13))
                                 .strikethrough(s.isCompleted)
                                 .foregroundStyle(s.isCompleted ? .secondary : .primary)
+                                .richTextLinks(tint: s.isCompleted ? .secondary : .primary)
                             let progress = store.subtaskProgress(of: s.id)
                             TaskMetaRow(task: s, labelColors: model.labelColorKeys(s.labels),
                                         subtaskTotal: progress.total, subtaskDone: progress.done)
@@ -162,6 +304,7 @@ private struct TaskDetailContent: View {
                     }
                     .padding(.vertical, 7)
                     .contentShape(Rectangle())
+                    .pointerStyle(.link)
                     .onTapGesture { model.detailTaskID = s.id }
                     .contextMenu { TaskMenuItems(task: s) }
                     Divider()
@@ -197,118 +340,31 @@ private struct TaskDetailContent: View {
         focus = .subtask
     }
 
-    // MARK: Side column
-
-    private var sideColumn: some View {
-        VStack(alignment: .leading, spacing: 18) {
-            field("Project") {
-                ProjectSectionMenu(projectId: task.projectId, sectionId: task.sectionId) { pid, sid in
-                    store.moveTask(task.id, projectId: pid, sectionId: sid, parentId: nil)
-                }
-            }
-            Divider()
-            field("Date") {
-                VStack(alignment: .leading, spacing: 8) {
-                    if let due = task.due {
-                        HStack(spacing: 4) {
-                            Image(systemName: "calendar")
-                            Text(due.displayString())
-                            Spacer()
-                            Button { store.updateTask(task.id) { $0.due = nil } } label: {
-                                Image(systemName: "xmark").font(.system(size: 10, weight: .bold))
-                            }
-                            .buttonStyle(.plain)
-                            .foregroundStyle(.secondary)
-                            .help("Remove date")
-                        }
-                        .font(.system(size: 13))
-                        .foregroundStyle(due.chipColor)
-                    }
-                    TextField("Type a date, e.g. next fri", text: $dateText)
-                        .textFieldStyle(.roundedBorder)
-                        .font(.system(size: 12))
-                        .focused($focus, equals: DetailField.date)
-                        .onSubmit {
-                            if let d = DateParser.parse(dateText) {
-                                store.updateTask(task.id) { $0.due = d }
-                                dateText = ""
-                            }
-                        }
-                    if !dateText.isEmpty {
-                        Text(DateParser.parse(dateText).map { "→ \($0.displayString())" } ?? "No match")
-                            .font(.system(size: 11)).foregroundStyle(.secondary)
-                    }
-                    HStack(spacing: 6) {
-                        quickDate("Today", .offset(days: 0))
-                        quickDate("Tomorrow", .offset(days: 1))
-                    }
-                    HStack(spacing: 6) {
-                        quickDate("Next week", .nextWeek)
-                        quickDate("No date", nil)
-                    }
-                }
-            }
-            Divider()
-            field("Priority") {
-                PriorityMenu(priority: Binding(get: { task.priority }, set: { p in model.setPriority(p, for: task.id) }),
-                             compact: false)
-            }
-            Divider()
-            field("Labels") {
-                VStack(alignment: .leading, spacing: 6) {
-                    FlowRow(task.labels) { name in
-                        HStack(spacing: 3) {
-                            Text(name)
-                            Button {
-                                store.updateTask(task.id) { $0.labels.removeAll { $0 == name } }
-                            } label: { Image(systemName: "xmark").font(.system(size: 8, weight: .bold)) }
-                            .buttonStyle(.plain)
-                        }
-                        .font(.system(size: 12))
-                        .padding(.horizontal, 7).padding(.vertical, 3)
-                        .background(Capsule().fill(labelColor(name).opacity(0.18)))
-                        .foregroundStyle(labelColor(name))
-                    }
-                    Button { showLabels = true } label: {
-                        ChipLabel(icon: "plus", text: "Add label")
-                    }
-                    .buttonStyle(.plain)
-                    .popover(isPresented: $showLabels, arrowEdge: .leading) {
-                        LabelsPicker(selection: Binding(
-                            get: { store.task(task.id)?.labels ?? [] },
-                            set: { new in store.updateTask(task.id) { $0.labels = new } }))
-                        .environment(store)
-                    }
-                }
-            }
-            Divider()
-            Text("Created \(task.createdAt.formatted(date: .abbreviated, time: .shortened))")
-                .font(.system(size: 11)).foregroundStyle(.secondary)
-        }
-    }
-
     private func labelColor(_ name: String) -> Color {
         store.labels.first { $0.name == name }.map { Palette.color($0.color) } ?? .secondary
     }
+}
 
-    private func field<Content: View>(_ title: String, @ViewBuilder content: () -> Content) -> some View {
-        VStack(alignment: .leading, spacing: 8) {
-            Text(title).font(.system(size: 12, weight: .semibold)).foregroundStyle(.secondary)
-            content()
-        }
+/// Plain button with a light rounded hover background (task view header and rows).
+struct HoverButtonStyle: ButtonStyle {
+    func makeBody(configuration: Configuration) -> some View {
+        HoverBody(configuration: configuration)
     }
 
-    private func quickDate(_ title: String, _ value: DueDate?) -> some View {
-        Button { store.updateTask(task.id) { $0.due = value } } label: {
-            Text(title).font(.system(size: 12))
-                .padding(.horizontal, 8).padding(.vertical, 4)
-                .background(RoundedRectangle(cornerRadius: 5).fill(Color.primary.opacity(0.08)))
+    private struct HoverBody: View {
+        let configuration: Configuration
+        @State private var hovering = false
+        var body: some View {
+            configuration.label
+                .background(RoundedRectangle(cornerRadius: 5)
+                    .fill(Color.primary.opacity(configuration.isPressed ? 0.12 : hovering ? 0.06 : 0)))
+                .pointerStyle(.link)
+                .onHover { hovering = $0 }
         }
-        .buttonStyle(.plain)
     }
 }
 
-enum DetailField { case title, details, date, subtask }
+enum DetailField { case title, details, subtask }
 
 /// Title and description of the task sheet. Typing edits a local draft; it is written to the
 /// store after a short pause, when the sheet closes or moves to another task, and on quit, so a
@@ -350,10 +406,11 @@ private struct DetailTextFields: View {
         VStack(alignment: .leading, spacing: 8) {
             TextField("Task name", text: $title, axis: .vertical)
                 .textFieldStyle(.plain)
-                .font(.system(size: 20, weight: .semibold))
+                .font(.system(size: 20, weight: .bold))
                 .strikethrough(isCompleted)
                 .focused(focus, equals: .title)
                 .onSubmit { commit(); focus.wrappedValue = nil }
+                .onExitCommand { commit(); focus.wrappedValue = nil }
             HStack(alignment: .top, spacing: 6) {
                 Image(systemName: "text.alignleft").foregroundStyle(.secondary).font(.system(size: 12)).padding(.top, 2)
                 TextField("Description", text: $details, axis: .vertical)
@@ -361,6 +418,7 @@ private struct DetailTextFields: View {
                     .font(.system(size: 13))
                     .lineLimit(1...20)
                     .focused(focus, equals: .details)
+                    .onExitCommand { commit(); focus.wrappedValue = nil }
             }
         }
         .onChange(of: title) { scheduleCommit() }

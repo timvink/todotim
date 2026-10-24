@@ -77,6 +77,8 @@ enum Palette {
 enum Theme {
     /// Todoist brand red, used for primary buttons and accents.
     static let accent = Color(hex: 0xDC4C3E)
+    /// Todoist's selected sidebar row: a light red tint (#FFEFE5 on white).
+    static let selection = Color(hex: 0xDC4C3E).opacity(0.13)
     static let overdue = Color(hex: 0xD1453B)
     static let today = Color(hex: 0x058527)
     static let tomorrow = Color(hex: 0xAD6200)
@@ -139,6 +141,7 @@ struct AccentButtonStyle: ButtonStyle {
             .foregroundStyle(.white)
             .padding(.horizontal, 12).padding(.vertical, 6)
             .background(RoundedRectangle(cornerRadius: 6).fill(Theme.accent.opacity(isEnabled ? (configuration.isPressed ? 0.8 : 1) : 0.45)))
+            .pointerStyle(isEnabled ? .link : nil)
     }
 }
 
@@ -149,6 +152,7 @@ struct SoftButtonStyle: ButtonStyle {
             .font(.system(size: 13, weight: .semibold))
             .padding(.horizontal, 12).padding(.vertical, 6)
             .background(RoundedRectangle(cornerRadius: 6).fill(Color.primary.opacity(configuration.isPressed ? 0.14 : 0.08)))
+            .pointerStyle(.link)
     }
 }
 
@@ -166,6 +170,7 @@ struct ChipLabel: View {
         .padding(.horizontal, 7).padding(.vertical, 4)
         .overlay(RoundedRectangle(cornerRadius: 5).strokeBorder(Color.primary.opacity(0.15)))
         .contentShape(Rectangle())
+        .pointerStyle(.link)
     }
 }
 

@@ -24,6 +24,7 @@ struct CheckCircle: View {
             .contentShape(Circle())
         }
         .buttonStyle(.plain)
+        .pointerStyle(.link)
         .onHover { hovering = $0 }
         .help(completed ? "Reopen task" : "Complete task")
     }
@@ -70,6 +71,8 @@ struct TaskRowView: View, Equatable {
     /// Shown at the right in label and search views.
     let project: ProjectBadge?
     @State private var hovering = false
+    /// Row height for drop half-detection and the placeholder; not observed.
+    @State private var height = HeightBox()
 
     nonisolated static func == (a: Self, b: Self) -> Bool {
         a.item == b.item && a.task == b.task && a.isSelected == b.isSelected && a.popover == b.popover
@@ -90,15 +93,17 @@ struct TaskRowView: View, Equatable {
                     CheckCircle(priority: t.priority, completed: t.isCompleted) { model.toggleComplete(t.id) }
                         .padding(.top, 1)
                     VStack(alignment: .leading, spacing: 3) {
-                        Text(t.content)
+                        Text(RichText.render(t.content))
                             .font(.system(size: 14))
                             .strikethrough(t.isCompleted)
                             .foregroundStyle(t.isCompleted ? .secondary : .primary)
+                            .richTextLinks(tint: t.isCompleted ? .secondary : .primary)
                             .fixedSize(horizontal: false, vertical: true)
                         if let line = t.description.split(separator: "\n", omittingEmptySubsequences: true).first {
-                            Text(String(line))
+                            Text(RichText.render(String(line)))
                                 .font(.system(size: 12))
                                 .foregroundStyle(.secondary)
+                                .richTextLinks(tint: .secondary)
                                 .lineLimit(1)
                         }
                         TaskMetaRow(task: t, labelColors: labelColors,
@@ -133,6 +138,7 @@ struct TaskRowView: View, Equatable {
                 .padding(.leading, Theme.grip + CGFloat(item.depth) * Theme.indent + Theme.gutter - 4)
         )
         .contentShape(Rectangle())
+        .pointerStyle(.link)
         .onHover { hovering = $0 }
         .onTapGesture { model.openTask(t.id) }
         .contextMenu { TaskMenuItems(task: t) }
@@ -141,12 +147,14 @@ struct TaskRowView: View, Equatable {
             TaskPopoverContent(taskID: t.id, kind: popover ?? .date)
                 .environment(model).environment(model.store)
         }
-        .draggable(t.id) {
-            Text(t.content)
-                .padding(8)
-                .background(RoundedRectangle(cornerRadius: 6).fill(Color(nsColor: .windowBackgroundColor)))
+        .onGeometryChange(for: CGFloat.self, of: { $0.size.height }) { [height] h in height.value = h }
+        .onDrag {
+            MainActor.assumeIsolated { model.beginDrag(t.id, rowHeight: height.value) }
+            return NSItemProvider(object: t.id as NSString)
+        } preview: {
+            DragPreview(task: t)
         }
-        .dropDestination(for: String.self) { ids, _ in model.drop(ids, before: t) }
+        .modifier(RowDropModifier(enabled: project == nil, model: model, item: item, collapsed: t.collapsed, height: height))
         .padding(.leading, -Theme.grip)
     }
 
@@ -194,6 +202,39 @@ struct TaskRowView: View, Equatable {
         }
         .buttonStyle(.plain)
         .help(help)
+    }
+}
+
+/// Reorder drops apply to project lists only; label and search rows are drag sources only.
+private struct RowDropModifier: ViewModifier {
+    let enabled: Bool
+    let model: AppModel
+    let item: RowItem
+    let collapsed: Bool
+    let height: HeightBox
+
+    func body(content: Content) -> some View {
+        if enabled {
+            content.onDrop(of: [.text], delegate: TaskRowDropDelegate(model: model, item: item, collapsed: collapsed, height: height))
+        } else {
+            content
+        }
+    }
+}
+
+/// The lifted card that follows the pointer while dragging a task.
+private struct DragPreview: View {
+    let task: TodoTask
+    var body: some View {
+        HStack(spacing: 10) {
+            CheckCircle(priority: task.priority, completed: task.isCompleted) {}
+            Text(RichText.render(task.content)).font(.system(size: 14)).lineLimit(1)
+        }
+        .padding(.horizontal, 12).padding(.vertical, 9)
+        .frame(minWidth: 240, maxWidth: 420, alignment: .leading)
+        .background(RoundedRectangle(cornerRadius: 8).fill(Color(nsColor: .textBackgroundColor)))
+        .overlay(RoundedRectangle(cornerRadius: 8).strokeBorder(Color.primary.opacity(0.12)))
+        .shadow(color: .black.opacity(0.25), radius: 8, y: 3)
     }
 }
 

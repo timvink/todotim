@@ -195,21 +195,21 @@ enum PerfScript {
         guard let taskID = model.selectedTaskID else { Perf.log("no task selected"); return }
         model.openTask(taskID)
         await pause(800)
-        if let sheet = window.attachedSheet, let field = firstTextInput(in: sheet.contentView) {
-            sheet.makeKey()
-            if !sheet.makeFirstResponder(field) { (field as? NSTextField)?.selectText(nil) }
+        // The task view is a panel inside the main window; find its title field by placeholder.
+        if let field = textInput(in: window.contentView, placeholder: "Task name") {
+            if !window.makeFirstResponder(field) { (field as? NSTextField)?.selectText(nil) }
             await pause(200)
-            Perf.log("sheet text input: \(type(of: field)), first responder: \(sheet.firstResponder.map { String(describing: type(of: $0)) } ?? "nil")")
+            Perf.log("sheet text input: \(type(of: field)), first responder: \(window.firstResponder.map { String(describing: type(of: $0)) } ?? "nil")")
             await phase("typing \(n(60)) chars in task sheet title @12/s", settle: 800) {
                 for i in 0..<n(60) {
-                    (sheet.firstResponder as? NSTextView)?.insertText(i % 6 == 5 ? " " : "x",
-                                                                     replacementRange: NSRange(location: NSNotFound, length: 0))
+                    (window.firstResponder as? NSTextView)?.insertText(i % 6 == 5 ? " " : "x",
+                                                                      replacementRange: NSRange(location: NSNotFound, length: 0))
                     await pause(83)
                 }
             }
-            sheet.makeFirstResponder(nil)
+            window.makeFirstResponder(nil)
             await phase("task sheet j ×\(n(30)) @30Hz") {
-                for _ in 0..<n(30) { key("j", keyCode: 38, window: sheet); await pause(33) }
+                for _ in 0..<n(30) { key("j", keyCode: 38, window: window); await pause(33) }
             }
         } else {
             Perf.log("task sheet text field not found")
@@ -234,11 +234,13 @@ enum PerfScript {
         NSApp.terminate(nil)
     }
 
-    private static func firstTextInput(in view: NSView?) -> NSView? {
+    static func textInput(in view: NSView?, placeholder: String) -> NSView? {
         guard let view else { return nil }
-        if let tv = view as? NSTextView, tv.isEditable { return tv }
-        if let tf = view as? NSTextField, tf.isEditable { return tf }
-        for v in view.subviews { if let f = firstTextInput(in: v) { return f } }
+        if let tf = view as? NSTextField, tf.isEditable,
+           tf.placeholderString == placeholder || tf.placeholderAttributedString?.string == placeholder {
+            return tf
+        }
+        for v in view.subviews { if let f = textInput(in: v, placeholder: placeholder) { return f } }
         return nil
     }
 }

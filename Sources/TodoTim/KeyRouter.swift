@@ -7,7 +7,7 @@ import TodoCore
 /// SwiftUI's `.onKeyPress` only fires for the focused view, and list rows are not
 /// focusable, so a local NSEvent monitor is used instead. Keys pass through untouched
 /// while a text field has focus, while a modifier (⌘/⌃/⌥) is held (menu commands
-/// handle those), and in windows other than the main window and its task sheet.
+/// handle those), and in windows other than the main window (popovers, alerts, Settings).
 @MainActor
 final class KeyRouter {
     private let model: AppModel
@@ -31,25 +31,47 @@ final class KeyRouter {
         static let up: UInt16 = 126, down: UInt16 = 125, returnKey: UInt16 = 36, enter: UInt16 = 76, escape: UInt16 = 53
     }
 
+    /// Plain keys that are also menu key equivalents. While a modal panel is open they are
+    /// swallowed so they do not act on the list behind it.
+    private static let menuKeys: Set<String> = ["q", "a", "A", "s", "t", "l", "v", "j", "k", "e", "/", "?", "g",
+                                                "1", "2", "3", "4"]
+
     /// Returns true when the event was consumed.
     private func handle(_ event: NSEvent) -> Bool {
-        guard let window = event.window, let main = model.mainWindow else { return false }
+        // Only the main window; popovers, alerts and Settings handle their own keys.
+        guard let window = event.window, let main = model.mainWindow, window === main,
+              main.attachedSheet == nil else { return false }
         if !event.modifierFlags.intersection([.command, .control, .option]).isEmpty { return false }
-        if model.isEditingText { return false }
         let chars = event.charactersIgnoringModifiers ?? ""
+        let isEscape = event.keyCode == Key.escape
 
-        // Task detail sheet: ↑/↓/j/k move between tasks.
-        if window.sheetParent === main, model.detailTaskID != nil {
-            switch (event.keyCode, chars) {
-            case (Key.up, _), (_, "k"): model.moveDetail(-1); return true
-            case (Key.down, _), (_, "j"): model.moveDetail(1); return true
-            case (_, "e"): if let id = model.detailTaskID { model.toggleComplete(id) }; return true
-            case (_, "1"), (_, "2"), (_, "3"), (_, "4"):
-                model.setPriority(Priority(rawValue: Int(chars)!)!); return true
-            default: return false
-            }
+        // In-window modals (topmost first).
+        if model.showShortcuts {
+            if isEscape || chars == "?" { model.showShortcuts = false }
+            return isEscape || Self.menuKeys.contains(chars)
         }
-        guard window === main, window.attachedSheet == nil else { return false }
+        if model.showQuickAdd {
+            if isEscape { model.showQuickAdd = false; return true }
+            return !model.isEditingText && Self.menuKeys.contains(chars)
+        }
+        if model.detailTaskID != nil {
+            // Esc while editing a field ends the edit (the field's onExitCommand); else closes.
+            if model.isEditingText { return false }
+            switch (event.keyCode, chars) {
+            case (Key.escape, _): model.detailTaskID = nil
+            case (Key.up, _), (_, "k"): model.moveDetail(-1)
+            case (Key.down, _), (_, "j"): model.moveDetail(1)
+            case (_, "e"): if let id = model.detailTaskID { model.toggleComplete(id) }
+            case (_, "1"), (_, "2"), (_, "3"), (_, "4"):
+                model.setPriority(Priority(rawValue: Int(chars)!)!)
+            case (_, "t"): model.popover = .date
+            case (_, "l"): model.popover = .labels
+            case (_, "v"): model.popover = .move
+            default: return Self.menuKeys.contains(chars)
+            }
+            return true
+        }
+        if model.isEditingText { return false }
 
         if let g = pendingG {
             pendingG = nil

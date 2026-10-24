@@ -25,18 +25,13 @@ struct ContentView: View {
         })
         .onAppear { model.undoManager = undoManager }
         .onChange(of: undoManager) { _, um in model.undoManager = um }
-        .sheet(isPresented: Binding(get: { model.detailTaskID != nil }, set: { if !$0 { model.detailTaskID = nil } })) {
-            TaskDetailView()
-                .environment(model).environment(store)
-        }
-        .sheet(isPresented: $model.showQuickAdd) {
-            QuickAddView().environment(model).environment(store)
-        }
-        .sheet(isPresented: $model.showShortcuts) {
-            ShortcutsHelpView()
-        }
+        // Task view, Quick Add and the shortcuts list are panels inside the window, like Todoist.
+        .overlay { ModalLayer().ignoresSafeArea() }
         .sheet(isPresented: $model.showAddProject) {
             ProjectFormView(project: nil).environment(model).environment(store)
+        }
+        .sheet(isPresented: $model.showImportTodoist) {
+            ImportTodoistView().environment(store)
         }
         .alert("Problem at launch", isPresented: Binding(get: { model.startupError != nil },
                                                                  set: { if !$0 { model.startupError = nil } })) {
@@ -77,6 +72,71 @@ struct ContentView: View {
 
     private var emptyState: some View {
         Text("Select a project").foregroundStyle(.secondary)
+    }
+}
+
+/// Dimmed backdrop and centred panel for the in-window modals. Clicking the backdrop closes the
+/// panel; Esc is handled by `KeyRouter`. Only this small body depends on which modal is open.
+private struct ModalLayer: View {
+    @Environment(AppModel.self) private var model
+    @Environment(TodoStore.self) private var store
+
+    var body: some View {
+        let detail = model.detailTaskID != nil
+        let quickAdd = model.showQuickAdd
+        let shortcuts = model.showShortcuts
+        GeometryReader { geo in
+            let size = geo.size
+            ZStack(alignment: .top) {
+                if detail {
+                    Backdrop { model.detailTaskID = nil }
+                    TaskDetailView(size: CGSize(width: min(720, size.width - 40),
+                                                height: max(320, min(size.height - 96, 960))))
+                        .modalPanel()
+                        .frame(maxWidth: .infinity, maxHeight: .infinity)
+                }
+                if quickAdd {
+                    Backdrop { model.showQuickAdd = false }
+                    QuickAddView()
+                        .frame(width: min(620, size.width - 40))
+                        .modalPanel()
+                        .padding(.top, max(60, size.height * 0.16))
+                }
+                if shortcuts {
+                    Backdrop { model.showShortcuts = false }
+                    ShortcutsHelpView()
+                        .frame(width: min(680, size.width - 40), height: max(300, min(560, size.height - 96)))
+                        .modalPanel()
+                        .frame(maxWidth: .infinity, maxHeight: .infinity)
+                }
+            }
+            .frame(width: size.width, height: size.height)
+        }
+        .animation(.easeOut(duration: 0.12), value: detail)
+        .animation(.easeOut(duration: 0.12), value: quickAdd)
+        .animation(.easeOut(duration: 0.12), value: shortcuts)
+    }
+}
+
+private struct Backdrop: View {
+    let close: () -> Void
+    var body: some View {
+        Color.black.opacity(0.4)
+            .contentShape(Rectangle())
+            .onTapGesture(perform: close)
+            .transition(.opacity)
+    }
+}
+
+extension View {
+    /// Rounded, shadowed panel used by the in-window modals.
+    func modalPanel() -> some View {
+        self
+            .background(Color(nsColor: .textBackgroundColor))
+            .clipShape(RoundedRectangle(cornerRadius: 12))
+            .overlay(RoundedRectangle(cornerRadius: 12).strokeBorder(Color.primary.opacity(0.12)))
+            .shadow(color: .black.opacity(0.3), radius: 24, y: 8)
+            .transition(.opacity.combined(with: .scale(scale: 0.98)))
     }
 }
 

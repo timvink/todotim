@@ -5,7 +5,6 @@ import TodoCore
 struct QuickAddView: View {
     @Environment(AppModel.self) private var model
     @Environment(TodoStore.self) private var store
-    @Environment(\.dismiss) private var dismiss
     @State private var text = ""
     @State private var details = ""
     @FocusState private var focused: Bool
@@ -90,16 +89,14 @@ struct QuickAddView: View {
                 }
                 .font(.system(size: 12))
                 Spacer()
-                Button("Cancel") { dismiss() }
+                Button("Cancel") { model.showQuickAdd = false }
                     .buttonStyle(SoftButtonStyle())
-                    .keyboardShortcut(.cancelAction)
                 Button("Add task", action: add)
                     .buttonStyle(AccentButtonStyle())
                     .disabled(r.parsed.content.trimmingCharacters(in: .whitespaces).isEmpty)
             }
             .padding(12)
         }
-        .frame(width: 600)
         .onAppear { focused = true }
     }
 
@@ -151,23 +148,25 @@ struct QuickAddView: View {
         let t = store.addTask(content: content, projectId: r.project.id, sectionId: r.section?.id,
                               description: details.trimmingCharacters(in: .whitespacesAndNewlines),
                               priority: r.parsed.priority ?? .p4, due: r.parsed.due, labels: r.parsed.labels)
-        dismiss()
+        model.showQuickAdd = false
         model.showToast("Task added to \(r.project.name)", undo: nil)
         if model.currentProjectID == r.project.id { model.selectedTaskID = t.id }
     }
 }
 
 struct ShortcutsHelpView: View {
-    @Environment(\.dismiss) private var dismiss
+    @Environment(AppModel.self) private var model
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             HStack {
                 Text("Keyboard shortcuts").font(.system(size: 16, weight: .bold))
                 Spacer()
-                Button { dismiss() } label: { Image(systemName: "xmark") }
-                    .buttonStyle(.plain)
-                    .keyboardShortcut(.cancelAction)
+                Button { model.showShortcuts = false } label: {
+                    Image(systemName: "xmark").frame(width: 26, height: 24).contentShape(Rectangle())
+                }
+                .buttonStyle(HoverButtonStyle())
+                .help("Close (Esc)")
             }
             .padding(16)
             Divider()
@@ -193,6 +192,5 @@ struct ShortcutsHelpView: View {
                 .padding(20)
             }
         }
-        .frame(width: 680, height: 560)
     }
 }

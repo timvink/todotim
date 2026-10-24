@@ -37,6 +37,8 @@ enum DisplayItem: Equatable, Identifiable {
     case sectionHeader(TodoCore.Section, count: Int, collapsed: Bool)
     case groupHeader(projectId: EntityID, count: Int)
     case message(String)
+    /// Drag-and-drop slot; inserted by `TaskListView`, never by `DisplayBuilder`.
+    case dropPlaceholder(depth: Int)
 
     /// Task rows use the bare task id so `ScrollViewProxy.scrollTo(taskID)` finds them.
     var id: String {
@@ -50,6 +52,7 @@ enum DisplayItem: Equatable, Identifiable {
         case .sectionHeader(let s, _, _): "__section/" + s.id
         case .groupHeader(let pid, _): "__group/" + pid
         case .message: "__message"
+        case .dropPlaceholder: "__drop"
         }
     }
 }

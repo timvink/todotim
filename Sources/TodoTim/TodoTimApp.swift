@@ -90,7 +90,7 @@ final class AppServices {
         }
         sync = SyncController(store: store, defaults: defaults, credentials: KeychainCredentialStore(),
                               config: config, configPath: configURL.path)
-        model = AppModel(store: store, sync: sync)
+        model = AppModel(store: store, sync: sync, defaults: defaults)
         model.startupError = startupError
         // Only https links are opened from the Help menu.
         model.repositoryURL = config.map(\.repository).flatMap { URL(string: $0) }
@@ -121,8 +121,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     func applicationDidFinishLaunching(_ notification: Notification) {
         MainActor.assumeIsolated {
             NSApp.setActivationPolicy(.regular)
-            // A scripted perf run must not take focus from whatever the user is doing.
-            if !Perf.scripted { NSApp.activate(ignoringOtherApps: true) }
+            // A scripted perf run (or the debug UI test hook) must not take focus from whatever
+            // the user is doing.
+            var quiet = Perf.scripted
+            #if DEBUG
+            quiet = quiet || UITestHook.active
+            UITestHook.start()
+            #endif
+            if !quiet { NSApp.activate(ignoringOtherApps: true) }
             AppServices.shared.keyRouter.install()
         }
     }

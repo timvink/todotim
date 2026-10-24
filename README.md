@@ -12,6 +12,7 @@ subtasks, all driven from the keyboard. It leaves out Today, Upcoming, the calen
 
 - Projects with colours, sections, tasks and nested subtasks
 - Priorities (p1–p4), due dates, labels and descriptions
+- Import from Todoist (File › Import from Todoist…, with your API token)
 - Quick Add with natural language: `Renew passport next friday p1 @errands #Home /Admin`
 - Keyboard shortcuts for almost everything (press `?` in the app)
 - Search, label views, completed-task view, and undo for complete and delete

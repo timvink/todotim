@@ -10,8 +10,9 @@ struct SidebarView: View {
     @State private var labelName = ""
 
     var body: some View {
-        @Bindable var model = model
-        List(selection: $model.sidebar) {
+        // No `List(selection:)`: its highlight uses the system accent color (blue for most
+        // users), so rows draw Todoist's tinted selection themselves (`SidebarRow`).
+        List {
             Button { model.showQuickAdd = true } label: {
                 HStack(spacing: 8) {
                     Image(systemName: "plus.circle.fill")
@@ -20,25 +21,29 @@ struct SidebarView: View {
                     Text("Add task")
                         .font(.system(size: 13, weight: .semibold))
                         .foregroundStyle(Theme.accent)
+                    Spacer()
                 }
+                .contentShape(Rectangle())
             }
             .buttonStyle(.plain)
+            .pointerStyle(.link)
             .padding(.vertical, 4)
-            .selectionDisabled()
 
-            HStack(spacing: 8) {
+            SidebarRow(item: .search) {
                 Image(systemName: "magnifyingglass").foregroundStyle(.secondary).frame(width: 18)
                 Text("Search")
+                Spacer()
             }
-            .tag(SidebarItem.search)
-            row(store.inbox, icon: "tray")
-                .tag(SidebarItem.project(store.inbox.id))
+            SidebarRow(item: .project(store.inbox.id), dropProjectId: store.inbox.id) {
+                projectLabel(store.inbox, icon: "tray")
+            }
 
             SwiftUI.Section {
                 ForEach(store.projects) { p in
-                    row(p, icon: "number")
-                        .tag(SidebarItem.project(p.id))
-                        .contextMenu { projectMenu(p) }
+                    SidebarRow(item: .project(p.id), dropProjectId: p.id) {
+                        projectLabel(p, icon: "number")
+                    }
+                    .contextMenu { projectMenu(p) }
                 }
                 .onMove { from, to in
                     guard let i = from.first else { return }
@@ -53,6 +58,7 @@ struct SidebarView: View {
                         Image(systemName: "plus")
                     }
                     .buttonStyle(.plain)
+                    .pointerStyle(.link)
                     .help("Add project")
                 }
             }
@@ -60,7 +66,7 @@ struct SidebarView: View {
             if !store.labels.isEmpty {
                 SwiftUI.Section("Labels") {
                     ForEach(store.labels) { l in
-                        HStack(spacing: 8) {
+                        SidebarRow(item: .label(l.name)) {
                             Image(systemName: "tag")
                                 .foregroundStyle(Palette.color(l.color))
                                 .frame(width: 18)
@@ -69,7 +75,6 @@ struct SidebarView: View {
                             let n = store.openTaskCount(label: l.name)
                             if n > 0 { Text("\(n)").foregroundStyle(.secondary).font(.system(size: 12)) }
                         }
-                        .tag(SidebarItem.label(l.name))
                         .contextMenu {
                             Button("Rename…") { labelName = l.name; renamingLabel = l }
                             Menu("Color") {
@@ -118,20 +123,14 @@ struct SidebarView: View {
         }
     }
 
-    private func row(_ p: Project, icon: String) -> some View {
-        HStack(spacing: 8) {
-            Image(systemName: icon)
-                .foregroundStyle(p.isInbox ? Color(hex: 0x246FE0) : Palette.color(p.color))
-                .frame(width: 18)
-            Text(p.name).lineLimit(1)
-            Spacer()
-            let n = store.openTaskCount(projectId: p.id)
-            if n > 0 { Text("\(n)").foregroundStyle(.secondary).font(.system(size: 12)) }
-        }
-        .contentShape(Rectangle())
-        .dropDestination(for: String.self) { ids, _ in
-            model.drop(ids, projectId: p.id, sectionId: nil)
-        }
+    @ViewBuilder private func projectLabel(_ p: Project, icon: String) -> some View {
+        Image(systemName: icon)
+            .foregroundStyle(p.isInbox ? Color(hex: 0x246FE0) : Palette.color(p.color))
+            .frame(width: 18)
+        Text(p.name).lineLimit(1)
+        Spacer()
+        let n = store.openTaskCount(projectId: p.id)
+        if n > 0 { Text("\(n)").foregroundStyle(.secondary).font(.system(size: 12)) }
     }
 
     @ViewBuilder private func projectMenu(_ p: Project) -> some View {
@@ -145,6 +144,60 @@ struct SidebarView: View {
         }
         Divider()
         Button("Delete Project…", role: .destructive) { deletingProject = p }
+    }
+}
+
+/// Sidebar row with Todoist's selection (tinted background, red title), a hover background and,
+/// for projects, a drop target for dragged tasks that highlights while targeted.
+private struct SidebarRow<Content: View>: View {
+    @Environment(AppModel.self) private var model
+    let item: SidebarItem
+    var dropProjectId: EntityID?
+    @ViewBuilder let content: Content
+    @State private var hovering = false
+    @State private var dropTargeted = false
+
+    var body: some View {
+        let selected = model.sidebar == item
+        HStack(spacing: 8) { content }
+            .foregroundStyle(selected ? Theme.accent : Color.primary)
+            .padding(.horizontal, 6)
+            .padding(.vertical, 5)
+            .background(
+                RoundedRectangle(cornerRadius: 6).fill(
+                    dropTargeted ? Theme.accent.opacity(0.28)
+                        : selected ? Theme.selection
+                        : Color.primary.opacity(hovering ? 0.06 : 0))
+            )
+            .overlay {
+                if dropTargeted { RoundedRectangle(cornerRadius: 6).strokeBorder(Theme.accent.opacity(0.7), lineWidth: 1.5) }
+            }
+            .contentShape(Rectangle())
+            .pointerStyle(.link)
+            .onHover { hovering = $0 }
+            .onTapGesture { model.sidebar = item }
+            .listRowInsets(EdgeInsets(top: 1, leading: 4, bottom: 1, trailing: 4))
+            .modifier(SidebarDropModifier(projectId: dropProjectId, targeted: $dropTargeted))
+    }
+}
+
+private struct SidebarDropModifier: ViewModifier {
+    @Environment(AppModel.self) private var model
+    let projectId: EntityID?
+    @Binding var targeted: Bool
+
+    func body(content: Content) -> some View {
+        if let projectId {
+            content.dropDestination(for: String.self) { ids, _ in
+                model.drop(ids, projectId: projectId, sectionId: nil)
+            } isTargeted: { on in
+                targeted = on
+                // Leaving the list for the sidebar: remove the list placeholder.
+                if on { model.drag.setTarget(nil) }
+            }
+        } else {
+            content
+        }
     }
 }
 

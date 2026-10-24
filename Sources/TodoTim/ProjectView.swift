@@ -19,16 +19,28 @@ struct ProjectView: View {
 /// Renders a flattened `DisplayItem` list in one `LazyVStack`, so only rows near the viewport
 /// are built. Shared by project, label and search views.
 struct TaskListView: View {
+    @Environment(AppModel.self) private var model
     let items: [DisplayItem]
     var topPadding: CGFloat = 12
     @State private var visible = VisibleRows()
 
     var body: some View {
+        // Reads the drag state here only, so a drag invalidates this body (an O(rows) pass)
+        // but not the rows.
+        let drag = model.drag
+        let dragging = drag.draggingID
+        let shown = Self.withPlaceholder(items, target: dragging == nil ? nil : drag.target)
         ScrollViewReader { proxy in
             ScrollView {
                 LazyVStack(alignment: .leading, spacing: 0) {
-                    ForEach(items) { item in
-                        DisplayItemView(item: item)
+                    ForEach(shown) { item in
+                        if case .dropPlaceholder(let depth) = item {
+                            DropPlaceholderView(depth: depth, height: drag.rowHeight)
+                                .transition(.opacity)
+                        } else {
+                            DisplayItemView(item: item)
+                                .opacity(dragging != nil && item.id == dragging ? 0.35 : 1)
+                        }
                     }
                 }
                 .scrollTargetLayout()
@@ -97,9 +109,7 @@ private struct DisplayItemView: View {
                 model.selectedTaskID = nil
                 model.editor = EditorTarget(projectId: pid, sectionId: sid)
             }
-            .dropDestination(for: String.self) { ids, _ in
-                model.drop(ids, projectId: pid, sectionId: sid)
-            }
+            .onDrop(of: [.text], delegate: FixedDropDelegate(model: model, target: .sectionEnd(projectId: pid, sectionId: sid)))
         case .sectionGap(let pid, let index):
             AddSectionGap(projectId: pid, index: index)
         case .sectionHeader(let section, let count, let collapsed):
@@ -108,6 +118,8 @@ private struct DisplayItemView: View {
             GroupHeaderView(projectId: pid, count: count)
         case .message(let text):
             Text(text).foregroundStyle(.secondary).padding(.leading, Theme.gutter)
+        case .dropPlaceholder:
+            EmptyView()  // rendered by TaskListView
         }
     }
 }
@@ -126,6 +138,7 @@ private struct ProjectHeaderView: View {
         }
         .padding(.leading, Theme.gutter)
         .padding(.top, 8).padding(.bottom, 18)
+        .onDrop(of: [.text], delegate: FixedDropDelegate(model: model, target: .sectionStart(projectId: projectId, sectionId: nil)))
     }
 
     private var moreMenu: some View {
@@ -143,6 +156,7 @@ private struct ProjectHeaderView: View {
         .menuStyle(.borderlessButton)
         .menuIndicator(.hidden)
         .fixedSize()
+        .pointerStyle(.link)
         .help("More actions")
     }
 }
@@ -172,6 +186,7 @@ struct AddTaskRow: View {
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
+        .pointerStyle(.link)
         .onHover { hovering = $0 }
     }
 }
@@ -200,6 +215,7 @@ struct SectionHeaderView: View {
                         .contentShape(Rectangle())
                 }
                 .buttonStyle(.plain)
+                .pointerStyle(.link)
                 .opacity(hovering || collapsed ? 1 : 0.6)
 
                 if model.renamingSectionID == section.id {
@@ -232,6 +248,7 @@ struct SectionHeaderView: View {
                     .menuStyle(.borderlessButton)
                     .menuIndicator(.hidden)
                     .fixedSize()
+                    .pointerStyle(.link)
                     .opacity(hovering ? 1 : 0)
                 }
             }
@@ -242,9 +259,8 @@ struct SectionHeaderView: View {
         .contentShape(Rectangle())
         .onHover { hovering = $0 }
         .contextMenu { menuItems }
-        .dropDestination(for: String.self) { ids, _ in
-            model.drop(ids, projectId: section.projectId, sectionId: section.id)
-        }
+        .onDrop(of: [.text], delegate: FixedDropDelegate(
+            model: model, target: .sectionStart(projectId: section.projectId, sectionId: section.id)))
         .alert("Delete section?", isPresented: $confirmDelete) {
             Button("Delete", role: .destructive) { store.deleteSection(section.id) }
             Button("Cancel", role: .cancel) {}
@@ -323,6 +339,7 @@ struct AddSectionGap: View {
                 .contentShape(Rectangle())
             }
             .buttonStyle(.plain)
+            .pointerStyle(.link)
             .onHover { hovering = $0 }
         }
     }

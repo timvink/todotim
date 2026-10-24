@@ -16,6 +16,8 @@ struct AppCommands: Commands {
                 .keyboardShortcut("n")
             Button("Add Project…") { model.showAddProject = true }
                 .keyboardShortcut("n", modifiers: [.command, .shift])
+            Divider()
+            Button("Import from Todoist…") { model.showImportTodoist = true }
         }
         CommandGroup(after: .toolbar) {
             Button(model.currentProjectID.map { model.showsCompleted($0) } == true ? "Hide Completed Tasks" : "Show Completed Tasks") {
@@ -170,7 +172,8 @@ enum ShortcutCatalog {
         ]),
         ("Task view", [
             Item(keys: "↑ ↓  or  K J", action: "Previous / next task"),
-            Item(keys: "Esc", action: "Close"),
+            Item(keys: "T  /  L  /  V", action: "Date / labels / move"),
+            Item(keys: "Esc  or  click outside", action: "Close"),
         ]),
     ]
 }

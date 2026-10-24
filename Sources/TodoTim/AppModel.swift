@@ -62,6 +62,7 @@ final class AppModel {
         didSet {
             guard detailTaskID != oldValue else { return }
             if oldValue != nil { flushDetailEdits() }
+            if popover != nil { popover = nil }
         }
     }
 
@@ -73,9 +74,21 @@ final class AppModel {
     var showQuickAdd = false
     var showShortcuts = false
     var showAddProject = false
+    var showImportTodoist = false
     var confirmDeleteTaskID: EntityID?
     var showCompletedProjects: Set<EntityID> = []
-    var collapsedSections: Set<EntityID> = []
+    /// Collapsed sections, saved per device in UserDefaults (not synced, not in the database).
+    var collapsedSections: Set<EntityID> = [] {
+        didSet {
+            guard collapsedSections != oldValue else { return }
+            defaults.set(collapsedSections.sorted(), forKey: Self.collapsedSectionsKey)
+        }
+    }
+    static let collapsedSectionsKey = "collapsedSectionIDs"
+    /// Drag-to-reorder state; observed only by the task list and the sidebar.
+    @ObservationIgnored let drag = DragState()
+    /// Whether an in-window modal (task view, Quick Add, shortcuts) covers the window.
+    var hasModal: Bool { detailTaskID != nil || showQuickAdd || showShortcuts }
     var editor: EditorTarget? {
         didSet {
             guard let e = editor else { return }
@@ -106,9 +119,13 @@ final class AppModel {
     /// Rows of the list currently on screen; see `display()`.
     @ObservationIgnored private var displayCache: DisplayModel?
 
-    init(store: TodoStore, sync: SyncController) {
+    @ObservationIgnored private let defaults: UserDefaults
+
+    init(store: TodoStore, sync: SyncController, defaults: UserDefaults = .standard) {
         self.store = store
         self.sync = sync
+        self.defaults = defaults
+        collapsedSections = Set(defaults.stringArray(forKey: Self.collapsedSectionsKey) ?? [])
     }
 
     // MARK: - Derived
@@ -327,27 +344,47 @@ final class AppModel {
         showToast("Task moved to \(name)", undo: nil)
     }
 
-    /// Drop handler: places dragged tasks right before `target` (same parent).
-    func drop(_ ids: [String], before target: TodoTask) -> Bool {
-        var moved = false
-        for id in ids where id != target.id {
-            guard store.task(id) != nil else { continue }
-            if store.descendantIDs(of: id).contains(target.id) { continue }
-            let sibs = target.parentId.map { store.subtaskIDs(of: $0) }
-                ?? store.taskIDs(projectId: target.projectId, sectionId: target.sectionId)
-            let index = sibs.filter { $0 != id }.firstIndex(of: target.id)
-            store.moveTask(id, projectId: target.projectId, sectionId: target.sectionId, parentId: target.parentId, at: index)
-            moved = true
+    /// Starts a drag of a task row (called when the drag session begins).
+    func beginDrag(_ id: EntityID, rowHeight: CGFloat, trackMouse: Bool = true) {
+        drag.begin(id, excluded: Set([id] + store.descendantIDs(of: id)), rowHeight: rowHeight, trackMouse: trackMouse)
+    }
+
+    /// Moves the dragged task to `target` (or the current drop target). Returns false when
+    /// there is nothing to move.
+    @discardableResult
+    func performDrop(_ target: DropTarget? = nil) -> Bool {
+        defer { drag.end() }
+        guard let id = drag.draggingID, let target = target ?? drag.target, store.task(id) != nil else { return false }
+        switch target {
+        case .before(let anchor), .after(let anchor):
+            guard let a = store.task(anchor), !drag.excluded.contains(anchor) else { return false }
+            let sibs = a.parentId.map { store.subtaskIDs(of: $0) }
+                ?? store.taskIDs(projectId: a.projectId, sectionId: a.sectionId)
+            let others = sibs.filter { $0 != id }
+            var index = others.firstIndex(of: anchor)
+            if case .after = target { index = index.map { $0 + 1 } }
+            store.moveTask(id, projectId: a.projectId, sectionId: a.sectionId, parentId: a.parentId, at: index)
+        case .firstChild(let parent):
+            guard let p = store.task(parent), !drag.excluded.contains(parent) else { return false }
+            store.moveTask(id, projectId: p.projectId, sectionId: p.sectionId, parentId: parent, at: 0)
+        case .sectionStart(let pid, let sid):
+            store.moveTask(id, projectId: pid, sectionId: sid, parentId: nil, at: 0)
+        case .sectionEnd(let pid, let sid):
+            store.moveTask(id, projectId: pid, sectionId: sid, parentId: nil)
         }
-        return moved
+        return true
     }
 
     /// Drop handler: appends dragged tasks to a section (or project when `sectionId` is nil).
     func drop(_ ids: [String], projectId: EntityID, sectionId: EntityID?) -> Bool {
         var moved = false
+        defer { drag.end() }
         for id in ids where store.task(id) != nil {
             store.moveTask(id, projectId: projectId, sectionId: sectionId, parentId: nil)
             moved = true
+        }
+        if moved, ids.count == 1, store.task(ids[0])?.projectId != currentProjectID, let name = store.project(projectId)?.name {
+            showToast("Task moved to \(name)", undo: nil)
         }
         return moved
     }
