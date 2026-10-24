@@ -106,10 +106,10 @@ public final class WebDAVClient: RemoteStorage, @unchecked Sendable {
 
     // MARK: - RemoteStorage
 
-    public func list(_ path: String) async throws -> [RemoteItem] {
+    public func listing(_ path: String) async throws -> RemoteListing {
         let body = """
         <?xml version="1.0" encoding="utf-8"?>
-        <d:propfind xmlns:d="DAV:"><d:prop><d:getetag/><d:resourcetype/></d:prop></d:propfind>
+        <d:propfind xmlns:d="DAV:"><d:prop><d:getetag/><d:resourcetype/><d:getcontentlength/><d:getlastmodified/></d:prop></d:propfind>
         """
         var req = try request(path, method: "PROPFIND", collection: true)
         req.setValue("1", forHTTPHeaderField: "Depth")
@@ -127,7 +127,8 @@ public final class WebDAVClient: RemoteStorage, @unchecked Sendable {
                 throw SyncError.badRemoteData(path: path, reason: "the folder listing is not plain WebDAV XML (\(error))")
             }
             guard let entries else { throw SyncError.notWebDAV }
-            return Self.items(from: entries, baseURL: baseURL, listedPath: path)
+            return RemoteListing(items: Self.items(from: entries, baseURL: baseURL, listedPath: path),
+                                 serverDate: Self.httpDate(response.value(forHTTPHeaderField: "Date")))
         case 200...299:
             throw SyncError.notWebDAV
         default:
@@ -135,12 +136,46 @@ public final class WebDAVClient: RemoteStorage, @unchecked Sendable {
         }
     }
 
-    public func get(_ path: String) async throws -> (data: Data, etag: String?) {
+    public func get(_ path: String) async throws -> RemoteFile {
         let (data, response) = try await send(try request(path, method: "GET"))
         guard (200...299).contains(response.statusCode) else {
             throw Self.error(status: response.statusCode, path: path)
         }
-        return (data, response.value(forHTTPHeaderField: "ETag"))
+        return RemoteFile(data: data, etag: Self.normalizeETag(response.value(forHTTPHeaderField: "ETag")),
+                          modified: Self.httpDate(response.value(forHTTPHeaderField: "Last-Modified")),
+                          serverDate: Self.httpDate(response.value(forHTTPHeaderField: "Date")))
+    }
+
+    /// Parses an HTTP date (RFC 9110 IMF-fixdate, e.g. "Sun, 06 Nov 1994 08:49:37 GMT"), as
+    /// used by the Date and Last-Modified headers and `getlastmodified`. nil if absent or invalid.
+    public static func httpDate(_ string: String?) -> Date? {
+        guard let s = string?.trimmingCharacters(in: .whitespaces), !s.isEmpty else { return nil }
+        return httpDateLock.withLock { httpDateFormatter.date(from: s) }
+    }
+
+    private static let httpDateLock = NSLock()
+    nonisolated(unsafe) private static let httpDateFormatter: DateFormatter = {
+        let f = DateFormatter()
+        f.locale = Locale(identifier: "en_US_POSIX")
+        f.timeZone = TimeZone(identifier: "GMT")
+        f.dateFormat = "EEE, dd MMM yyyy HH:mm:ss zzz"
+        return f
+    }()
+
+    /// Undoes what compressing reverse proxies do to a response's ETag, so it can be sent back
+    /// in `If-Match`: Caddy and Apache append "-gzip"/"-br"/"-zstd" inside the quotes, and nginx
+    /// marks it weak (`W/`). Without this, every update of a downloaded file fails with 412.
+    public static func normalizeETag(_ etag: String?) -> String? {
+        guard var e = etag?.trimmingCharacters(in: .whitespaces), !e.isEmpty else { return nil }
+        if e.hasPrefix("W/") { e.removeFirst(2) }
+        let quoted = e.count >= 2 && e.hasPrefix("\"") && e.hasSuffix("\"")
+        var inner = quoted ? String(e.dropFirst().dropLast()) : e
+        for suffix in ["-gzip", "-br", "-zstd", "-deflate"] where inner.hasSuffix(suffix) {
+            inner.removeLast(suffix.count)
+            break
+        }
+        // A strong ETag is a quoted string (RFC 9110); some responses omit the quotes.
+        return "\"\(inner)\""
     }
 
     @discardableResult
@@ -157,7 +192,7 @@ public final class WebDAVClient: RemoteStorage, @unchecked Sendable {
         guard (200...299).contains(response.statusCode) else {
             throw Self.error(status: response.statusCode, path: path)
         }
-        return response.value(forHTTPHeaderField: "ETag") ?? response.value(forHTTPHeaderField: "OC-ETag")
+        return Self.normalizeETag(response.value(forHTTPHeaderField: "ETag") ?? response.value(forHTTPHeaderField: "OC-ETag"))
     }
 
     public func makeCollection(_ path: String) async throws {
@@ -303,18 +338,21 @@ public final class WebDAVClient: RemoteStorage, @unchecked Sendable {
             var parts = rel.split(separator: "/")
             guard let name = parts.popLast(), name != ".", name != "..",
                   parts.joined(separator: "/") == listed else { return nil }
-            return RemoteItem(path: rel, etag: entry.etag, isCollection: entry.isCollection)
+            return RemoteItem(path: rel, etag: entry.etag, isCollection: entry.isCollection,
+                              size: entry.size, modified: entry.modified)
         }
     }
 }
 
-/// Parses a WebDAV 207 Multi-Status body into hrefs, ETags and collection flags.
-/// Only properties inside a propstat with a 2xx status are used.
+/// Parses a WebDAV 207 Multi-Status body into hrefs, ETags, collection flags, sizes and
+/// modification dates. Only properties inside a propstat with a 2xx status are used.
 enum MultistatusParser {
     struct Entry: Equatable {
         var href: String
         var etag: String?
         var isCollection: Bool
+        var size: Int? = nil
+        var modified: Date? = nil
     }
 
     enum Failure: Error {
@@ -375,9 +413,13 @@ enum MultistatusParser {
         private var href: String?
         private var propEtag: String?
         private var propCollection = false
+        private var propSize: Int?
+        private var propModified: Date?
         private var propStatusOK = true
         private var etag: String?
         private var isCollection = false
+        private var size: Int?
+        private var modified: Date?
         private var inResourceType = false
 
         func parser(_ parser: XMLParser, didStartElement name: String, namespaceURI: String?,
@@ -386,8 +428,8 @@ enum MultistatusParser {
             guard namespaceURI == "DAV:" else { return }
             switch name {
             case "multistatus": sawMultistatus = true
-            case "response": href = nil; etag = nil; isCollection = false
-            case "propstat": propEtag = nil; propCollection = false; propStatusOK = true
+            case "response": href = nil; etag = nil; isCollection = false; size = nil; modified = nil
+            case "propstat": propEtag = nil; propCollection = false; propSize = nil; propModified = nil; propStatusOK = true
             case "resourcetype": inResourceType = true
             case "collection" where inResourceType: propCollection = true
             default: break
@@ -406,7 +448,9 @@ enum MultistatusParser {
             let value = text.trimmingCharacters(in: .whitespacesAndNewlines)
             switch name {
             case "href" where href == nil: href = value
-            case "getetag": propEtag = value.isEmpty ? nil : value
+            case "getetag": propEtag = WebDAVClient.normalizeETag(value)
+            case "getcontentlength": propSize = Int(value).flatMap { $0 >= 0 ? $0 : nil }
+            case "getlastmodified": propModified = WebDAVClient.httpDate(value)
             case "resourcetype": inResourceType = false
             case "status":
                 // e.g. "HTTP/1.1 200 OK"; inside propstat it qualifies the props.
@@ -416,11 +460,13 @@ enum MultistatusParser {
                 if propStatusOK {
                     if let propEtag { etag = propEtag }
                     if propCollection { isCollection = true }
+                    if let propSize { size = propSize }
+                    if let propModified { modified = propModified }
                 }
             case "response":
                 guard let href else { break }
                 if entries.count >= maxEntries { return fail(parser, .tooManyEntries) }
-                entries.append(Entry(href: href, etag: etag, isCollection: isCollection))
+                entries.append(Entry(href: href, etag: etag, isCollection: isCollection, size: size, modified: modified))
             default: break
             }
         }

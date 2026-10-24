@@ -6,13 +6,30 @@ public struct RemoteItem: Equatable, Sendable {
     public var path: String
     public var etag: String?
     public var isCollection: Bool
+    /// File size in bytes (`getcontentlength`), if the server reported it.
+    public var size: Int?
+    /// Last modification time (`getlastmodified`, server clock, whole seconds), if reported.
+    public var modified: Date?
 
-    public init(path: String, etag: String?, isCollection: Bool) {
+    public init(path: String, etag: String?, isCollection: Bool, size: Int? = nil, modified: Date? = nil) {
         self.path = path; self.etag = etag; self.isCollection = isCollection
+        self.size = size; self.modified = modified
     }
 
     /// Last path component.
     public var name: String { path.split(separator: "/").last.map(String.init) ?? path }
+}
+
+/// A folder listing and the server clock when it was made.
+public struct RemoteListing: Equatable, Sendable {
+    public var items: [RemoteItem]
+    /// The response's `Date` header (server clock, whole seconds), if any. Compared with
+    /// `RemoteItem.modified` to tell whether a file was written within the last seconds.
+    public var serverDate: Date?
+
+    public init(items: [RemoteItem], serverDate: Date? = nil) {
+        self.items = items; self.serverDate = serverDate
+    }
 }
 
 /// Precondition for a PUT.
@@ -31,9 +48,10 @@ public enum PutCondition: Equatable, Sendable {
 public protocol RemoteStorage: Sendable {
     /// Direct children of the collection at `path` (Depth 1), excluding the collection itself.
     /// Throws `SyncError.notFound` if the collection does not exist.
-    func list(_ path: String) async throws -> [RemoteItem]
-    /// Returns the file content and its ETag. Throws `SyncError.notFound` if missing.
-    func get(_ path: String) async throws -> (data: Data, etag: String?)
+    func listing(_ path: String) async throws -> RemoteListing
+    /// Returns the file content with its ETag, `modified` (Last-Modified) and `serverDate`
+    /// (Date header) when the server sends them. Throws `SyncError.notFound` if missing.
+    func get(_ path: String) async throws -> RemoteFile
     /// Writes a file. Throws `SyncError.preconditionFailed` if `condition` does not hold.
     /// Returns the new ETag if the server reported one.
     @discardableResult
@@ -42,6 +60,11 @@ public protocol RemoteStorage: Sendable {
     func makeCollection(_ path: String) async throws
     /// Deletes a file. `ifMatch` makes the delete conditional. Succeeds if already gone.
     func delete(_ path: String, ifMatch: String?) async throws
+}
+
+extension RemoteStorage {
+    /// The items of `listing(path)`.
+    public func list(_ path: String) async throws -> [RemoteItem] { try await listing(path).items }
 }
 
 public enum SyncError: LocalizedError, Equatable, Sendable {

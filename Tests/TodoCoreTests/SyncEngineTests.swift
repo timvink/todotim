@@ -298,9 +298,207 @@ final class SyncEngineTests: XCTestCase {
 /// Wraps storage so every PUT fails with 412.
 private struct ConflictingStorage: RemoteStorage {
     let inner: InMemoryRemoteStorage
-    func list(_ path: String) async throws -> [RemoteItem] { try await inner.list(path) }
-    func get(_ path: String) async throws -> (data: Data, etag: String?) { try await inner.get(path) }
+    func listing(_ path: String) async throws -> RemoteListing { try await inner.listing(path) }
+    func get(_ path: String) async throws -> RemoteFile { try await inner.get(path) }
     func put(_ path: String, data: Data, condition: PutCondition) async throws -> String? { throw SyncError.preconditionFailed(path) }
     func makeCollection(_ path: String) async throws { try await inner.makeCollection(path) }
     func delete(_ path: String, ifMatch: String?) async throws { try await inner.delete(path, ifMatch: ifMatch) }
+}
+
+/// Nextcloud keeps a file's ETag when it is rewritten within the same second
+/// (`InMemoryRemoteStorage(nextcloudSameSecondETags:)`). Sync must neither lose such a write nor
+/// serve stale cached content.
+@MainActor
+final class SameSecondETagTests: XCTestCase {
+    let folder = "TodoTim"
+    let inboxPath = "TodoTim/projects/inbox.json"
+
+    private func makeRemote(_ clock: TestClock) -> InMemoryRemoteStorage {
+        InMemoryRemoteStorage(nextcloudSameSecondETags: true, clock: { clock.now })
+    }
+
+    /// Syncs with the fake clock: the engine's waits advance it instead of sleeping.
+    @discardableResult
+    private func sync(_ store: TodoStore, _ remote: InMemoryRemoteStorage, clock: TestClock,
+                      cache: RemoteFileCache? = nil, guarded: Bool = true) async throws -> SyncResult {
+        let r = try await SyncEngine.sync(local: store.db, storage: remote, folder: folder, cache: cache,
+                                          now: { Date() }, maxAttempts: 3,
+                                          sleep: { clock.advance($0) }, settleFreshFiles: guarded)
+        store.replaceDatabase(r.merged)
+        return r
+    }
+
+    private func inboxContents(_ remote: InMemoryRemoteStorage) async throws -> Set<String> {
+        let stored = await remote.data(inboxPath)
+        let data = try XCTUnwrap(stored)
+        return Set(try JSONCoding.decoder.decode(ProjectFile.self, from: data).tasks.map(\.content))
+    }
+
+    func testFakeServerKeepsETagWithinTheSameSecond() async throws {
+        let clock = TestClock()
+        let remote = makeRemote(clock)
+        try await remote.makeCollection("d")
+        let x = await remote.write("d/f", Data("v1".utf8))
+        let sameSecond = try await remote.put("d/f", data: Data("v2-longer".utf8), condition: .ifMatch(x))
+        XCTAssertEqual(sameSecond, x)
+        clock.advance(1)
+        let nextSecond = await remote.write("d/f", Data("v3".utf8))
+        XCTAssertNotEqual(nextSecond, x)
+    }
+
+    /// Device B downloads v1; device A (without the guard, e.g. an older build) writes v2 in the
+    /// same second, keeping the ETag. B's If-Match PUT then succeeds and drops A's v2.
+    private func runLostUpdateScenario(guarded: Bool) async throws -> Set<String> {
+        let clock = TestClock()
+        let remote = makeRemote(clock)
+        let a = TodoStore(), b = TodoStore()
+        a.addTask(content: "v1", projectId: TodoStore.inboxID)
+        try await sync(a, remote, clock: clock)
+
+        a.addTask(content: "v2 from A", projectId: TodoStore.inboxID)
+        let v2 = try XCTUnwrap(try SyncEngine.files(for: a.db)["projects/inbox.json"])
+        let inboxPath = inboxPath
+        await remote.setAfterGet(inboxPath) { await remote.write(inboxPath, v2) }
+        b.addTask(content: "from B", projectId: TodoStore.inboxID)
+        clock.advance(0.1)
+        try await sync(b, remote, clock: clock, guarded: guarded)
+        return try await inboxContents(remote)
+    }
+
+    func testSameSecondRewriteIsLostWithoutGuard() async throws {
+        // Documents the bug the guard fixes.
+        let contents = try await runLostUpdateScenario(guarded: false)
+        XCTAssertEqual(contents, ["v1", "from B"], "without the guard A's same-second write is overwritten")
+    }
+
+    func testSameSecondRewriteIsKeptWithGuard() async throws {
+        let contents = try await runLostUpdateScenario(guarded: true)
+        XCTAssertEqual(contents, ["v1", "v2 from A", "from B"])
+    }
+
+    func testBackToBackSyncsWaitForTheNextSecond() async throws {
+        let clock = TestClock()
+        let remote = makeRemote(clock)
+        let cache = RemoteFileCache()
+        let store = TodoStore()
+        store.addTask(content: "one", projectId: TodoStore.inboxID)
+        try await sync(store, remote, clock: clock, cache: cache)
+        let start = clock.now
+        let firstETag = await remote.files[inboxPath]?.etag
+
+        store.addTask(content: "two", projectId: TodoStore.inboxID)
+        clock.advance(0.3)
+        try await sync(store, remote, clock: clock, cache: cache)
+        XCTAssertGreaterThanOrEqual(clock.now.timeIntervalSince(start), 1, "the second write waited for a new second")
+        let secondETag = await remote.files[inboxPath]?.etag
+        XCTAssertNotEqual(secondETag, firstETag)
+        let contents = try await inboxContents(remote)
+        XCTAssertEqual(contents, ["one", "two"])
+
+        // Settled files need no wait.
+        clock.advance(5)
+        let settledAt = clock.now
+        store.addTask(content: "three", projectId: TodoStore.inboxID)
+        try await sync(store, remote, clock: clock, cache: cache)
+        XCTAssertEqual(clock.now, settledAt)
+    }
+
+    func testOwnUploadIsReusedFromCache() async throws {
+        let clock = TestClock()
+        let remote = makeRemote(clock)
+        let cache = RemoteFileCache()
+        let store = TodoStore()
+        store.addTask(content: "a", projectId: TodoStore.inboxID)
+        try await sync(store, remote, clock: clock, cache: cache)
+        clock.advance(3)
+        await remote.resetCounters()
+        let r = try await sync(store, remote, clock: clock, cache: cache)
+        XCTAssertEqual(r.uploaded, [])
+        let gets = await remote.getCount
+        XCTAssertEqual(gets, 0)
+    }
+
+    // MARK: - Cache staleness
+
+    private func setUpFiles(_ remote: InMemoryRemoteStorage, inbox: String) async throws {
+        try await SyncEngine.ensureFolders(storage: remote, folder: folder)
+        await remote.write("TodoTim/index.json", Data("{}".utf8))
+        await remote.write(inboxPath, Data(inbox.utf8))
+    }
+
+    private func downloadedInbox(_ remote: InMemoryRemoteStorage, _ cache: RemoteFileCache) async throws -> String? {
+        let snapshot = try await SyncEngine.download(storage: remote, folder: folder, cache: cache)
+        return snapshot.projectFiles["inbox"].map { String(decoding: $0.data, as: UTF8.self) }
+    }
+
+    func testFreshDownloadIsNotCached() async throws {
+        let clock = TestClock()
+        let remote = makeRemote(clock)
+        let cache = RemoteFileCache()
+        try await setUpFiles(remote, inbox: "AAAA")
+        var inbox = try await downloadedInbox(remote, cache)
+        XCTAssertEqual(inbox, "AAAA")
+        // Same second, same size: ETag, size and time all stay the same.
+        await remote.write(inboxPath, Data("BBBB".utf8))
+        clock.advance(3)
+        inbox = try await downloadedInbox(remote, cache)
+        XCTAssertEqual(inbox, "BBBB")
+        // Now settled: cached and reused.
+        await remote.resetCounters()
+        inbox = try await downloadedInbox(remote, cache)
+        XCTAssertEqual(inbox, "BBBB")
+        let gets = await remote.getCount
+        XCTAssertEqual(gets, 0)
+    }
+
+    func testCacheRequiresMatchingSizeAndModified() async throws {
+        let clock = TestClock()
+        let remote = makeRemote(clock)
+        let cache = RemoteFileCache()
+        try await setUpFiles(remote, inbox: "AAAA")
+        clock.advance(3)
+        var inbox = try await downloadedInbox(remote, cache)
+        XCTAssertEqual(inbox, "AAAA")
+
+        // Same ETag, different size.
+        await remote.overwriteKeepingETag(inboxPath, Data("BBBBBB".utf8))
+        inbox = try await downloadedInbox(remote, cache)
+        XCTAssertEqual(inbox, "BBBBBB")
+        // Same ETag and size, different modification time.
+        let stored = await remote.files[inboxPath]?.modified
+        let modified = try XCTUnwrap(stored)
+        await remote.overwriteKeepingETag(inboxPath, Data("CCCCCC".utf8), modified: modified.addingTimeInterval(1))
+        inbox = try await downloadedInbox(remote, cache)
+        XCTAssertEqual(inbox, "CCCCCC")
+        // Same ETag, size and time: the documented limit, the cache cannot tell.
+        await remote.overwriteKeepingETag(inboxPath, Data("DDDDDD".utf8))
+        inbox = try await downloadedInbox(remote, cache)
+        XCTAssertEqual(inbox, "CCCCCC")
+    }
+
+    func testCacheVersionMatching() async {
+        let cache = RemoteFileCache()
+        let modified = Date(timeIntervalSince1970: 1_800_000_000)
+        await cache.store(RemoteFile(data: Data("abc".utf8), etag: "\"e\"", modified: modified), at: "f")
+        func hit(_ etag: String?, _ size: Int?, _ m: Date?) async -> Bool {
+            await cache.file(at: "f", matching: RemoteItem(path: "f", etag: etag, isCollection: false, size: size, modified: m)) != nil
+        }
+        let ok1 = await hit("\"e\"", 3, modified)
+        let ok2 = await hit("W/\"e\"", nil, nil)
+        let badETag = await hit("\"x\"", 3, modified)
+        let badSize = await hit("\"e\"", 4, modified)
+        let badTime = await hit("\"e\"", 3, modified.addingTimeInterval(1))
+        let noETag = await hit(nil, 3, modified)
+        XCTAssertTrue(ok1)
+        XCTAssertTrue(ok2, "unknown size and time match")
+        XCTAssertFalse(badETag)
+        XCTAssertFalse(badSize)
+        XCTAssertFalse(badTime)
+        XCTAssertFalse(noETag)
+
+        // An upload is cached without a time and matches any listed time with the same size.
+        await cache.store(RemoteFile(data: Data("xyz".utf8), etag: "\"u\""), at: "f")
+        let upload = await hit("\"u\"", 3, modified)
+        XCTAssertTrue(upload)
+    }
 }

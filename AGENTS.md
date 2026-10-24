@@ -38,7 +38,12 @@ Local-first: `~/Library/Application Support/TodoTim/db.json`. Remote layout in t
 Sync downloads all files, merges every entity globally by id (newer `updatedAt` wins; on a tie
 `deleted` wins), re-partitions by `projectId`, and uploads files whose content changed using
 `If-Match` ETags (retry on 412). After merging, `SyncEngine.repairStructure` fixes parent cycles, orphaned
-subtasks and tasks in deleted sections. Tombstones older than 30 days are purged.
+subtasks and tasks in deleted sections.
+
+Nextcloud quirks the sync relies on handling: compressing reverse proxies rewrite ETags (`"x-gzip"`, `W/"x"`),
+so `WebDAVClient.normalizeETag` undoes that; and Nextcloud keeps a file's ETag when it is rewritten within the
+same second, so the cache matches ETag + size + mtime, and `SyncEngine.settle` waits until a file is ~2 s old
+(server clock) and re-checks it before overwriting. Tombstones older than 30 days are purged.
 
 Remote data is untrusted: ids and references must pass `isValidEntityID` (`[A-Za-z0-9_-]{1,64}`); invalid
 entities are dropped in `SyncEngine.sanitize`, and `SyncLimits` bounds responses, file counts, text and depth.

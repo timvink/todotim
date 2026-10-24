@@ -52,6 +52,8 @@ public final class SyncController {
     /// The app uses it to persist the database.
     @ObservationIgnored public var onDatabaseReplaced: (() -> Void)?
 
+    /// Keep at least `SyncEngine.settleInterval` (2 s): then a sync after an edit usually finds this
+    /// device's previous upload settled and need not wait for the server's next second.
     @ObservationIgnored public var debounceInterval: Duration = .seconds(2)
     @ObservationIgnored public var syncInterval: Duration = .seconds(60)
 

@@ -21,6 +21,8 @@ private let nextcloudPropfind = """
    <d:prop>
     <d:getetag>&quot;0a1b2c3d4e5f60718293a4b5c6d7e8f9&quot;</d:getetag>
     <d:resourcetype/>
+    <d:getcontentlength>1234</d:getcontentlength>
+    <d:getlastmodified>Sat, 24 Oct 2026 18:20:05 GMT</d:getlastmodified>
    </d:prop>
    <d:status>HTTP/1.1 200 OK</d:status>
   </d:propstat>
@@ -60,7 +62,8 @@ final class WebDAVClientTests: XCTestCase {
         let entries = try XCTUnwrap(try MultistatusParser.parse(Data(nextcloudPropfind.utf8)))
         XCTAssertEqual(entries.count, 4)
         XCTAssertEqual(entries[1], .init(href: "/remote.php/dav/files/tim%20v/To%20Do/index.json",
-                                         etag: "\"0a1b2c3d4e5f60718293a4b5c6d7e8f9\"", isCollection: false))
+                                         etag: "\"0a1b2c3d4e5f60718293a4b5c6d7e8f9\"", isCollection: false,
+                                         size: 1234, modified: Date(timeIntervalSince1970: 1_792_866_005)))
         XCTAssertTrue(entries[2].isCollection)
         XCTAssertNil(entries[3].etag, "getetag in a 404 propstat is ignored")
 
@@ -69,6 +72,17 @@ final class WebDAVClientTests: XCTestCase {
         XCTAssertEqual(items.map(\.path), ["To Do/index.json", "To Do/projects", "To Do/café notes.json"])
         XCTAssertEqual(items.map(\.name), ["index.json", "projects", "café notes.json"])
         XCTAssertEqual(items.map(\.isCollection), [false, true, false])
+        XCTAssertEqual(items[0].size, 1234)
+        XCTAssertEqual(items[0].modified, Date(timeIntervalSince1970: 1_792_866_005))
+        XCTAssertNil(items[2].size)
+    }
+
+    func testParsesHTTPDates() {
+        XCTAssertEqual(WebDAVClient.httpDate("Sat, 24 Oct 2026 18:20:05 GMT"), Date(timeIntervalSince1970: 1_792_866_005))
+        XCTAssertEqual(WebDAVClient.httpDate("Sun, 06 Nov 1994 08:49:37 GMT"), Date(timeIntervalSince1970: 784_111_777))
+        XCTAssertNil(WebDAVClient.httpDate("yesterday"))
+        XCTAssertNil(WebDAVClient.httpDate(""))
+        XCTAssertNil(WebDAVClient.httpDate(nil))
     }
 
     func testRejectsNonMultistatus() throws {
@@ -162,7 +176,7 @@ final class WebDAVClientTests: XCTestCase {
             guard case .limitExceeded? = error as? SyncError else { return XCTFail("\(error)") }
         }
         StubURLProtocol.handler = { _ in (200, [:], Data(count: 90_000)) }
-        let (data, _) = try await client.get("TodoTim/index.json")
+        let data = try await client.get("TodoTim/index.json").data
         XCTAssertEqual(data.count, 90_000)
     }
 
@@ -189,7 +203,7 @@ final class WebDAVClientTests: XCTestCase {
         StubURLProtocol.handler = { req in
             req.url!.absoluteString == inside ? (200, [:], Data("ok".utf8)) : (307, ["Location": inside], Data())
         }
-        let (data, _) = try await client.get("TodoTim/index.json")
+        let data = try await client.get("TodoTim/index.json").data
         XCTAssertEqual(String(decoding: data, as: UTF8.self), "ok")
     }
 
@@ -216,8 +230,9 @@ final class WebDAVClientTests: XCTestCase {
             let body = nextcloudPropfind.replacingOccurrences(of: "tim%20v", with: "tim")
             return (207, [:], Data(body.utf8))
         }
-        let items = try await makeClient().list("To Do")
-        XCTAssertEqual(items.map(\.path), ["To Do/index.json", "To Do/projects", "To Do/café notes.json"])
+        let listing = try await makeClient().listing("To Do")
+        XCTAssertEqual(listing.items.map(\.path), ["To Do/index.json", "To Do/projects", "To Do/café notes.json"])
+        XCTAssertNil(listing.serverDate)
         let req = try XCTUnwrap(StubURLProtocol.requests.first)
         XCTAssertEqual(req.httpMethod, "PROPFIND")
         XCTAssertEqual(req.value(forHTTPHeaderField: "Depth"), "1")
@@ -253,9 +268,19 @@ final class WebDAVClientTests: XCTestCase {
         XCTAssertEqual(StubURLProtocol.requests.last?.httpMethod, "MKCOL")
 
         StubURLProtocol.handler = { _ in (200, ["ETag": "\"e1\""], Data("hi".utf8)) }
-        let (data, etag) = try await client.get("TodoTim/index.json")
-        XCTAssertEqual(String(data: data, encoding: .utf8), "hi")
-        XCTAssertEqual(etag, "\"e1\"")
+        let file = try await client.get("TodoTim/index.json")
+        XCTAssertEqual(String(data: file.data, encoding: .utf8), "hi")
+        XCTAssertEqual(file.etag, "\"e1\"")
+        XCTAssertNil(file.modified)
+
+        StubURLProtocol.handler = { _ in
+            (200, ["ETag": "\"e2-gzip\"", "Last-Modified": "Sat, 24 Oct 2026 18:20:05 GMT",
+                   "Date": "Sat, 24 Oct 2026 18:20:06 GMT"], Data("hi".utf8))
+        }
+        let dated = try await client.get("TodoTim/index.json")
+        XCTAssertEqual(dated.etag, "\"e2\"")
+        XCTAssertEqual(dated.modified, Date(timeIntervalSince1970: 1_792_866_005))
+        XCTAssertEqual(dated.serverDate, Date(timeIntervalSince1970: 1_792_866_006))
 
         StubURLProtocol.handler = { _ in (401, [:], Data()) }
         do {
@@ -292,4 +317,56 @@ final class StubURLProtocol: URLProtocol {
     }
 
     override func stopLoading() {}
+}
+
+final class ETagNormalizationTests: XCTestCase {
+    func testStripsProxyCompressionMarkers() {
+        XCTAssertEqual(WebDAVClient.normalizeETag("\"abc-gzip\""), "\"abc\"")
+        XCTAssertEqual(WebDAVClient.normalizeETag("\"abc-br\""), "\"abc\"")
+        XCTAssertEqual(WebDAVClient.normalizeETag("W/\"abc\""), "\"abc\"")
+        XCTAssertEqual(WebDAVClient.normalizeETag("\"abc\""), "\"abc\"")
+        XCTAssertEqual(WebDAVClient.normalizeETag("abc"), "\"abc\"")
+        XCTAssertNil(WebDAVClient.normalizeETag(""))
+        XCTAssertNil(WebDAVClient.normalizeETag(nil))
+    }
+}
+
+final class WebDAVListingDateTests: XCTestCase {
+    override func tearDown() {
+        StubURLProtocol.handler = nil
+        StubURLProtocol.requests = []
+        super.tearDown()
+    }
+
+    func testPropfindAsksForSizeAndTimeAndReportsServerDate() async throws {
+        StubURLProtocol.handler = { _ in
+            let body = nextcloudPropfind.replacingOccurrences(of: "tim%20v", with: "tim")
+            return (207, ["Date": "Sat, 24 Oct 2026 18:20:06 GMT"], Data(body.utf8))
+        }
+        let config = URLSessionConfiguration.ephemeral
+        config.protocolClasses = [StubURLProtocol.self]
+        let client = try WebDAVClient(serverURL: "https://cloud.example.com/remote.php/dav/files/tim/",
+                                      username: "tim", password: "pw", session: URLSession(configuration: config))
+        let listing = try await client.listing("To Do")
+        XCTAssertEqual(listing.serverDate, Date(timeIntervalSince1970: 1_792_866_006))
+        XCTAssertEqual(listing.items.first?.size, 1234)
+        let body = try XCTUnwrap(StubURLProtocol.requests.first.flatMap(Self.body))
+        XCTAssertTrue(body.contains("getcontentlength") && body.contains("getlastmodified") && body.contains("getetag"), body)
+    }
+
+    /// URLProtocol sees the body as a stream.
+    static func body(_ req: URLRequest) -> String? {
+        if let data = req.httpBody { return String(decoding: data, as: UTF8.self) }
+        guard let stream = req.httpBodyStream else { return nil }
+        stream.open()
+        defer { stream.close() }
+        var data = Data()
+        var buffer = [UInt8](repeating: 0, count: 4096)
+        while stream.hasBytesAvailable {
+            let n = stream.read(&buffer, maxLength: buffer.count)
+            if n <= 0 { break }
+            data.append(buffer, count: n)
+        }
+        return String(decoding: data, as: UTF8.self)
+    }
 }

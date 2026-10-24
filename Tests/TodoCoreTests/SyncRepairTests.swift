@@ -124,11 +124,13 @@ final class SyncRepairTests: XCTestCase {
         // Our own uploads are cached decoded, so the next sync decodes nothing.
         let items = try await remote.list("TodoTim/projects")
         for item in items {
-            let decoded = await cache.decoded(at: item.path, etag: item.etag)
+            let file = RemoteFile(data: await remote.data(item.path)!, etag: item.etag)
+            let decoded = await cache.decoded(at: item.path, for: file)
             XCTAssertNotNil(decoded, item.path)
         }
         let index = try await remote.list("TodoTim").first { $0.name == "index.json" }!
-        let decodedIndex = await cache.decoded(at: index.path, etag: index.etag)
+        let indexFile = RemoteFile(data: await remote.data(index.path)!, etag: index.etag)
+        let decodedIndex = await cache.decoded(at: index.path, for: indexFile)
         XCTAssertNotNil(decodedIndex)
 
         // A file changed by another device is decoded again (stale decoded entry not used).
