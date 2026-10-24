@@ -15,8 +15,8 @@ BUILD_NUMBER="${BUILD_NUMBER:-$(git rev-list --count HEAD 2>/dev/null || echo 1)
 ARCH_FLAGS=()
 if [[ "${UNIVERSAL:-0}" == "1" ]]; then ARCH_FLAGS=(--arch arm64 --arch x86_64); fi
 
-swift build -c release --scratch-path "$SCRATCH_PATH" "${ARCH_FLAGS[@]}"
-BIN="$(swift build -c release --scratch-path "$SCRATCH_PATH" "${ARCH_FLAGS[@]}" --show-bin-path)/TodoTim"
+swift build -c release --scratch-path "$SCRATCH_PATH" ${ARCH_FLAGS[@]+"${ARCH_FLAGS[@]}"}
+BIN="$(swift build -c release --scratch-path "$SCRATCH_PATH" ${ARCH_FLAGS[@]+"${ARCH_FLAGS[@]}"} --show-bin-path)/TodoTim"
 
 rm -rf "$APP"
 mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
