@@ -79,6 +79,11 @@ struct TaskRowView: View, Equatable {
     var body: some View {
         let t = task
         HStack(alignment: .top, spacing: 0) {
+            // Todoist-style drag handle, shown on hover. It sits in a column left of the
+            // row's normal frame (see the negative padding below), so the layout is unchanged.
+            GripDots()
+                .opacity(hovering ? 1 : 0)
+                .frame(width: Theme.grip, height: 34)
             chevron(t)
             VStack(alignment: .leading, spacing: 0) {
                 HStack(alignment: .top, spacing: 10) {
@@ -125,7 +130,7 @@ struct TaskRowView: View, Equatable {
         .background(
             RoundedRectangle(cornerRadius: 6)
                 .fill(isSelected ? Theme.accent.opacity(0.10) : .clear)
-                .padding(.leading, CGFloat(item.depth) * Theme.indent + Theme.gutter - 4)
+                .padding(.leading, Theme.grip + CGFloat(item.depth) * Theme.indent + Theme.gutter - 4)
         )
         .contentShape(Rectangle())
         .onHover { hovering = $0 }
@@ -142,6 +147,7 @@ struct TaskRowView: View, Equatable {
                 .background(RoundedRectangle(cornerRadius: 6).fill(Color(nsColor: .windowBackgroundColor)))
         }
         .dropDestination(for: String.self) { ids, _ in model.drop(ids, before: t) }
+        .padding(.leading, -Theme.grip)
     }
 
     @ViewBuilder private func chevron(_ t: TodoTask) -> some View {
@@ -205,7 +211,7 @@ struct TaskMetaRow: View {
             HStack(spacing: 10) {
                 if subtaskTotal > 0 {
                     HStack(spacing: 3) {
-                        Image(systemName: "arrow.triangle.branch").font(.system(size: 10))
+                        SubtaskIcon().frame(width: 12, height: 12)
                         Text("\(subtaskDone)/\(subtaskTotal)")
                     }
                     .foregroundStyle(.secondary)
@@ -273,5 +279,46 @@ struct TaskMenuItems: View {
         Divider()
         Button(task.isCompleted ? "Reopen task" : "Complete task") { model.toggleComplete(task.id) }
         Button("Delete task…", role: .destructive) { model.requestDelete(task.id) }
+    }
+}
+
+/// Six-dot drag handle (2 × 3), like Todoist's.
+struct GripDots: View {
+    var body: some View {
+        Canvas { ctx, size in
+            let d: CGFloat = 3, gap: CGFloat = 3
+            let w = d * 2 + gap, h = d * 3 + gap * 2
+            let x0 = (size.width - w) / 2, y0 = (size.height - h) / 2
+            for col in 0..<2 {
+                for row in 0..<3 {
+                    let r = CGRect(x: x0 + CGFloat(col) * (d + gap), y: y0 + CGFloat(row) * (d + gap), width: d, height: d)
+                    ctx.fill(Path(ellipseIn: r), with: .color(.secondary))
+                }
+            }
+        }
+        .frame(width: 12, height: 18)
+        .help("Drag to reorder")
+    }
+}
+
+/// Todoist's subtask glyph: a dot at the top left joined by a curved line to a dot at the
+/// bottom right.
+struct SubtaskIcon: View {
+    var body: some View {
+        Canvas { ctx, size in
+            let w = size.width, h = size.height
+            let r = w * 0.17, lw = max(1, w * 0.1)
+            let top = CGPoint(x: r + lw / 2, y: r + lw / 2)
+            let end = CGPoint(x: w - r - lw / 2, y: h - r - lw / 2)
+            ctx.stroke(Path(ellipseIn: CGRect(x: top.x - r, y: top.y - r, width: 2 * r, height: 2 * r)),
+                       with: .foreground, lineWidth: lw)
+            ctx.stroke(Path(ellipseIn: CGRect(x: end.x - r, y: end.y - r, width: 2 * r, height: 2 * r)),
+                       with: .foreground, lineWidth: lw)
+            var line = Path()
+            line.move(to: CGPoint(x: top.x, y: top.y + r))
+            line.addLine(to: CGPoint(x: top.x, y: end.y - r * 1.5))
+            line.addQuadCurve(to: CGPoint(x: end.x - r, y: end.y), control: CGPoint(x: top.x, y: end.y))
+            ctx.stroke(line, with: .foreground, lineWidth: lw)
+        }
     }
 }

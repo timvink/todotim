@@ -84,6 +84,8 @@ enum Theme {
     static let contentMaxWidth: CGFloat = 820
     /// Width of the chevron gutter left of the checkbox.
     static let gutter: CGFloat = 26
+    /// Width of the drag-handle column left of the chevron gutter, shown on row hover.
+    static let grip: CGFloat = 16
     static let indent: CGFloat = 28
 }
 
