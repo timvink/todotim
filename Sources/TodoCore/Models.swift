@@ -4,6 +4,25 @@ public typealias EntityID = String
 
 public func newID() -> EntityID { UUID().uuidString.lowercased() }
 
+/// Whether `id` is acceptable as an entity id or reference: 1–64 characters from
+/// `[A-Za-z0-9_-]`. Ids become remote file names (`projects/<id>.json`), so anything that could
+/// form a path (separators, dot segments, control characters) is rejected. App-created ids are
+/// lowercase UUIDs; the inbox is `inbox`.
+public func isValidEntityID(_ id: String) -> Bool {
+    let utf8 = id.utf8
+    guard (1...64).contains(utf8.count) else { return false }
+    for c in utf8 {
+        switch c {
+        case UInt8(ascii: "a")...UInt8(ascii: "z"), UInt8(ascii: "A")...UInt8(ascii: "Z"),
+             UInt8(ascii: "0")...UInt8(ascii: "9"), UInt8(ascii: "-"), UInt8(ascii: "_"):
+            continue
+        default:
+            return false
+        }
+    }
+    return true
+}
+
 /// Todoist-style priority. p1 is the most urgent, p4 is the default ("no priority").
 public enum Priority: Int, Codable, CaseIterable, Hashable, Sendable {
     case p1 = 1, p2 = 2, p3 = 3, p4 = 4

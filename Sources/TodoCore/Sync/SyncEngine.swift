@@ -51,6 +51,8 @@ public struct SyncPlan: Equatable, Sendable {
     public var operations: [Operation]
     /// Decoded contents of each uploaded file, so the next sync need not decode its own uploads.
     var uploadedContents: [String: DecodedFile] = [:]
+    /// Remote entities dropped as invalid (see `SyncResult.droppedRemoteEntities`).
+    public var droppedRemoteEntities: Int = 0
 
     public var uploads: [String] { operations.compactMap { if case .put(let p, _, _) = $0 { p } else { nil } } }
     public var deletions: [String] { operations.compactMap { if case .delete(let p, _) = $0 { p } else { nil } } }
@@ -60,6 +62,32 @@ public struct SyncResult: Equatable, Sendable {
     public var merged: Database
     public var uploaded: [String]
     public var deleted: [String]
+    /// Remote entities ignored because their id or a reference was not a valid id
+    /// (see `isValidEntityID`). They are removed from the server by this sync's uploads.
+    public var droppedRemoteEntities: Int = 0
+}
+
+/// Bounds on remote data, so a broken or hostile server cannot exhaust memory or stack.
+public enum SyncLimits {
+    /// Per HTTP response body, enforced while streaming.
+    public static let maxResponseBytes = 32 * 1024 * 1024
+    /// Entries in one PROPFIND listing.
+    public static let maxListingEntries = 10_000
+    /// Files in `projects/`.
+    public static let maxProjectFiles = 10_000
+    /// Total size of the files that make up one remote snapshot.
+    public static let maxSnapshotBytes = 256 * 1024 * 1024
+    /// Projects + labels + sections + tasks in one remote snapshot.
+    public static let maxEntities = 200_000
+    /// Text limits in characters; longer remote values are truncated.
+    public static let maxContentLength = 10_000
+    public static let maxDescriptionLength = 100_000
+    /// Project, section and label names, and label names on tasks.
+    public static let maxNameLength = 1_000
+    public static let maxColorLength = 64
+    public static let maxLabelsPerTask = 100
+    /// Subtask nesting depth (a top-level task has depth 0); deeper tasks are detached.
+    public static let maxTaskDepth = 32
 }
 
 /// Merge rules from AGENTS.md: every entity is merged globally by id (newer `updatedAt` wins,
@@ -86,6 +114,7 @@ public enum SyncEngine {
             mergeInto(&out.tasks, db.tasks.values)
             mergeInto(&out.labels, db.labels.values)
         }
+        sanitize(&out)
         var result = normalize(out, now: now)
         repairStructure(&result)
         return result
@@ -134,6 +163,53 @@ public enum SyncEngine {
         return out
     }
 
+    // MARK: - Validation
+
+    /// Drops entities whose id or project/section/parent reference is not a valid id
+    /// (`isValidEntityID`) and truncates over-long text (`SyncLimits`). Returns the number of
+    /// dropped entities. Deterministic and leaves `updatedAt` alone, so devices converge.
+    @discardableResult
+    static func sanitize(_ db: inout Database) -> Int {
+        func ok(_ id: EntityID?) -> Bool { id.map(isValidEntityID) ?? true }
+        func clip(_ s: String, _ max: Int) -> String? {
+            guard s.utf8.count > max, s.count > max else { return nil }
+            return String(s.prefix(max))
+        }
+        var dropped = 0
+        func drop<T>(_ dict: inout [EntityID: T], where invalid: (EntityID, T) -> Bool) {
+            let bad = dict.filter { invalid($0.key, $0.value) }.map(\.key)
+            for id in bad { dict[id] = nil }
+            dropped += bad.count
+        }
+        drop(&db.projects) { k, p in !isValidEntityID(k) || p.id != k }
+        drop(&db.labels) { k, l in !isValidEntityID(k) || l.id != k }
+        drop(&db.sections) { k, s in !isValidEntityID(k) || s.id != k || !isValidEntityID(s.projectId) }
+        drop(&db.tasks) { k, t in
+            !isValidEntityID(k) || t.id != k || !isValidEntityID(t.projectId) || !ok(t.sectionId) || !ok(t.parentId)
+        }
+
+        for (id, p) in db.projects {
+            if let v = clip(p.name, SyncLimits.maxNameLength) { db.projects[id]!.name = v }
+            if let v = clip(p.color, SyncLimits.maxColorLength) { db.projects[id]!.color = v }
+        }
+        for (id, l) in db.labels {
+            if let v = clip(l.name, SyncLimits.maxNameLength) { db.labels[id]!.name = v }
+            if let v = clip(l.color, SyncLimits.maxColorLength) { db.labels[id]!.color = v }
+        }
+        for (id, s) in db.sections {
+            if let v = clip(s.name, SyncLimits.maxNameLength) { db.sections[id]!.name = v }
+        }
+        for (id, t) in db.tasks {
+            if let v = clip(t.content, SyncLimits.maxContentLength) { db.tasks[id]!.content = v }
+            if let v = clip(t.description, SyncLimits.maxDescriptionLength) { db.tasks[id]!.description = v }
+            if let due = t.due, due.date.utf8.count > 32 { db.tasks[id]!.due = nil }
+            if t.labels.count > SyncLimits.maxLabelsPerTask || t.labels.contains(where: { $0.utf8.count > SyncLimits.maxNameLength }) {
+                db.tasks[id]!.labels = t.labels.prefix(SyncLimits.maxLabelsPerTask).map { clip($0, SyncLimits.maxNameLength) ?? $0 }
+            }
+        }
+        return dropped
+    }
+
     // MARK: - Structural repair
 
     /// Entity-by-entity merging can produce hierarchies no single device created. Repairs live
@@ -141,9 +217,11 @@ public enum SyncEngine {
     /// 1. A subtask whose parent is missing or deleted becomes a top-level task.
     /// 2. Parent cycles are broken: in each cycle, the task with the newest `updatedAt` (then the
     ///    largest id) becomes top-level.
-    /// 3. A top-level task whose section is missing, deleted or in another project moves to the
+    /// 3. Nesting is capped: a task at depth `SyncLimits.maxTaskDepth + 1` (or a multiple of it)
+    ///    becomes top-level, so no task is deeper than `maxTaskDepth`.
+    /// 4. A top-level task whose section is missing, deleted or in another project moves to the
     ///    project's top area.
-    /// 4. Subtasks take the projectId and sectionId of their root task.
+    /// 5. Subtasks take the projectId and sectionId of their root task.
     /// `updatedAt` is not bumped: the repair is a pure function of the merged state, so devices
     /// converge without generating new versions.
     public static func repairStructure(_ db: inout Database) {
@@ -181,14 +259,36 @@ public enum SyncEngine {
             for p in path { state[p] = 2 }
         }
 
-        // 3. Sections of top-level tasks.
+        // 3. Depth cap (hierarchy is acyclic now). Depths are computed iteratively from the
+        //    original tree, so the result does not depend on iteration order.
+        var depth: [EntityID: Int] = [:]
+        var tooDeep: [EntityID] = []
+        let period = SyncLimits.maxTaskDepth + 1
+        for start in liveIDs where depth[start] == nil {
+            var chain: [EntityID] = []
+            var cur = start
+            while depth[cur] == nil, let pid = db.tasks[cur]?.parentId {
+                chain.append(cur)
+                cur = pid
+            }
+            var d = depth[cur] ?? 0
+            depth[cur] = d
+            for c in chain.reversed() {
+                d += 1
+                depth[c] = d
+                if d % period == 0 { tooDeep.append(c) }
+            }
+        }
+        for id in tooDeep { db.tasks[id]?.parentId = nil }
+
+        // 4. Sections of top-level tasks.
         for id in liveIDs {
             guard let t = db.tasks[id], t.parentId == nil, let sid = t.sectionId else { continue }
             if let s = db.sections[sid], !s.deleted, s.projectId == t.projectId { continue }
             db.tasks[id]?.sectionId = nil
         }
 
-        // 4. Subtasks follow their root (hierarchy is acyclic now).
+        // 5. Subtasks follow their root.
         var rootOf: [EntityID: (EntityID, EntityID?)] = [:]
         func location(_ id: EntityID) -> (EntityID, EntityID?) {
             if let known = rootOf[id] { return known }
@@ -280,7 +380,13 @@ public enum SyncEngine {
         var index: IndexFile?
         var projects: [EntityID: ProjectFile] = [:]
 
-        var database: Database {
+        /// Throws when the files hold more than `SyncLimits.maxEntities` entities.
+        func database() throws -> Database {
+            var count = (index?.projects.count ?? 0) + (index?.labels.count ?? 0)
+            for pf in projects.values { count += pf.sections.count + pf.tasks.count }
+            guard count <= SyncLimits.maxEntities else {
+                throw SyncError.limitExceeded("more than \(SyncLimits.maxEntities) entries")
+            }
             var db = Database()
             if let index {
                 mergeInto(&db.projects, index.projects)
@@ -310,7 +416,9 @@ public enum SyncEngine {
     /// `decoded` must be the decoded form of `remote`. A partition whose merged content equals the
     /// decoded remote file is skipped without encoding it.
     static func plan(local: Database, remote: RemoteSnapshot, decoded: DecodedRemote, now: Date) throws -> SyncPlan {
-        let merged = merge([local, decoded.database], now: now)
+        var remoteDB = try decoded.database()
+        let dropped = sanitize(&remoteDB)
+        let merged = merge([local, remoteDB], now: now)
         let (targetIndex, targetProjects) = partitions(for: merged)
         let enc = JSONCoding.encoder
 
@@ -320,6 +428,7 @@ public enum SyncEngine {
         }
 
         var plan = SyncPlan(merged: merged, operations: [])
+        plan.droppedRemoteEntities = dropped
         for id in targetProjects.keys.sorted() {
             let target = targetProjects[id]!
             let existing = remote.projectFiles[id]
@@ -361,7 +470,8 @@ public enum SyncEngine {
                 let decoded = try await decode(snapshot, folder: folder, cache: cache)
                 let plan = try plan(local: local, remote: snapshot, decoded: decoded, now: now())
                 try await execute(plan, storage: storage, folder: folder, cache: cache)
-                return SyncResult(merged: plan.merged, uploaded: plan.uploads, deleted: plan.deletions)
+                return SyncResult(merged: plan.merged, uploaded: plan.uploads, deleted: plan.deletions,
+                                  droppedRemoteEntities: plan.droppedRemoteEntities)
             } catch SyncError.preconditionFailed where attempt < maxAttempts {
                 continue
             } catch SyncError.preconditionFailed {
@@ -392,12 +502,9 @@ public enum SyncEngine {
                 misses.append((id, file))
             }
         }
-        // Decoding is CPU-bound; spread cold-cache decodes over the cooperative pool.
-        let decodedMisses = try await withThrowingTaskGroup(of: (EntityID, ProjectFile).self) { group in
-            for (id, file) in misses { group.addTask { (id, try decodeProject(file, id: id)) } }
-            var result: [(EntityID, ProjectFile)] = []
-            for try await r in group { result.append(r) }
-            return result
+        // Decoding is CPU-bound; spread cold-cache decodes over a few tasks.
+        let decodedMisses = try await forEachConcurrently(misses, limit: maxConcurrentRequests) { entry in
+            (entry.0, try decodeProject(entry.1, id: entry.0))
         }
         for (id, pf) in decodedMisses {
             out.projects[id] = pf
@@ -423,15 +530,25 @@ public enum SyncEngine {
         if let item = top.first(where: { $0.path == indexFull && !$0.isCollection }) { items.append((nil, item)) }
         if top.contains(where: { $0.path == projectsFolder && $0.isCollection }) {
             for item in try await storage.list(projectsFolder) where !item.isCollection && item.name.hasSuffix(".json") {
+                // Files not named after a valid id are ignored (never read, written or deleted).
                 let id = String(item.name.dropLast(5))
-                guard !id.isEmpty else { continue }
+                guard isValidEntityID(id) else { continue }
                 items.append((id, item))
+            }
+            guard items.count <= SyncLimits.maxProjectFiles + 1 else {
+                throw SyncError.limitExceeded("more than \(SyncLimits.maxProjectFiles) project files")
             }
         } else {
             try await storage.makeCollection(projectsFolder)
         }
+        // Cached files of the folder that are no longer listed are forgotten.
+        await cache?.retain(Set(items.map(\.item.path)), under: folder)
         let fetched = try await forEachConcurrently(items, limit: maxConcurrentRequests) { entry in
             (entry.key, try await fetch(entry.item, storage: storage, cache: cache))
+        }
+        let totalBytes = fetched.reduce(0) { $0 + ($1.1?.data.count ?? 0) }
+        guard totalBytes <= SyncLimits.maxSnapshotBytes else {
+            throw SyncError.limitExceeded("more than \(SyncLimits.maxSnapshotBytes / 1024 / 1024) MB of files")
         }
         for (key, file) in fetched {
             guard let file else { continue }
@@ -557,6 +674,16 @@ public actor RemoteFileCache {
     public func clear() {
         files = [:]
         decodedFiles = [:]
+    }
+
+    /// Paths with a cached file or decoded file (tests, diagnostics).
+    var cachedPaths: Set<String> { Set(files.keys).union(decodedFiles.keys) }
+
+    /// Removes entries inside `folder` whose path is not in `paths`.
+    func retain(_ paths: Set<String>, under folder: String) {
+        let prefix = joinPath(folder).isEmpty ? "" : joinPath(folder) + "/"
+        for key in files.keys where key.hasPrefix(prefix) && !paths.contains(key) { files[key] = nil }
+        for key in decodedFiles.keys where key.hasPrefix(prefix) && !paths.contains(key) { decodedFiles[key] = nil }
     }
 
     /// ETags may differ only in weak prefix / quoting between PROPFIND and GET.

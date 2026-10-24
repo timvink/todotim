@@ -57,7 +57,7 @@ final class WebDAVClientTests: XCTestCase {
     }
 
     func testParsesNextcloudMultistatus() throws {
-        let entries = try XCTUnwrap(MultistatusParser.parse(Data(nextcloudPropfind.utf8)))
+        let entries = try XCTUnwrap(try MultistatusParser.parse(Data(nextcloudPropfind.utf8)))
         XCTAssertEqual(entries.count, 4)
         XCTAssertEqual(entries[1], .init(href: "/remote.php/dav/files/tim%20v/To%20Do/index.json",
                                          etag: "\"0a1b2c3d4e5f60718293a4b5c6d7e8f9\"", isCollection: false))
@@ -71,23 +71,126 @@ final class WebDAVClientTests: XCTestCase {
         XCTAssertEqual(items.map(\.isCollection), [false, true, false])
     }
 
-    func testRejectsNonMultistatus() {
-        XCTAssertNil(MultistatusParser.parse(Data("<html><body>Nextcloud</body></html>".utf8)))
-        XCTAssertNil(MultistatusParser.parse(Data("not xml".utf8)))
+    func testRejectsNonMultistatus() throws {
+        XCTAssertNil(try MultistatusParser.parse(Data("<html><body>Nextcloud</body></html>".utf8)))
+        XCTAssertNil(try MultistatusParser.parse(Data("not xml".utf8)))
     }
 
     func testBaseURLNormalizationAndPathEncoding() throws {
+        XCTAssertThrowsError(try WebDAVClient.normalizedBaseURL("https://tim:pw@cloud.example.com/dav/"))
+        XCTAssertThrowsError(try WebDAVClient.normalizedBaseURL("https://cloud.example.com/dav/?x=1"))
         XCTAssertThrowsError(try WebDAVClient.normalizedBaseURL(""))
         XCTAssertThrowsError(try WebDAVClient.normalizedBaseURL("ftp://x/"))
         XCTAssertThrowsError(try WebDAVClient.normalizedBaseURL("cloud.example.com"))
         let client = try WebDAVClient(serverURL: "  https://cloud.example.com/remote.php/dav/files/tim ", username: "tim", password: "pw")
         XCTAssertEqual(client.baseURL.absoluteString, "https://cloud.example.com/remote.php/dav/files/tim/")
-        XCTAssertEqual(client.url(for: "To Do/projects/a#b?.json").absoluteString,
+        XCTAssertEqual(try client.url(for: "To Do/projects/a#b?.json").absoluteString,
                        "https://cloud.example.com/remote.php/dav/files/tim/To%20Do/projects/a%23b%3F.json")
-        XCTAssertEqual(client.url(for: "/TodoTim/", collection: true).absoluteString,
+        XCTAssertEqual(try client.url(for: "/TodoTim/", collection: true).absoluteString,
                        "https://cloud.example.com/remote.php/dav/files/tim/TodoTim/")
-        XCTAssertEqual(client.url(for: "", collection: true).absoluteString,
+        XCTAssertEqual(try client.url(for: "", collection: true).absoluteString,
                        "https://cloud.example.com/remote.php/dav/files/tim/")
+    }
+
+    func testPlainHTTPOnlyForLocalhost() throws {
+        XCTAssertThrowsError(try WebDAVClient.normalizedBaseURL("http://cloud.example.com/dav/")) { error in
+            XCTAssertEqual(error as? SyncError, .insecureURL("http://cloud.example.com/dav/"))
+            XCTAssertTrue((error as? SyncError)?.errorDescription?.contains("https://") == true)
+        }
+        for ok in ["http://localhost:8080/dav/", "http://127.0.0.1/dav/", "http://[::1]:8080/dav/", "HTTP://LOCALHOST/"] {
+            XCTAssertNoThrow(try WebDAVClient.normalizedBaseURL(ok), ok)
+        }
+    }
+
+    func testRefusesDotAndEmptySegments() async throws {
+        let client = try makeClient()
+        for bad in ["a/../b", "..", "TodoTim/projects/../../outside.json", "./x", "a//b", "a/./b"] {
+            XCTAssertThrowsError(try client.url(for: bad), bad) { XCTAssertEqual($0 as? SyncError, .invalidPath(bad)) }
+        }
+        StubURLProtocol.handler = { _ in (200, [:], Data()) }
+        do {
+            _ = try await client.get("TodoTim/projects/../../outside.json")
+            XCTFail("expected invalidPath")
+        } catch {
+            XCTAssertEqual(error as? SyncError, .invalidPath("TodoTim/projects/../../outside.json"))
+        }
+        XCTAssertTrue(StubURLProtocol.requests.isEmpty, "no request is sent for an unsafe path")
+        // Dots inside a name are fine.
+        XCTAssertEqual(try client.url(for: "a/..b/c..json").absoluteString,
+                       "https://cloud.example.com/remote.php/dav/files/tim/a/..b/c..json")
+    }
+
+    func testItemsKeepOnlyDirectChildrenOnSameServer() throws {
+        let base = try WebDAVClient.normalizedBaseURL("https://cloud.example.com/remote.php/dav/files/tim/")
+        let entries: [MultistatusParser.Entry] = [
+            .init(href: "/remote.php/dav/files/tim/T/", etag: nil, isCollection: true),
+            .init(href: "/remote.php/dav/files/tim/T/ok.json", etag: nil, isCollection: false),
+            .init(href: "https://cloud.example.com/remote.php/dav/files/tim/T/abs.json", etag: nil, isCollection: false),
+            .init(href: "https://evil.example.com/remote.php/dav/files/tim/T/evil.json", etag: nil, isCollection: false),
+            .init(href: "https://cloud.example.com:8443/remote.php/dav/files/tim/T/port.json", etag: nil, isCollection: false),
+            .init(href: "/remote.php/dav/files/tim/T/sub/nested.json", etag: nil, isCollection: false),
+            .init(href: "/remote.php/dav/files/tim/T/../outside.json", etag: nil, isCollection: false),
+            .init(href: "/remote.php/dav/files/other/T/x.json", etag: nil, isCollection: false),
+            .init(href: "/remote.php/dav/files/tim/T/%2E%2E", etag: nil, isCollection: false),
+        ]
+        XCTAssertEqual(WebDAVClient.items(from: entries, baseURL: base, listedPath: "T").map(\.path),
+                       ["T/ok.json", "T/abs.json"])
+    }
+
+    func testParserRefusesDTDAndCapsEntries() throws {
+        let xxe = """
+        <?xml version="1.0"?>
+        <!DOCTYPE d [<!ENTITY x SYSTEM "file:///etc/passwd">]>
+        <d:multistatus xmlns:d="DAV:"><d:response><d:href>&x;</d:href></d:response></d:multistatus>
+        """
+        XCTAssertThrowsError(try MultistatusParser.parse(Data(xxe.utf8)))
+        XCTAssertThrowsError(try MultistatusParser.parse(Data(nextcloudPropfind.utf8), maxEntries: 3)) {
+            guard case MultistatusParser.Failure.tooManyEntries = $0 else { return XCTFail("\($0)") }
+        }
+        XCTAssertEqual(try MultistatusParser.parse(Data(nextcloudPropfind.utf8), maxEntries: 4)?.count, 4)
+    }
+
+    func testResponseBodyIsCapped() async throws {
+        let client = try makeClient()
+        client.maxResponseBytes = 100_000
+        // No Content-Length: the limit is enforced while reading.
+        StubURLProtocol.handler = { _ in (200, [:], Data(count: 300_000)) }
+        do {
+            _ = try await client.get("TodoTim/index.json")
+            XCTFail("expected limitExceeded")
+        } catch {
+            guard case .limitExceeded? = error as? SyncError else { return XCTFail("\(error)") }
+        }
+        StubURLProtocol.handler = { _ in (200, [:], Data(count: 90_000)) }
+        let (data, _) = try await client.get("TodoTim/index.json")
+        XCTAssertEqual(data.count, 90_000)
+    }
+
+    func testRedirectsOutsideBaseAreRefused() async throws {
+        let client = try makeClient()
+        for target in ["https://evil.example.com/remote.php/dav/files/tim/TodoTim/index.json",
+                       "http://cloud.example.com/remote.php/dav/files/tim/TodoTim/index.json",
+                       "https://cloud.example.com:8443/remote.php/dav/files/tim/TodoTim/index.json",
+                       "https://cloud.example.com/remote.php/dav/files/other/index.json"] {
+            StubURLProtocol.requests = []
+            StubURLProtocol.handler = { req in
+                req.url!.absoluteString == target ? (200, [:], Data("leaked".utf8)) : (307, ["Location": target], Data())
+            }
+            do {
+                _ = try await client.get("TodoTim/index.json")
+                XCTFail("expected redirectRejected for \(target)")
+            } catch {
+                guard case .redirectRejected? = error as? SyncError else { return XCTFail("\(error)") }
+            }
+            XCTAssertEqual(StubURLProtocol.requests.count, 1, "redirect to \(target) is not followed")
+        }
+        // A redirect inside the base URL is followed.
+        let inside = "https://cloud.example.com/remote.php/dav/files/tim/TodoTim/moved.json"
+        StubURLProtocol.handler = { req in
+            req.url!.absoluteString == inside ? (200, [:], Data("ok".utf8)) : (307, ["Location": inside], Data())
+        }
+        let (data, _) = try await client.get("TodoTim/index.json")
+        XCTAssertEqual(String(decoding: data, as: UTF8.self), "ok")
     }
 
     func testErrorMessages() {
@@ -175,6 +278,14 @@ final class StubURLProtocol: URLProtocol {
         Self.requests.append(request)
         let (status, headers, body) = Self.handler?(request) ?? (500, [:], Data())
         let response = HTTPURLResponse(url: request.url!, statusCode: status, httpVersion: "HTTP/1.1", headerFields: headers)!
+        if (300...399).contains(status), let location = headers["Location"], let target = URL(string: location) {
+            var next = request
+            next.url = target
+            client?.urlProtocol(self, wasRedirectedTo: next, redirectResponse: response)
+            client?.urlProtocol(self, didReceive: response, cacheStoragePolicy: .notAllowed)
+            client?.urlProtocolDidFinishLoading(self)
+            return
+        }
         client?.urlProtocol(self, didReceive: response, cacheStoragePolicy: .notAllowed)
         client?.urlProtocol(self, didLoad: body)
         client?.urlProtocolDidFinishLoading(self)

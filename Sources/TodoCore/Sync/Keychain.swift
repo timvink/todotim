@@ -2,12 +2,33 @@ import Foundation
 import Security
 
 /// Where the WebDAV password is kept. The default is the Keychain; tests use an in-memory one.
+/// Accounts are `SyncSettings.credentialAccount` ("user@host[:port]"), so a password is only
+/// ever used for the server it was saved for.
 public protocol CredentialStore: Sendable {
     func password(for account: String) -> String?
+    /// Saves (nil or empty: deletes) the password. Prefer `savePassword`, which reports failures.
     func setPassword(_ password: String?, for account: String)
+    /// Like `setPassword`, but throws when the password could not be stored.
+    func savePassword(_ password: String?, for account: String) throws
 }
 
-/// Generic-password Keychain items with service "TodoTim WebDAV" and account = username.
+extension CredentialStore {
+    public func savePassword(_ password: String?, for account: String) throws {
+        setPassword(password, for: account)
+    }
+}
+
+public struct KeychainError: Error, LocalizedError, Equatable, Sendable {
+    public var status: OSStatus
+    public var errorDescription: String? {
+        let detail = SecCopyErrorMessageString(status, nil) as String? ?? "error \(status)"
+        return "Keychain: \(detail) (\(status))"
+    }
+}
+
+/// Generic-password Keychain items with service "TodoTim WebDAV" and account = `user@host[:port]`.
+/// Items from older versions (account = username only) are not used: they did not record which
+/// server they belong to. `password_command` or the Settings window fills the new item.
 public struct KeychainCredentialStore: CredentialStore {
     public static let service = "TodoTim WebDAV"
     public let service: String
@@ -31,22 +52,32 @@ public struct KeychainCredentialStore: CredentialStore {
         return String(data: data, encoding: .utf8)
     }
 
-    /// nil or empty deletes the item.
     public func setPassword(_ password: String?, for account: String) {
+        do {
+            try savePassword(password, for: account)
+        } catch {
+            NSLog("TodoTim: could not save password: \(error.localizedDescription)")
+        }
+    }
+
+    /// nil or empty deletes the item.
+    public func savePassword(_ password: String?, for account: String) throws {
         guard !account.isEmpty else { return }
         let query = baseQuery(account)
         guard let password, !password.isEmpty else {
-            SecItemDelete(query as CFDictionary)
+            let status = SecItemDelete(query as CFDictionary)
+            guard status == errSecSuccess || status == errSecItemNotFound else { throw KeychainError(status: status) }
             return
         }
         let data = Data(password.utf8)
-        let status = SecItemUpdate(query as CFDictionary, [kSecValueData as String: data] as CFDictionary)
+        var status = SecItemUpdate(query as CFDictionary, [kSecValueData as String: data] as CFDictionary)
         if status == errSecItemNotFound {
             var add = query
             add[kSecValueData as String] = data
-            add[kSecAttrLabel as String] = service
-            SecItemAdd(add as CFDictionary, nil)
+            add[kSecAttrLabel as String] = "\(service) (\(account))"
+            status = SecItemAdd(add as CFDictionary, nil)
         }
+        guard status == errSecSuccess else { throw KeychainError(status: status) }
     }
 }
 
@@ -54,11 +85,17 @@ public struct KeychainCredentialStore: CredentialStore {
 public final class InMemoryCredentialStore: CredentialStore, @unchecked Sendable {
     private let lock = NSLock()
     private var passwords: [String: String] = [:]
+    /// When set, `savePassword` throws it (for tests).
+    public var saveError: Error?
 
     public init(_ passwords: [String: String] = [:]) { self.passwords = passwords }
 
     public func password(for account: String) -> String? { lock.withLock { passwords[account] } }
     public func setPassword(_ password: String?, for account: String) {
         lock.withLock { passwords[account] = (password?.isEmpty ?? true) ? nil : password }
+    }
+    public func savePassword(_ password: String?, for account: String) throws {
+        if let saveError = lock.withLock({ saveError }) { throw saveError }
+        setPassword(password, for: account)
     }
 }

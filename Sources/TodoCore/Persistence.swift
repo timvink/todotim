@@ -29,6 +29,7 @@ public enum LocalPersistence {
             let backup = corruptBackupURL(for: url, now: now)
             do {
                 try FileManager.default.moveItem(at: url, to: backup)
+                chmod(backup.path, 0o600)
             } catch {
                 throw PersistenceError.unreadable(path: url.path, reason: "corrupt and could not be moved aside: \(error.localizedDescription)")
             }
@@ -54,9 +55,37 @@ public enum LocalPersistence {
     }
 
     /// Writes compact JSON atomically. Synchronous; prefer `PersistenceWriter` on the main actor.
+    /// The file (and its temporary file) is private to the user (0600). A folder created here, and
+    /// the default `directory`, are 0700.
     public static func save(_ db: Database, to url: URL = fileURL) throws {
-        try FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
-        try JSONCoding.compactEncoder.encode(db).write(to: url, options: .atomic)
+        let dir = url.deletingLastPathComponent()
+        if !FileManager.default.fileExists(atPath: dir.path) {
+            try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true,
+                                                    attributes: [.posixPermissions: 0o700])
+        } else if dir.standardizedFileURL == directory.standardizedFileURL {
+            chmod(dir.path, 0o700)
+        }
+        try writePrivately(JSONCoding.compactEncoder.encode(db), to: url)
+    }
+
+    /// Atomic write: a 0600 temporary file in the same folder, renamed over `url`.
+    static func writePrivately(_ data: Data, to url: URL) throws {
+        let dir = url.deletingLastPathComponent()
+        let tmp = dir.appendingPathComponent(".\(url.lastPathComponent).tmp-\(UUID().uuidString)")
+        let fd = open(tmp.path, O_WRONLY | O_CREAT | O_EXCL | O_CLOEXEC, 0o600)
+        guard fd >= 0 else { throw CocoaError(.fileWriteUnknown, userInfo: [NSFilePathErrorKey: tmp.path, NSUnderlyingErrorKey: POSIXError(POSIXErrorCode(rawValue: errno) ?? .EIO)]) }
+        let handle = FileHandle(fileDescriptor: fd, closeOnDealloc: true)
+        do {
+            try handle.write(contentsOf: data)
+            try handle.close()
+            guard rename(tmp.path, url.path) == 0 else {
+                throw CocoaError(.fileWriteUnknown, userInfo: [NSFilePathErrorKey: url.path, NSUnderlyingErrorKey: POSIXError(POSIXErrorCode(rawValue: errno) ?? .EIO)])
+            }
+        } catch {
+            unlink(tmp.path)
+            throw error
+        }
+        chmod(url.path, 0o600)
     }
 
     /// `db.corrupt-20261024-175700.json` next to `url` (with a numeric suffix if taken).

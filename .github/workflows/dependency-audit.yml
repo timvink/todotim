@@ -14,7 +14,9 @@ jobs:
   audit:
     runs-on: macos-26
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+        with:
+          persist-credentials: false
 
       - name: Swift package dependencies
         id: spm
@@ -39,18 +41,32 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          # Dependabot alerts need the repo setting "Dependabot alerts" enabled.
-          alerts=$(gh api "repos/${GITHUB_REPOSITORY}/dependabot/alerts?state=open" --jq 'length' 2>/dev/null || echo "unavailable")
-          echo "alerts=$alerts" >> "$GITHUB_OUTPUT"
-          { echo "## Open Dependabot alerts"; echo "$alerts"; } >> report.md
+          # The workflow GITHUB_TOKEN cannot be granted Dependabot alert access, so this call
+          # usually fails. That is reported, not hidden: Dependabot's own alert notifications
+          # (email / GitHub notifications) are the primary channel for advisories.
+          if alerts=$(gh api "repos/${GITHUB_REPOSITORY}/dependabot/alerts?state=open" --jq 'length' 2>api-error.txt); then
+            echo "alerts=$alerts" >> "$GITHUB_OUTPUT"
+            { echo "## Open Dependabot alerts"; echo "$alerts"; } >> report.md
+          else
+            echo "alerts=unavailable" >> "$GITHUB_OUTPUT"
+            msg="Dependabot alerts could not be read with the workflow token ($(grep -o 'HTTP [0-9]*' api-error.txt | head -n 1 || true)). This check did not run; rely on Dependabot alert notifications for this repository."
+            echo "::warning title=Dependabot alerts not checked::$msg"
+            { echo "## Open Dependabot alerts"; echo "Not checked: $msg"; } >> report.md
+          fi
 
       - name: Open an issue when something needs attention
         if: steps.spm.outputs.updates == 'true' || (steps.advisories.outputs.alerts != '0' && steps.advisories.outputs.alerts != 'unavailable')
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
+          open=$(gh issue list --state open --search 'in:title "Dependency audit"' --json number --jq 'length' 2>/dev/null || echo 0)
+          if [ "$open" -gt 0 ]; then
+            echo "An open 'Dependency audit' issue already exists; not creating another." >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
           gh issue create --title "Dependency audit $(date +%Y-%m-%d)" --body-file report.md --label dependencies || \
           gh issue create --title "Dependency audit $(date +%Y-%m-%d)" --body-file report.md
 
       - name: Summary
+        if: always()
         run: cat report.md >> "$GITHUB_STEP_SUMMARY"

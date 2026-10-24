@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Builds build/TodoTim.app from the SwiftPM executable (release), with icon and ad-hoc signature.
+# Builds build/TodoTim.app from the SwiftPM executable (release), with icon and ad-hoc signature (hardened runtime).
 # Usage: scripts/bundle.sh
 # Env: SCRATCH_PATH=.build-foo  private build dir
 #      APP=build/x/TodoTim.app  output bundle path (default build/TodoTim.app)
@@ -60,5 +60,7 @@ cat > "$APP/Contents/Info.plist" <<PLIST
 </plist>
 PLIST
 
-codesign --force --deep -s - "$APP"
+# Ad-hoc signature with the hardened runtime (no Developer ID: the app is not notarized).
+codesign --force --options runtime --timestamp=none -s - "$APP"
+codesign --verify --strict "$APP"
 echo "Built $APP"

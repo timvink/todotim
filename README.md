@@ -21,10 +21,21 @@ subtasks, all driven from the keyboard. It leaves out Today, Upcoming, the calen
 ## Install
 
 1. Download `TodoTim-vX.Y.Z.zip` from the [latest release](https://github.com/timvink/todotim/releases/latest).
-2. Unzip it and move `TodoTim.app` to `/Applications`.
-3. The app is not notarized. Open it the first time by right-clicking it and choosing **Open**, or run:
+2. Verify that GitHub Actions built the zip from this repository (needs the [GitHub CLI](https://cli.github.com)):
 
-       xattr -dr com.apple.quarantine /Applications/TodoTim.app
+       gh attestation verify TodoTim-vX.Y.Z.zip --repo timvink/todotim
+
+   The `.sha256` file on the release only detects a damaged download (`shasum -a 256 -c TodoTim-vX.Y.Z.zip.sha256`);
+   it comes from the same place as the zip, so it does not prove who built it.
+3. Unzip it and move `TodoTim.app` to `/Applications`.
+4. Open the app. macOS blocks it the first time. Go to **System Settings › Privacy & Security**, scroll to
+   the message about TodoTim, click **Open Anyway**, and confirm.
+
+TodoTim is ad-hoc signed with the hardened runtime, but not signed with an Apple Developer ID and not
+notarized. macOS therefore cannot tell you who published it, and Apple has not scanned it. The attestation
+check in step 2 is what ties the download to this repository. Don't remove the quarantine attribute with
+`xattr`; use **Open Anyway** for this one app instead. (Developer ID signing plus notarization would remove this
+step, but needs a paid Apple Developer account.)
 
 Requires macOS 15 (Sequoia) or later, on Apple silicon or Intel.
 
@@ -39,7 +50,7 @@ Requires macOS 15 (Sequoia) or later, on Apple silicon or Intel.
 3. Click **Test connection**, turn on sync, and close the window.
 
 TodoTim syncs a few seconds after each change, every minute, and when you press `⌘R`. Your password is stored
-in the macOS Keychain. Local data lives in `~/Library/Application Support/TodoTim/db.json`.
+in the macOS Keychain, per server: after you change the server URL, enter the password again. Local data lives in `~/Library/Application Support/TodoTim/db.json`.
 
 ### Configure with a dotfile
 
@@ -65,6 +76,23 @@ password in Settings instead.
 
 On the server, the folder holds an `index.json` with projects and labels, and one JSON file per project under
 `projects/`. When two devices edit the same item, the most recent edit wins.
+
+## Security
+
+- **Credentials.** The app password is stored in the macOS Keychain (service `TodoTim WebDAV`), under an account
+  named after both user and server, for example `tim@cloud.example.com`. A password saved for one server is never
+  sent to another. TodoTim never logs it or shows `password_command` output.
+- **HTTPS only.** TodoTim refuses `http://` server URLs (except `localhost`), and does not follow redirects
+  that leave the configured server URL.
+- **Config file trust.** `~/.todotim.toml` (and `TODOTIM_CONFIG`) can run a command and decides where the
+  password is sent, so TodoTim only reads it when the file (after following symlinks) is a regular file owned by
+  you and not writable by group or others, in a folder others can't write to. `chmod 600 ~/.todotim.toml` is
+  a good default.
+- **Remote data.** Data from the server is validated: ids must be short `[A-Za-z0-9_-]` strings, and
+  responses, file counts, text lengths and subtask depth are limited.
+- **Local data** in `~/Library/Application Support/TodoTim/` is readable only by you.
+
+Report vulnerabilities privately as described in [SECURITY.md](SECURITY.md).
 
 ## Keyboard shortcuts
 

@@ -40,5 +40,10 @@ Sync downloads all files, merges every entity globally by id (newer `updatedAt` 
 `If-Match` ETags (retry on 412). After merging, `SyncEngine.repairStructure` fixes parent cycles, orphaned
 subtasks and tasks in deleted sections. Tombstones older than 30 days are purged.
 
+Remote data is untrusted: ids and references must pass `isValidEntityID` (`[A-Za-z0-9_-]{1,64}`); invalid
+entities are dropped in `SyncEngine.sanitize`, and `SyncLimits` bounds responses, file counts, text and depth.
+`WebDAVClient` refuses http:// (except localhost), dot segments and redirects outside the base URL.
+
 Performance benchmarks: `swift test -c release -Xswiftc -enable-testing --filter PerformanceTests`.
-Password is stored in the Keychain; the settings in UserDefaults.
+Password is stored in the Keychain under `SyncSettings.credentialAccount` (`user@host[:port]`); the settings in
+UserDefaults. `~/.todotim.toml` is only read when owned by the user and not group/world-writable (`AppConfig.load`).

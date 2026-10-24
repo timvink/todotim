@@ -50,6 +50,11 @@ struct SettingsView: View {
                     statusText
                     Spacer()
                 }
+                if let err = sync.credentialError {
+                    SwiftUI.Label(err, systemImage: "key.slash")
+                        .foregroundStyle(Theme.overdue)
+                        .textSelection(.enabled)
+                }
                 if let r = testResult {
                     HStack(spacing: 6) {
                         Image(systemName: r.ok ? "checkmark.circle.fill" : "xmark.octagon.fill")

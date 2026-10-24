@@ -13,6 +13,16 @@ public struct SyncSettings: Codable, Equatable, Sendable {
     public init(serverURL: String = "", username: String = "", folder: String = "TodoTim", enabled: Bool = false) {
         self.serverURL = serverURL; self.username = username; self.folder = folder; self.enabled = enabled
     }
+
+    /// Keychain account for these settings: "user@host", plus ":port" when the port is not 443
+    /// (e.g. "tim@cloud.example.com", "tim@localhost:8080"). Scoping by server means a password
+    /// saved for one server is never sent to another. nil when the URL or username is unusable.
+    public var credentialAccount: String? {
+        guard !username.isEmpty, let url = try? WebDAVClient.normalizedBaseURL(serverURL),
+              let host = url.host?.lowercased() else { return nil }
+        let port = WebDAVClient.effectivePort(url)
+        return "\(username)@\(host)" + (port == 443 ? "" : ":\(port)")
+    }
 }
 
 public enum SyncStatus: Equatable, Sendable {
@@ -34,6 +44,9 @@ public final class SyncController {
     /// Path of the config file (`~/.todotim.toml`) that sets the sync settings, or nil when they
     /// come from the Settings window. Managed settings cannot be changed in the app.
     public private(set) var managedConfigPath: String?
+    /// Set when the password could not be saved in the Keychain (it is then kept in memory
+    /// until the app quits); nil after a successful save.
+    public private(set) var credentialError: String?
 
     /// Called after sync replaced the store's database with merged remote changes.
     /// The app uses it to persist the database.
@@ -59,6 +72,8 @@ public final class SyncController {
     /// The password command runs at most once per launch (or per `configure`), so a locked
     /// vault does not prompt again every sync interval.
     @ObservationIgnored private var passwordCommandAttempted = false
+    /// Password whose Keychain save failed, for the account it belongs to.
+    @ObservationIgnored private var sessionPassword: (account: String, password: String)?
 
     /// Loads settings from `config` (when it has a `[sync]` table) or else from `defaults`, and
     /// starts syncing if enabled (the first sync starts after the current main-actor turn, so
@@ -91,7 +106,7 @@ public final class SyncController {
         let settings = managedConfigPath == nil ? settings : self.settings
         passwordCommandAttempted = false
         let old = self.settings
-        if let password { credentials.setPassword(password, for: settings.username) }
+        if let password, let account = settings.credentialAccount { storePassword(password, for: account) }
         self.settings = settings
         if managedConfigPath == nil, let data = try? JSONEncoder().encode(settings) {
             defaults.set(data, forKey: Self.settingsKey)
@@ -104,7 +119,7 @@ public final class SyncController {
     }
 
     /// Current password from the Keychain (for the settings form).
-    public func storedPassword() -> String? { credentials.password(for: settings.username) }
+    public func storedPassword() -> String? { settings.credentialAccount.flatMap(password(for:)) }
 
     /// Checks credentials and folder access, creating the folder and `projects/` if needed.
     /// Returns nil on success or an error message.
@@ -165,13 +180,24 @@ public final class SyncController {
 
     private func performSync() async {
         let settings = self.settings
-        var password = credentials.password(for: settings.username) ?? ""
+        // Validate the URL first: no password lookup or password_command for an unusable server.
+        do {
+            _ = try WebDAVClient.normalizedBaseURL(settings.serverURL)
+        } catch {
+            status = .error(Self.message(for: error))
+            return
+        }
+        guard let account = settings.credentialAccount else {
+            status = .error(Self.message(for: SyncError.missingPassword))
+            return
+        }
+        var password = self.password(for: account) ?? ""
         if password.isEmpty, let command = passwordCommand, !passwordCommandAttempted {
             passwordCommandAttempted = true
             status = .syncing
             do {
                 password = try await PasswordCommand.run(command)
-                credentials.setPassword(password, for: settings.username)
+                storePassword(password, for: account)
             } catch {
                 status = .error(Self.message(for: error))
                 return
@@ -203,6 +229,23 @@ public final class SyncController {
             status = .idle(lastSync: lastSync)
         } catch {
             status = .error(Self.message(for: error))
+        }
+    }
+
+    private func password(for account: String) -> String? {
+        if let s = sessionPassword, s.account == account { return s.password }
+        return credentials.password(for: account)
+    }
+
+    private func storePassword(_ password: String, for account: String) {
+        do {
+            try credentials.savePassword(password, for: account)
+            sessionPassword = nil
+            credentialError = nil
+        } catch {
+            sessionPassword = (account, password)
+            credentialError = "Could not save the password in the Keychain (\(Self.message(for: error))). It is kept in memory until TodoTim quits."
+            NSLog("TodoTim: \(credentialError!)")
         }
     }
 

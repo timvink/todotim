@@ -40,7 +40,8 @@ final class SyncControllerTests: XCTestCase {
         var disabled = settings
         disabled.enabled = false
         c.configure(disabled, password: "secret")
-        XCTAssertEqual(creds.password(for: "tim"), "secret")
+        XCTAssertEqual(creds.password(for: "tim@cloud.example.com"), "secret")
+        XCTAssertNil(creds.password(for: "tim"), "no username-only entry")
         XCTAssertEqual(c.storedPassword(), "secret")
 
         let reloaded = makeController(TodoStore(), InMemoryRemoteStorage(), credentials: creds)
@@ -53,6 +54,56 @@ final class SyncControllerTests: XCTestCase {
         c.configure(settings, password: nil)
         await c.syncNow()
         XCTAssertEqual(c.status, .error(SyncError.missingPassword.errorDescription!))
+    }
+
+    func testPasswordIsScopedToServer() async {
+        XCTAssertEqual(settings.credentialAccount, "tim@cloud.example.com")
+        var other = settings
+        other.serverURL = "https://Other.example.com:8443/dav/"
+        XCTAssertEqual(other.credentialAccount, "tim@other.example.com:8443")
+        other.serverURL = "http://localhost/dav/"
+        XCTAssertEqual(other.credentialAccount, "tim@localhost:80")
+
+        // A password saved for one server is not sent to another with the same username.
+        let creds = InMemoryCredentialStore(["tim": "legacy", "tim@cloud.example.com": "pw"])
+        var used: [String] = []
+        let c = SyncController(store: TodoStore(), defaults: defaults, credentials: creds) { s, pw in
+            used.append("\(s.serverURL) \(pw)")
+            return InMemoryRemoteStorage()
+        }
+        c.syncInterval = .seconds(3600)
+        other.serverURL = "https://other.example.com/dav/"
+        c.configure(other, password: nil)
+        await c.syncNow()
+        XCTAssertEqual(c.status, .error(SyncError.missingPassword.errorDescription!))
+        XCTAssertNil(c.storedPassword())
+        XCTAssertTrue(used.isEmpty)
+    }
+
+    func testInsecureURLIsRefusedBeforePasswordLookup() async {
+        var insecure = settings
+        insecure.serverURL = "http://cloud.example.com/dav/"
+        let c = makeController(TodoStore(), InMemoryRemoteStorage(),
+                               credentials: InMemoryCredentialStore(["tim@cloud.example.com:80": "pw"]))
+        c.configure(insecure, password: nil)
+        await c.syncNow()
+        XCTAssertEqual(c.status, .error(SyncError.insecureURL(insecure.serverURL).errorDescription!))
+    }
+
+    func testKeychainSaveFailureIsSurfacedAndPasswordKeptForSession() async throws {
+        let creds = InMemoryCredentialStore()
+        creds.saveError = KeychainError(status: -25308)
+        let remote = InMemoryRemoteStorage()
+        let c = makeController(TodoStore(), remote, credentials: creds)
+        c.configure(settings, password: "pw")
+        XCTAssertNotNil(c.credentialError)
+        XCTAssertTrue(c.credentialError!.contains("Keychain"))
+        XCTAssertEqual(c.storedPassword(), "pw")
+        try await waitUntil { c.lastSync != nil }
+        creds.saveError = nil
+        c.configure(settings, password: "pw")
+        XCTAssertNil(c.credentialError)
+        XCTAssertEqual(creds.password(for: "tim@cloud.example.com"), "pw")
     }
 
     func testTestConnectionCreatesFolders() async {
@@ -137,7 +188,7 @@ final class SyncControllerConfigTests: XCTestCase {
         XCTAssertEqual(c.managedConfigPath, "/tmp/test.toml")
 
         await c.syncNow()
-        XCTAssertEqual(creds.password(for: "tim"), "from-command")
+        XCTAssertEqual(creds.password(for: "tim@cloud.example.com"), "from-command")
         guard case .idle = c.status else { return XCTFail("status \(c.status)") }
 
         // The Settings window cannot override managed settings.
