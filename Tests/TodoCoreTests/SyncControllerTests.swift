@@ -115,3 +115,36 @@ final class SyncControllerTests: XCTestCase {
 
 @MainActor
 private final class TodoBox { var id: EntityID? }
+
+@MainActor
+final class SyncControllerConfigTests: XCTestCase {
+    private let suite = "TodoTimSyncControllerConfigTests"
+
+    func testConfigFileSettingsWinAndPasswordCommandFillsKeychain() async throws {
+        let defaults = UserDefaults(suiteName: suite)!
+        defaults.removePersistentDomain(forName: suite)
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let managed = SyncSettings(serverURL: "https://cloud.example.com/remote.php/dav/files/tim/",
+                                   username: "tim", folder: "TodoTim", enabled: true)
+        let config = AppConfig(sync: managed, passwordCommand: "echo from-command")
+        let creds = InMemoryCredentialStore()
+        let remote = InMemoryRemoteStorage()
+        let store = TodoStore()
+        let c = SyncController(store: store, defaults: defaults, credentials: creds, config: config,
+                               configPath: "/tmp/test.toml") { _, _ in remote }
+        c.syncInterval = .seconds(3600)
+        XCTAssertEqual(c.settings, managed)
+        XCTAssertEqual(c.managedConfigPath, "/tmp/test.toml")
+
+        await c.syncNow()
+        XCTAssertEqual(creds.password(for: "tim"), "from-command")
+        guard case .idle = c.status else { return XCTFail("status \(c.status)") }
+
+        // The Settings window cannot override managed settings.
+        var other = managed
+        other.username = "someone-else"
+        c.configure(other, password: nil)
+        XCTAssertEqual(c.settings, managed)
+        XCTAssertNil(defaults.data(forKey: SyncController.settingsKey))
+    }
+}

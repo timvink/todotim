@@ -41,6 +41,28 @@ Requires macOS 15 (Sequoia) or later, on Apple silicon or Intel.
 TodoTim syncs a few seconds after each change, every minute, and when you press `⌘R`. Your password is stored
 in the macOS Keychain. Local data lives in `~/Library/Application Support/TodoTim/db.json`.
 
+### Configure with a dotfile
+
+Instead of the Settings window, you can configure sync in `~/.todotim.toml` (or the path in `TODOTIM_CONFIG`),
+which suits dotfile managers such as chezmoi. While the file has a `[sync]` table, the app uses it and shows
+those settings read-only.
+
+```toml
+# TodoTim — https://github.com/timvink/todotim
+repository = "https://github.com/timvink/todotim"
+
+[sync]
+enabled = true
+server_url = "https://your.cloud/remote.php/dav/files/USERNAME/"
+username = "USERNAME"
+folder = "TodoTim"
+# Optional. Prints the password; runs once when the Keychain has none, then the Keychain keeps it.
+password_command = "rbw get 'Nextcloud app password'"
+```
+
+`password_command` runs in your login shell, so tools from Homebrew are found. Leave it out to enter the
+password in Settings instead.
+
 On the server, the folder holds an `index.json` with projects and labels, and one JSON file per project under
 `projects/`. When two devices edit the same item, the most recent edit wins.
 

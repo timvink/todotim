@@ -22,7 +22,10 @@ When several agents work at once, use a private scratch path: `swift build --scr
 
 - Projects, sections, tasks (subtasks via `parentId`), labels. The inbox is a project with id `inbox`.
 - Every entity has `updatedAt` + `deleted` (tombstone). Mutate only via `TodoStore` so `updatedAt` is bumped.
-- Sibling order is a `Double` `order`; inserts take the midpoint.
+- Sibling order is a `Double` `order`; inserts take the midpoint, and siblings are renumbered when gaps run out.
+- `TodoStore` keeps indexes (children, areas, counts) and fine-grained observation: iterate `taskIDs`/`subtaskIDs`
+  and read `store.task(id)` per row so a content edit redraws one row. Use `structureVersion` as a cache key.
+- Local saves go through `PersistenceWriter` (background, coalesced). A corrupt `db.json` is moved aside, never overwritten.
 - Due dates are local calendar dates (`yyyy-MM-dd`), no time.
 
 ## Sync
@@ -34,5 +37,8 @@ Local-first: `~/Library/Application Support/TodoTim/db.json`. Remote layout in t
 
 Sync downloads all files, merges every entity globally by id (newer `updatedAt` wins; on a tie
 `deleted` wins), re-partitions by `projectId`, and uploads files whose content changed using
-`If-Match` ETags (retry on 412). Tombstones older than 30 days are purged.
+`If-Match` ETags (retry on 412). After merging, `SyncEngine.repairStructure` fixes parent cycles, orphaned
+subtasks and tasks in deleted sections. Tombstones older than 30 days are purged.
+
+Performance benchmarks: `swift test -c release -Xswiftc -enable-testing --filter PerformanceTests`.
 Password is stored in the Keychain; the settings in UserDefaults.

@@ -31,6 +31,9 @@ public final class SyncController {
     public private(set) var status: SyncStatus = .disabled
     public private(set) var settings: SyncSettings = SyncSettings()
     public private(set) var lastSync: Date?
+    /// Path of the config file (`~/.todotim.toml`) that sets the sync settings, or nil when they
+    /// come from the Settings window. Managed settings cannot be changed in the app.
+    public private(set) var managedConfigPath: String?
 
     /// Called after sync replaced the store's database with merged remote changes.
     /// The app uses it to persist the database.
@@ -52,11 +55,17 @@ public final class SyncController {
     @ObservationIgnored private var periodicTask: Task<Void, Never>?
     @ObservationIgnored private var isSyncing = false
     @ObservationIgnored private var syncRequestedWhileSyncing = false
+    @ObservationIgnored private var passwordCommand: String?
+    /// The password command runs at most once per launch (or per `configure`), so a locked
+    /// vault does not prompt again every sync interval.
+    @ObservationIgnored private var passwordCommandAttempted = false
 
-    /// Loads settings from `defaults` and starts syncing if enabled (the first sync starts after
-    /// the current main-actor turn, so callbacks set right after `init` are in place).
+    /// Loads settings from `config` (when it has a `[sync]` table) or else from `defaults`, and
+    /// starts syncing if enabled (the first sync starts after the current main-actor turn, so
+    /// callbacks set right after `init` are in place).
     public init(store: TodoStore, defaults: UserDefaults = .standard,
                 credentials: CredentialStore = KeychainCredentialStore(),
+                config: AppConfig? = nil, configPath: String = AppConfig.defaultURL.path,
                 makeStorage: StorageFactory? = nil) {
         self.store = store
         self.defaults = defaults
@@ -68,15 +77,25 @@ public final class SyncController {
            let saved = try? JSONDecoder().decode(SyncSettings.self, from: data) {
             settings = saved
         }
+        if let managed = config?.sync {
+            settings = managed
+            managedConfigPath = configPath
+            passwordCommand = config?.passwordCommand
+        }
         restartLoop()
     }
 
     /// Saves settings + password (nil keeps the stored one) and starts syncing if enabled.
+    /// When the settings are managed by the config file, only the password is taken.
     public func configure(_ settings: SyncSettings, password: String?) {
+        let settings = managedConfigPath == nil ? settings : self.settings
+        passwordCommandAttempted = false
         let old = self.settings
         if let password { credentials.setPassword(password, for: settings.username) }
         self.settings = settings
-        if let data = try? JSONEncoder().encode(settings) { defaults.set(data, forKey: Self.settingsKey) }
+        if managedConfigPath == nil, let data = try? JSONEncoder().encode(settings) {
+            defaults.set(data, forKey: Self.settingsKey)
+        }
         if old.serverURL != settings.serverURL || old.username != settings.username || old.folder != settings.folder {
             let cache = self.cache
             Task { await cache.clear() }
@@ -146,7 +165,19 @@ public final class SyncController {
 
     private func performSync() async {
         let settings = self.settings
-        guard let password = credentials.password(for: settings.username), !password.isEmpty else {
+        var password = credentials.password(for: settings.username) ?? ""
+        if password.isEmpty, let command = passwordCommand, !passwordCommandAttempted {
+            passwordCommandAttempted = true
+            status = .syncing
+            do {
+                password = try await PasswordCommand.run(command)
+                credentials.setPassword(password, for: settings.username)
+            } catch {
+                status = .error(Self.message(for: error))
+                return
+            }
+        }
+        guard !password.isEmpty else {
             status = .error(Self.message(for: SyncError.missingPassword))
             return
         }
@@ -176,8 +207,7 @@ public final class SyncController {
     }
 
     private func apply(_ db: Database) {
-        guard db != store.db else { return }
-        store.replaceDatabase(db)
+        guard store.replaceDatabase(db) else { return }
         onDatabaseReplaced?()
     }
 
