@@ -191,8 +191,14 @@ final class PerformanceTests: XCTestCase {
         #endif
 
         let server = FakeCalDAVServer()
-        let first = try await CalDAVSync.sync(local: store.db, state: CalDAVState(account: "bench"), server: server)
+        let upload = try await CalDAVSync.sync(local: store.db, state: CalDAVState(account: "bench"), server: server)
+        // The next sync reads back this device's own uploads once; after that it is idle.
+        let first = try await CalDAVSync.sync(local: upload.merged, state: upload.state, server: server)
         let local = first.merged
+        try await timeAsync("full merge, nothing to write") {
+            let r = try await CalDAVSync.sync(local: local, state: first.state, server: server)
+            XCTAssertEqual(r.writes, 0)
+        }
         try await timeAsync("idle sync (nothing changed)") {
             let r = try await CalDAVSync.sync(local: local, state: first.state, server: server, previous: local)
             XCTAssertEqual(r.writes, 0)

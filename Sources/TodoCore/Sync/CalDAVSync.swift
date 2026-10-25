@@ -145,7 +145,7 @@ private struct Pass {
     // MARK: - Run
 
     mutating func run(previous: Database?) async throws -> Pass {
-        let base = Self.view(state.calendars, state.resources)
+        let baseState = state
         let listed = try await server.calendars()
         guard listed.count <= SyncLimits.maxCalendars else {
             throw SyncError.limitExceeded("more than \(SyncLimits.maxCalendars) calendars")
@@ -191,6 +191,7 @@ private struct Pass {
             return self
         }
 
+        let base = Self.view(baseState.calendars, baseState.resources)
         let remote = Self.view(calendars, resources)
         merge(base: base, remote: remote)
         try await write(remote: remote)
