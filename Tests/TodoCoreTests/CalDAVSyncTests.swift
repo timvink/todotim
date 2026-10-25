@@ -330,6 +330,27 @@ final class CalDAVSyncTests: XCTestCase {
         XCTAssertEqual(paths.count, 1, "sync went on")
     }
 
+    func testListThatCannotBeCreatedWaitsWithoutBlockingTheRest() async throws {
+        let server = FakeCalDAVServer()
+        let a = Device()
+        let blocked = a.store.addProject(name: "Blocked")
+        let t = a.store.addTask(content: "waits", projectId: blocked.id)
+        a.store.addTask(content: "goes", projectId: TodoStore.inboxID)
+        await server.setRateLimitedCreates(["\(home)/\(blocked.id)"])
+        let r = try await a.sync(server)
+        XCTAssertEqual(r.warnings.count, 1)
+        XCTAssertTrue(r.warnings[0].contains("10 new lists per hour"), r.warnings[0])
+        let inInbox = await server.paths(in: inbox)
+        XCTAssertEqual(inInbox.count, 1)
+        XCTAssertNotNil(a.store.task(t.id), "the local task stays")
+        // Once the server allows it, the list and its task follow.
+        await server.setRateLimitedCreates([])
+        let r2 = try await a.sync(server)
+        XCTAssertEqual(r2.warnings, [])
+        let created = await server.paths(in: "\(home)/\(blocked.id)")
+        XCTAssertEqual(created, ["\(home)/\(blocked.id)/\(t.id).ics"])
+    }
+
     func testProjectOrderIsRenumberedToIntegers() async throws {
         let server = FakeCalDAVServer()
         let a = Device()

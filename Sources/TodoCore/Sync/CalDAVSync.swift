@@ -85,9 +85,8 @@ private struct Pass {
         var projects: [EntityID: Project] = [:]
         var sections: [EntityID: Section] = [:]
         var labels: [EntityID: Label] = [:]
-        /// Whether the sections/labels lists come from the calendar property (else from tasks).
+        /// Projects whose sections come from the calendar property (else from the tasks).
         var hasSectionsProperty: Set<EntityID> = []
-        var hasLabelsProperty = false
         var tasks: [EntityID: (todo: VTodoTask, path: String, etag: String?, ics: String)] = [:]
 
         func uid(of id: EntityID) -> String { tasks[id]?.todo.uid ?? id }
@@ -118,7 +117,6 @@ private struct Pass {
                 }
             }
             if id == TodoStore.inboxID, let list = cal.labels.flatMap(PropertyList.decode) {
-                v.hasLabelsProperty = true
                 for e in list where v.labels[e.id] == nil {
                     v.labels[e.id] = Label(id: e.id, name: e.name, color: e.color.flatMap(ProjectColor.key(hex:)) ?? "charcoal",
                                            order: e.order, updatedAt: Date(timeIntervalSince1970: 0))

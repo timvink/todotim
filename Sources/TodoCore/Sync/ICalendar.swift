@@ -48,7 +48,6 @@ struct ICalComponent: Equatable, Sendable {
                 k -= 1
             }
         } else {
-            // Before the subcomponents' position does not matter; append keeps it simple.
             properties.append(property)
         }
     }

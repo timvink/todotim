@@ -13,6 +13,9 @@ public enum SyncError: LocalizedError, Equatable, Sendable {
     /// example a deleted calendar still in Nextcloud's trash bin).
     case calendarExists(String)
     case insufficientStorage
+    /// 429. Nextcloud limits calendar creation (by default 10 per hour, and 30 calendars and
+    /// subscriptions per user).
+    case rateLimited(String)
     case http(status: Int, path: String)
     case network(String)
     case badRemoteData(path: String, reason: String)
@@ -30,7 +33,7 @@ public enum SyncError: LocalizedError, Equatable, Sendable {
     /// Errors about one list or task (rather than the connection), which sync reports and skips.
     var isPerResource: Bool {
         switch self {
-        case .calendarExists, .forbidden, .conflict, .http, .badRemoteData: true
+        case .calendarExists, .forbidden, .conflict, .http, .badRemoteData, .rateLimited: true
         default: false
         }
     }
@@ -59,6 +62,8 @@ public enum SyncError: LocalizedError, Equatable, Sendable {
             return "Could not create the list “\(p)”: something with that name already exists on the server. If you deleted it in Nextcloud, empty it from the trash bin (Calendar › Trash bin)."
         case .insufficientStorage:
             return "The server is out of storage space"
+        case .rateLimited(let p):
+            return "The server refused “\(p)” for now (too many requests). Nextcloud allows 10 new lists per hour and 30 in total by default; the rest follow in later syncs. An admin can raise the limits with occ config:app:set dav rateLimitCalendarCreation / maximumCalendarsSubscriptions."
         case .http(let status, let p):
             return "Server returned HTTP \(status) for “\(p.isEmpty ? "/" : p)”"
         case .network(let msg):

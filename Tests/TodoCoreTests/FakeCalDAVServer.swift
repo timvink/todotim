@@ -23,6 +23,8 @@ actor FakeCalDAVServer: CalDAVServer {
     private(set) var requests: [String: Int] = [:]
     private(set) var shares: [(path: String, user: String)] = []
     var failShares = false
+    /// Calendar paths whose MKCALENDAR fails with 429 (Nextcloud's creation rate limit).
+    var rateLimitedCreates: Set<String> = []
     /// Called before each PUT; lets tests change an object "concurrently".
     var beforePut: (@Sendable (String) async -> Void)?
     /// Called once at the next calendar listing.
@@ -72,6 +74,7 @@ actor FakeCalDAVServer: CalDAVServer {
     func count(_ method: String) -> Int { requests[method, default: 0] }
     func resetCounts() { requests = [:] }
     func setFailShares(_ v: Bool) { failShares = v }
+    func setRateLimitedCreates(_ v: Set<String>) { rateLimitedCreates = v }
     func setBeforePut(_ f: (@Sendable (String) async -> Void)?) { beforePut = f }
     func setBeforeList(_ f: (@Sendable () async -> Void)?) { beforeList = f }
 
@@ -127,6 +130,7 @@ actor FakeCalDAVServer: CalDAVServer {
 
     func createCalendar(_ path: String, name: String, color: String, order: String) async throws {
         note("MKCALENDAR")
+        if rateLimitedCreates.contains(path) { throw SyncError.rateLimited(path) }
         guard calendarsByPath[path] == nil else { throw SyncError.calendarExists(path) }
         calendarsByPath[path] = Calendar(props: RemoteCalendar(path: path, name: name, color: color, order: order))
         changeLog[path] = [:]

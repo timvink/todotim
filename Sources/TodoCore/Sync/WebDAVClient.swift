@@ -276,6 +276,7 @@ public final class WebDAVClient: @unchecked Sendable {
         case 404: return path.isEmpty ? .baseNotFound : .notFound(path)
         case 409: return .conflict(path)
         case 412: return .preconditionFailed(path)
+        case 429: return .rateLimited(path)
         case 507: return .insufficientStorage
         default: return .http(status: status, path: path)
         }
