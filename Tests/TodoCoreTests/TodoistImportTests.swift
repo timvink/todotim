@@ -111,7 +111,7 @@ final class TodoistImportTests: XCTestCase {
     func testEntityIDsAreDeterministicValidUUIDv5() {
         // RFC 4122 test vector: uuid5(NAMESPACE_DNS, "python.org").
         let dns = UUID(uuidString: "6ba7b810-9dad-11d1-80b4-00c04fd430c8")!
-        XCTAssertEqual(TodoistImport.uuidV5(namespace: dns, name: "python.org"), "886313e1-3b8a-5372-9b90-0c9aee199e5d")
+        XCTAssertEqual(uuidV5(namespace: dns, name: "python.org"), "886313e1-3b8a-5372-9b90-0c9aee199e5d")
 
         let a = tid(.project, "6XGgm6PHrGgMpCFX")
         XCTAssertEqual(a, tid(.project, "6XGgm6PHrGgMpCFX"))

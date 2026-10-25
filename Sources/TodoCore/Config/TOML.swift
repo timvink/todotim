@@ -1,11 +1,12 @@
 import Foundation
 
 /// Minimal TOML reader for `~/.todotim.toml`: `[table]` headers, `key = value` pairs with
-/// basic/literal strings, booleans, integers and floats, and `#` comments. Arrays, inline
-/// tables and multi-line strings are not supported (the config does not need them).
+/// basic/literal strings, booleans, integers, floats and single-line arrays of those, and `#`
+/// comments. Inline tables and multi-line values are not supported (the config does not need them).
 public enum TOML {
     public enum Value: Equatable, Sendable {
         case string(String), bool(Bool), int(Int), double(Double)
+        indirect case array([Value])
     }
 
     public struct ParseError: Error, LocalizedError, Equatable {
@@ -63,6 +64,17 @@ public enum TOML {
     }
 
     private static func parseValue(_ s: String) -> Value? {
+        if s.hasPrefix("[") {
+            guard s.hasSuffix("]") else { return nil }
+            var items: [Value] = []
+            for part in splitArray(String(s.dropFirst().dropLast())) {
+                let item = part.trimmingCharacters(in: .whitespaces)
+                if item.isEmpty { continue }  // trailing comma or empty array
+                guard !item.hasPrefix("["), let v = parseValue(item) else { return nil }
+                items.append(v)
+            }
+            return .array(items)
+        }
         if s == "true" { return .bool(true) }
         if s == "false" { return .bool(false) }
         if s.count >= 2, s.hasPrefix("'"), s.hasSuffix("'") {
@@ -76,6 +88,23 @@ public enum TOML {
         if let i = Int(digits) { return .int(i) }
         if let d = Double(digits) { return .double(d) }
         return nil
+    }
+
+    /// Splits array contents on commas outside strings.
+    private static func splitArray(_ s: String) -> [String] {
+        var parts: [String] = [], current = ""
+        var quote: Character?
+        var escaped = false
+        for c in s {
+            if escaped { escaped = false; current.append(c); continue }
+            if quote == "\"" && c == "\\" { escaped = true; current.append(c); continue }
+            if let q = quote { if c == q { quote = nil }; current.append(c); continue }
+            if c == "\"" || c == "'" { quote = c; current.append(c); continue }
+            if c == "," { parts.append(current); current = ""; continue }
+            current.append(c)
+        }
+        parts.append(current)
+        return parts
     }
 
     private static func unescape(_ s: String) -> String? {

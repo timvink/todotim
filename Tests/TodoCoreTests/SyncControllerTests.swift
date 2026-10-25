@@ -5,8 +5,8 @@ import XCTest
 final class SyncControllerTests: XCTestCase {
     private var defaults: UserDefaults!
     private let suite = "TodoTimSyncControllerTests"
-    private let settings = SyncSettings(serverURL: "https://cloud.example.com/remote.php/dav/files/tim/",
-                                        username: "tim", folder: "TodoTim", enabled: true)
+    private let settings = SyncSettings(serverURL: "https://cloud.example.com/remote.php/dav/",
+                                        username: "tim", enabled: true)
 
     override func setUp() async throws {
         defaults = UserDefaults(suiteName: suite)
@@ -17,9 +17,10 @@ final class SyncControllerTests: XCTestCase {
         defaults.removePersistentDomain(forName: suite)
     }
 
-    private func makeController(_ store: TodoStore, _ remote: InMemoryRemoteStorage,
-                                credentials: CredentialStore = InMemoryCredentialStore()) -> SyncController {
-        let c = SyncController(store: store, defaults: defaults, credentials: credentials) { _, _ in remote }
+    private func makeController(_ store: TodoStore, _ remote: FakeCalDAVServer,
+                                credentials: CredentialStore = InMemoryCredentialStore(), stateURL: URL? = nil) -> SyncController {
+        let c = SyncController(store: store, defaults: defaults, credentials: credentials, config: nil,
+                               configPath: "/nonexistent", stateURL: stateURL) { _, _ in remote }
         c.syncInterval = .seconds(3600)
         c.debounceInterval = .milliseconds(20)
         return c
@@ -35,7 +36,7 @@ final class SyncControllerTests: XCTestCase {
 
     func testSettingsPersistAndPasswordStored() {
         let creds = InMemoryCredentialStore()
-        let c = makeController(TodoStore(), InMemoryRemoteStorage(), credentials: creds)
+        let c = makeController(TodoStore(), FakeCalDAVServer(), credentials: creds)
         XCTAssertEqual(c.status, .disabled)
         var disabled = settings
         disabled.enabled = false
@@ -44,13 +45,13 @@ final class SyncControllerTests: XCTestCase {
         XCTAssertNil(creds.password(for: "tim"), "no username-only entry")
         XCTAssertEqual(c.storedPassword(), "secret")
 
-        let reloaded = makeController(TodoStore(), InMemoryRemoteStorage(), credentials: creds)
+        let reloaded = makeController(TodoStore(), FakeCalDAVServer(), credentials: creds)
         XCTAssertEqual(reloaded.settings, disabled)
         XCTAssertEqual(reloaded.status, .disabled)
     }
 
     func testMissingPasswordReportsError() async {
-        let c = makeController(TodoStore(), InMemoryRemoteStorage())
+        let c = makeController(TodoStore(), FakeCalDAVServer())
         c.configure(settings, password: nil)
         await c.syncNow()
         XCTAssertEqual(c.status, .error(SyncError.missingPassword.errorDescription!))
@@ -67,9 +68,10 @@ final class SyncControllerTests: XCTestCase {
         // A password saved for one server is not sent to another with the same username.
         let creds = InMemoryCredentialStore(["tim": "legacy", "tim@cloud.example.com": "pw"])
         var used: [String] = []
-        let c = SyncController(store: TodoStore(), defaults: defaults, credentials: creds) { s, pw in
+        let c = SyncController(store: TodoStore(), defaults: defaults, credentials: creds, config: nil,
+                               configPath: "/nonexistent", stateURL: nil) { s, pw in
             used.append("\(s.serverURL) \(pw)")
-            return InMemoryRemoteStorage()
+            return FakeCalDAVServer()
         }
         c.syncInterval = .seconds(3600)
         other.serverURL = "https://other.example.com/dav/"
@@ -83,7 +85,7 @@ final class SyncControllerTests: XCTestCase {
     func testInsecureURLIsRefusedBeforePasswordLookup() async {
         var insecure = settings
         insecure.serverURL = "http://cloud.example.com/dav/"
-        let c = makeController(TodoStore(), InMemoryRemoteStorage(),
+        let c = makeController(TodoStore(), FakeCalDAVServer(),
                                credentials: InMemoryCredentialStore(["tim@cloud.example.com:80": "pw"]))
         c.configure(insecure, password: nil)
         await c.syncNow()
@@ -92,8 +94,8 @@ final class SyncControllerTests: XCTestCase {
 
     func testKeychainSaveFailureIsSurfacedAndPasswordKeptForSession() async throws {
         let creds = InMemoryCredentialStore()
-        creds.saveError = KeychainError(status: -25308)
-        let remote = InMemoryRemoteStorage()
+        creds.saveError = SyncError.network("keychain locked")
+        let remote = FakeCalDAVServer()
         let c = makeController(TodoStore(), remote, credentials: creds)
         c.configure(settings, password: "pw")
         XCTAssertNotNil(c.credentialError)
@@ -106,19 +108,19 @@ final class SyncControllerTests: XCTestCase {
         XCTAssertEqual(creds.password(for: "tim@cloud.example.com"), "pw")
     }
 
-    func testTestConnectionCreatesFolders() async {
-        let remote = InMemoryRemoteStorage()
+    func testTestConnectionListsCalendars() async {
+        let remote = FakeCalDAVServer()
         let c = makeController(TodoStore(), remote)
         let error = await c.testConnection(settings, password: "pw")
         XCTAssertNil(error)
-        let collections = await remote.collections
-        XCTAssertTrue(collections.isSuperset(of: ["TodoTim", "TodoTim/projects"]))
+        let listed = await remote.count("PROPFIND")
+        XCTAssertEqual(listed, 1)
         let empty = await c.testConnection(settings, password: "")
         XCTAssertNotNil(empty)
     }
 
     func testTwoControllersConvergeAndCallback() async throws {
-        let remote = InMemoryRemoteStorage()
+        let remote = FakeCalDAVServer()
         let a = TodoStore(), b = TodoStore()
         let ca = makeController(a, remote), cb = makeController(b, remote)
         var replacedOnB = 0
@@ -136,16 +138,17 @@ final class SyncControllerTests: XCTestCase {
     }
 
     func testLocalEditDuringSyncIsKeptAndPushed() async throws {
-        let remote = InMemoryRemoteStorage()
+        let remote = FakeCalDAVServer()
         // Another device already wrote a task.
         let other = TodoStore()
         let remoteTask = other.addTask(content: "remote", projectId: TodoStore.inboxID)
-        _ = try await SyncEngine.sync(local: other.db, storage: remote, folder: "TodoTim")
+        let first = try await CalDAVSync.sync(local: other.db, state: CalDAVState(account: "x"), server: remote)
+        XCTAssertGreaterThan(first.writes, 0)
 
         let store = TodoStore()
         let c = makeController(store, remote)
         let edited = TodoBox()
-        await remote.setBeforeGet { @MainActor in
+        await remote.setBeforeList { @MainActor in
             edited.id = store.addTask(content: "typed during sync", projectId: TodoStore.inboxID).id
         }
         c.configure(settings, password: "pw")
@@ -156,11 +159,36 @@ final class SyncControllerTests: XCTestCase {
         XCTAssertNotNil(store.task(remoteTask.id))
 
         // The follow-up sync (scheduled because the db changed) pushes the edit.
-        try await waitUntil {
-            guard let data = await remote.data("TodoTim/projects/inbox.json"),
-                  let pf = try? JSONCoding.decoder.decode(ProjectFile.self, from: data) else { return false }
-            return pf.tasks.contains { $0.id == localID }
-        }
+        try await waitUntil { await remote.ics("calendars/tim/todotim-inbox/\(localID).ics") != nil }
+    }
+
+    func testStateIsSavedAfterTheDatabaseAndReloaded() async throws {
+        let dir = FileManager.default.temporaryDirectory.appendingPathComponent("todotim-state-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let url = dir.appendingPathComponent("caldav-state.json")
+        let remote = FakeCalDAVServer()
+        let store = TodoStore()
+        store.addTask(content: "x", projectId: TodoStore.inboxID)
+        let c = makeController(store, remote, stateURL: url)
+        var events: [String] = []
+        c.onDatabaseReplaced = { events.append("db") }
+        c.flushDatabase = { events.append("flush") }
+        c.configure(settings, password: "pw")
+        try await waitUntil { c.lastSync != nil }
+        try await waitUntil { FileManager.default.fileExists(atPath: url.path) }
+        XCTAssertEqual(events, ["db", "flush"])
+        let saved = try JSONDecoder().decode(CalDAVState.self, from: Data(contentsOf: url))
+        XCTAssertEqual(saved.resources.count, 1)
+        XCTAssertEqual(saved.account, "https://cloud.example.com/remote.php/dav/|tim")
+
+        // A new controller (next launch) syncs from the saved state: nothing to write.
+        await remote.resetCounts()
+        let c2 = makeController(store, remote, stateURL: url)
+        c2.configure(settings, password: "pw")
+        try await waitUntil { c2.lastSync != nil }
+        let puts = await remote.count("PUT"), mk = await remote.count("MKCALENDAR")
+        XCTAssertEqual(puts + mk, 0)
     }
 }
 
@@ -171,18 +199,19 @@ private final class TodoBox { var id: EntityID? }
 final class SyncControllerConfigTests: XCTestCase {
     private let suite = "TodoTimSyncControllerConfigTests"
 
+    #if os(macOS)  // password_command needs a login shell
     func testConfigFileSettingsWinAndPasswordCommandFillsKeychain() async throws {
         let defaults = UserDefaults(suiteName: suite)!
         defaults.removePersistentDomain(forName: suite)
         defer { defaults.removePersistentDomain(forName: suite) }
         let managed = SyncSettings(serverURL: "https://cloud.example.com/remote.php/dav/files/tim/",
-                                   username: "tim", folder: "TodoTim", enabled: true)
+                                   username: "tim", enabled: true)
         let config = AppConfig(sync: managed, passwordCommand: "echo from-command")
         let creds = InMemoryCredentialStore()
-        let remote = InMemoryRemoteStorage()
+        let remote = FakeCalDAVServer()
         let store = TodoStore()
         let c = SyncController(store: store, defaults: defaults, credentials: creds, config: config,
-                               configPath: "/tmp/test.toml") { _, _ in remote }
+                               configPath: "/tmp/test.toml", stateURL: nil) { _, _ in remote }
         c.syncInterval = .seconds(3600)
         XCTAssertEqual(c.settings, managed)
         XCTAssertEqual(c.managedConfigPath, "/tmp/test.toml")
@@ -198,4 +227,5 @@ final class SyncControllerConfigTests: XCTestCase {
         XCTAssertEqual(c.settings, managed)
         XCTAssertNil(defaults.data(forKey: SyncController.settingsKey))
     }
+    #endif
 }

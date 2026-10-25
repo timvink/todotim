@@ -1,4 +1,7 @@
 import XCTest
+#if canImport(FoundationNetworking)
+import FoundationNetworking
+#endif
 @testable import TodoCore
 
 /// Serves canned responses for https://api.todoist.com requests.

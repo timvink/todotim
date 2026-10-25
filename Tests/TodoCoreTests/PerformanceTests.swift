@@ -190,19 +190,23 @@ final class PerformanceTests: XCTestCase {
         }
         #endif
 
-        let remote = InMemoryRemoteStorage()
-        let cache = RemoteFileCache()
-        _ = try await SyncEngine.sync(local: store.db, storage: remote, folder: "TodoTim", cache: cache)
-        let local = store.db
-        try await timeAsync("unchanged sync (warm ETag cache)") {
-            let r = try await SyncEngine.sync(local: local, storage: remote, folder: "TodoTim", cache: cache)
-            XCTAssertEqual(r.uploaded, [])
+        let server = FakeCalDAVServer()
+        let first = try await CalDAVSync.sync(local: store.db, state: CalDAVState(account: "bench"), server: server)
+        let local = first.merged
+        try await timeAsync("idle sync (nothing changed)") {
+            let r = try await CalDAVSync.sync(local: local, state: first.state, server: server, previous: local)
+            XCTAssertEqual(r.writes, 0)
         }
         var edited = local
         edited.tasks["task-7-10"]?.content = "Changed for sync"
         edited.tasks["task-7-10"]?.updatedAt = Date()
-        try await timeAsync("sync with one edited task (plan only)") {
-            _ = try SyncEngine.plan(local: edited, remote: try await SyncEngine.download(storage: remote, folder: "TodoTim", cache: cache))
+        var state = first.state
+        try await timeAsync("sync with one edited task", runs: 3) {
+            let r = try await CalDAVSync.sync(local: edited, state: state, server: server)
+            state = r.state
+            edited = r.merged
+            edited.tasks["task-7-10"]?.content = "Changed \(UUID())"
+            edited.tasks["task-7-10"]?.updatedAt = Date()
         }
     }
 }

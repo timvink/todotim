@@ -1,4 +1,7 @@
 import Foundation
+#if canImport(FoundationNetworking)
+import FoundationNetworking
+#endif
 
 public enum TodoistAPIError: LocalizedError, Equatable, Sendable {
     case missingToken
@@ -143,6 +146,13 @@ public struct TodoistAPI: Sendable {
         let limit = maxResponseBytes
         let tooLarge = TodoistAPIError.limitExceeded("a Todoist response is larger than \(max(1, limit / 1024 / 1024)) MB")
         do {
+            #if canImport(FoundationNetworking)
+            // swift-corelibs-foundation (Linux, tests only) has no `bytes(for:)`.
+            let (data, response) = try await session.data(for: req, delegate: NoRedirects())
+            guard let http = response as? HTTPURLResponse else { throw TodoistAPIError.invalidResponse("not HTTP") }
+            if data.count > limit { throw tooLarge }
+            return (data, http)
+            #else
             let (bytes, response) = try await session.bytes(for: req, delegate: NoRedirects())
             guard let http = response as? HTTPURLResponse else { throw TodoistAPIError.invalidResponse("not HTTP") }
             if http.expectedContentLength > Int64(limit) {
@@ -166,6 +176,7 @@ public struct TodoistAPI: Sendable {
             data.append(contentsOf: chunk)
             if data.count > limit { throw tooLarge }
             return (data, http)
+            #endif
         } catch let e as TodoistAPIError {
             throw e
         } catch let e as URLError {

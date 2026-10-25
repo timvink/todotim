@@ -1,5 +1,7 @@
 import Foundation
+#if canImport(Security)
 import Security
+#endif
 
 /// Where the WebDAV password is kept. The default is the Keychain; tests use an in-memory one.
 /// Accounts are `SyncSettings.credentialAccount` ("user@host[:port]"), so a password is only
@@ -18,6 +20,8 @@ extension CredentialStore {
     }
 }
 
+// The Keychain exists only on Apple platforms; TodoCore also builds on Linux for tests.
+#if canImport(Security)
 public struct KeychainError: Error, LocalizedError, Equatable, Sendable {
     public var status: OSStatus
     public var errorDescription: String? {
@@ -80,6 +84,7 @@ public struct KeychainCredentialStore: CredentialStore {
         guard status == errSecSuccess else { throw KeychainError(status: status) }
     }
 }
+#endif
 
 /// In-memory credential store (tests, previews).
 public final class InMemoryCredentialStore: CredentialStore, @unchecked Sendable {

@@ -1,53 +1,64 @@
 import XCTest
+#if canImport(FoundationNetworking)
+import FoundationNetworking
+#endif
 @testable import TodoCore
 
-/// Realistic Nextcloud response to PROPFIND Depth 1 on the sync folder.
-private let nextcloudPropfind = """
+/// Realistic Nextcloud response to PROPFIND Depth 1 on a calendar home (trimmed).
+private let calendarHome = """
 <?xml version="1.0"?>
-<d:multistatus xmlns:d="DAV:" xmlns:s="http://sabredav.org/ns" xmlns:oc="http://owncloud.org/ns" xmlns:nc="http://nextcloud.org/ns">
- <d:response>
-  <d:href>/remote.php/dav/files/tim%20v/To%20Do/</d:href>
-  <d:propstat>
-   <d:prop>
-    <d:getetag>&quot;6717a5c0e1f3a&quot;</d:getetag>
-    <d:resourcetype><d:collection/></d:resourcetype>
-   </d:prop>
-   <d:status>HTTP/1.1 200 OK</d:status>
-  </d:propstat>
- </d:response>
- <d:response>
-  <d:href>/remote.php/dav/files/tim%20v/To%20Do/index.json</d:href>
-  <d:propstat>
-   <d:prop>
-    <d:getetag>&quot;0a1b2c3d4e5f60718293a4b5c6d7e8f9&quot;</d:getetag>
-    <d:resourcetype/>
-    <d:getcontentlength>1234</d:getcontentlength>
-    <d:getlastmodified>Sat, 24 Oct 2026 18:20:05 GMT</d:getlastmodified>
-   </d:prop>
-   <d:status>HTTP/1.1 200 OK</d:status>
-  </d:propstat>
- </d:response>
- <d:response>
-  <d:href>/remote.php/dav/files/tim%20v/To%20Do/projects/</d:href>
-  <d:propstat>
-   <d:prop>
-    <d:getetag>&quot;6717a5c0d2b11&quot;</d:getetag>
-    <d:resourcetype><d:collection/></d:resourcetype>
-   </d:prop>
-   <d:status>HTTP/1.1 200 OK</d:status>
-  </d:propstat>
- </d:response>
- <d:response>
-  <d:href>/remote.php/dav/files/tim%20v/To%20Do/caf%C3%A9%20notes.json</d:href>
-  <d:propstat>
-   <d:prop><d:resourcetype/></d:prop>
-   <d:status>HTTP/1.1 200 OK</d:status>
-  </d:propstat>
-  <d:propstat>
-   <d:prop><d:getetag/></d:prop>
-   <d:status>HTTP/1.1 404 Not Found</d:status>
-  </d:propstat>
- </d:response>
+<d:multistatus xmlns:d="DAV:" xmlns:s="http://sabredav.org/ns" xmlns:cal="urn:ietf:params:xml:ns:caldav" xmlns:cs="http://calendarserver.org/ns/" xmlns:oc="http://owncloud.org/ns" xmlns:nc="http://nextcloud.org/ns">
+ <d:response><d:href>/remote.php/dav/calendars/tim/</d:href>
+  <d:propstat><d:prop><d:resourcetype><d:collection/></d:resourcetype></d:prop><d:status>HTTP/1.1 200 OK</d:status></d:propstat></d:response>
+ <d:response><d:href>/remote.php/dav/calendars/tim/todotim-inbox/</d:href>
+  <d:propstat><d:prop>
+   <d:resourcetype><d:collection/><cal:calendar/></d:resourcetype>
+   <cal:supported-calendar-component-set><cal:comp name="VTODO"/></cal:supported-calendar-component-set>
+   <d:sync-token>http://sabre.io/ns/sync/7</d:sync-token>
+   <oc:owner-principal>principals/users/tim</oc:owner-principal>
+   <d:displayname>Inbox</d:displayname>
+   <x1:calendar-color xmlns:x1="http://apple.com/ns/ical/">#808080</x1:calendar-color>
+   <x2:labels xmlns:x2="https://todotim.app/ns">[{&quot;id&quot;:&quot;l1&quot;,&quot;name&quot;:&quot;A &amp; B&quot;,&quot;order&quot;:1}]</x2:labels>
+  </d:prop><d:status>HTTP/1.1 200 OK</d:status></d:propstat>
+  <d:propstat><d:prop><x2:sections xmlns:x2="https://todotim.app/ns"/></d:prop><d:status>HTTP/1.1 404 Not Found</d:status></d:propstat></d:response>
+ <d:response><d:href>/remote.php/dav/calendars/tim/personal/</d:href>
+  <d:propstat><d:prop>
+   <d:resourcetype><d:collection/><cal:calendar/></d:resourcetype>
+   <cal:supported-calendar-component-set><cal:comp name="VEVENT"/><cal:comp name="VTODO"/></cal:supported-calendar-component-set>
+   <oc:owner-principal>principals/users/tim</oc:owner-principal>
+  </d:prop><d:status>HTTP/1.1 200 OK</d:status></d:propstat></d:response>
+ <d:response><d:href>/remote.php/dav/calendars/tim/list_shared_by_bob/</d:href>
+  <d:propstat><d:prop>
+   <d:resourcetype><d:collection/><cal:calendar/></d:resourcetype>
+   <cal:supported-calendar-component-set><cal:comp name="VTODO"/></cal:supported-calendar-component-set>
+   <oc:owner-principal>principals/users/bob</oc:owner-principal>
+  </d:prop><d:status>HTTP/1.1 200 OK</d:status></d:propstat></d:response>
+ <d:response><d:href>/remote.php/dav/calendars/tim/inbox/</d:href>
+  <d:propstat><d:prop><d:resourcetype><d:collection/><cal:schedule-inbox/></d:resourcetype></d:prop><d:status>HTTP/1.1 200 OK</d:status></d:propstat></d:response>
+ <d:response><d:href>https://evil.example.com/remote.php/dav/calendars/tim/evil/</d:href>
+  <d:propstat><d:prop>
+   <d:resourcetype><d:collection/><cal:calendar/></d:resourcetype>
+   <cal:supported-calendar-component-set><cal:comp name="VTODO"/></cal:supported-calendar-component-set>
+  </d:prop><d:status>HTTP/1.1 200 OK</d:status></d:propstat></d:response>
+</d:multistatus>
+"""
+
+private let syncCollection = """
+<?xml version="1.0"?>
+<d:multistatus xmlns:d="DAV:" xmlns:cal="urn:ietf:params:xml:ns:caldav">
+ <d:response><d:href>/remote.php/dav/calendars/tim/work/a.ics</d:href>
+  <d:propstat><d:prop><d:getetag>&quot;e1&quot;</d:getetag><cal:calendar-data>BEGIN:VCALENDAR
+BEGIN:VTODO
+UID:a
+END:VTODO
+END:VCALENDAR
+</cal:calendar-data></d:prop><d:status>HTTP/1.1 200 OK</d:status></d:propstat></d:response>
+ <d:response><d:href>/remote.php/dav/calendars/tim/work/gone.ics</d:href><d:status>HTTP/1.1 404 Not Found</d:status></d:response>
+ <d:response><d:href>/remote.php/dav/calendars/tim/work/sub/nested.ics</d:href>
+  <d:propstat><d:prop><cal:calendar-data>x</cal:calendar-data></d:prop><d:status>HTTP/1.1 200 OK</d:status></d:propstat></d:response>
+ <d:response><d:href>/remote.php/dav/calendars/tim/work/%2E%2E</d:href>
+  <d:propstat><d:prop><cal:calendar-data>x</cal:calendar-data></d:prop><d:status>HTTP/1.1 200 OK</d:status></d:propstat></d:response>
+ <d:sync-token>http://sabre.io/ns/sync/9</d:sync-token>
 </d:multistatus>
 """
 
@@ -58,36 +69,39 @@ final class WebDAVClientTests: XCTestCase {
         super.tearDown()
     }
 
-    func testParsesNextcloudMultistatus() throws {
-        let entries = try XCTUnwrap(try MultistatusParser.parse(Data(nextcloudPropfind.utf8)))
-        XCTAssertEqual(entries.count, 4)
-        XCTAssertEqual(entries[1], .init(href: "/remote.php/dav/files/tim%20v/To%20Do/index.json",
-                                         etag: "\"0a1b2c3d4e5f60718293a4b5c6d7e8f9\"", isCollection: false,
-                                         size: 1234, modified: Date(timeIntervalSince1970: 1_792_866_005)))
-        XCTAssertTrue(entries[2].isCollection)
-        XCTAssertNil(entries[3].etag, "getetag in a 404 propstat is ignored")
+    func testParsesMultistatusProperties() throws {
+        let doc = try XCTUnwrap(try Multistatus.parse(Data(calendarHome.utf8)))
+        XCTAssertEqual(doc.responses.count, 6)
+        let inbox = doc.responses[1]
+        XCTAssertEqual(inbox.text("DAV:|displayname"), "Inbox")
+        XCTAssertEqual(inbox.properties["DAV:|resourcetype"]?.children, ["DAV:|collection", "urn:ietf:params:xml:ns:caldav|calendar"])
+        XCTAssertEqual(inbox.properties["urn:ietf:params:xml:ns:caldav|supported-calendar-component-set"]?.children,
+                       ["urn:ietf:params:xml:ns:caldav|comp=VTODO"])
+        XCTAssertEqual(inbox.text("https://todotim.app/ns|labels"), #"[{"id":"l1","name":"A & B","order":1}]"#)
+        XCTAssertNil(inbox.properties["https://todotim.app/ns|sections"], "properties in a 404 propstat are ignored")
 
-        let base = try WebDAVClient.normalizedBaseURL("https://cloud.example.com/remote.php/dav/files/tim%20v")
-        let items = WebDAVClient.items(from: entries, baseURL: base, listedPath: "To Do")
-        XCTAssertEqual(items.map(\.path), ["To Do/index.json", "To Do/projects", "To Do/café notes.json"])
-        XCTAssertEqual(items.map(\.name), ["index.json", "projects", "café notes.json"])
-        XCTAssertEqual(items.map(\.isCollection), [false, true, false])
-        XCTAssertEqual(items[0].size, 1234)
-        XCTAssertEqual(items[0].modified, Date(timeIntervalSince1970: 1_792_866_005))
-        XCTAssertNil(items[2].size)
-    }
-
-    func testParsesHTTPDates() {
-        XCTAssertEqual(WebDAVClient.httpDate("Sat, 24 Oct 2026 18:20:05 GMT"), Date(timeIntervalSince1970: 1_792_866_005))
-        XCTAssertEqual(WebDAVClient.httpDate("Sun, 06 Nov 1994 08:49:37 GMT"), Date(timeIntervalSince1970: 784_111_777))
-        XCTAssertNil(WebDAVClient.httpDate("yesterday"))
-        XCTAssertNil(WebDAVClient.httpDate(""))
-        XCTAssertNil(WebDAVClient.httpDate(nil))
+        let changes = try XCTUnwrap(try Multistatus.parse(Data(syncCollection.utf8)))
+        XCTAssertEqual(changes.syncToken, "http://sabre.io/ns/sync/9")
+        XCTAssertEqual(changes.responses[1].status, 404)
+        XCTAssertTrue(changes.responses[0].text("urn:ietf:params:xml:ns:caldav|calendar-data")!.contains("UID:a"))
     }
 
     func testRejectsNonMultistatus() throws {
-        XCTAssertNil(try MultistatusParser.parse(Data("<html><body>Nextcloud</body></html>".utf8)))
-        XCTAssertNil(try MultistatusParser.parse(Data("not xml".utf8)))
+        XCTAssertNil(try Multistatus.parse(Data("<html><body>Nextcloud</body></html>".utf8)))
+        XCTAssertNil(try Multistatus.parse(Data("not xml".utf8)))
+    }
+
+    func testParserRefusesDTDAndCapsEntries() throws {
+        let xxe = """
+        <?xml version="1.0"?>
+        <!DOCTYPE d [<!ENTITY x SYSTEM "file:///etc/passwd">]>
+        <d:multistatus xmlns:d="DAV:"><d:response><d:href>&x;</d:href></d:response></d:multistatus>
+        """
+        XCTAssertThrowsError(try Multistatus.parse(Data(xxe.utf8)))
+        XCTAssertThrowsError(try Multistatus.parse(Data(calendarHome.utf8), maxEntries: 3)) {
+            guard case Multistatus.Failure.tooManyEntries = $0 else { return XCTFail("\($0)") }
+        }
+        XCTAssertEqual(try Multistatus.parse(Data(calendarHome.utf8), maxEntries: 6)?.responses.count, 6)
     }
 
     func testBaseURLNormalizationAndPathEncoding() throws {
@@ -96,14 +110,20 @@ final class WebDAVClientTests: XCTestCase {
         XCTAssertThrowsError(try WebDAVClient.normalizedBaseURL(""))
         XCTAssertThrowsError(try WebDAVClient.normalizedBaseURL("ftp://x/"))
         XCTAssertThrowsError(try WebDAVClient.normalizedBaseURL("cloud.example.com"))
-        let client = try WebDAVClient(serverURL: "  https://cloud.example.com/remote.php/dav/files/tim ", username: "tim", password: "pw")
-        XCTAssertEqual(client.baseURL.absoluteString, "https://cloud.example.com/remote.php/dav/files/tim/")
-        XCTAssertEqual(try client.url(for: "To Do/projects/a#b?.json").absoluteString,
-                       "https://cloud.example.com/remote.php/dav/files/tim/To%20Do/projects/a%23b%3F.json")
-        XCTAssertEqual(try client.url(for: "/TodoTim/", collection: true).absoluteString,
-                       "https://cloud.example.com/remote.php/dav/files/tim/TodoTim/")
-        XCTAssertEqual(try client.url(for: "", collection: true).absoluteString,
-                       "https://cloud.example.com/remote.php/dav/files/tim/")
+        let client = try WebDAVClient(serverURL: "  https://cloud.example.com/remote.php/dav ", username: "tim", password: "pw")
+        XCTAssertEqual(client.baseURL.absoluteString, "https://cloud.example.com/remote.php/dav/")
+        XCTAssertEqual(try client.url(for: "calendars/tim v/a#b?.ics").absoluteString,
+                       "https://cloud.example.com/remote.php/dav/calendars/tim%20v/a%23b%3F.ics")
+        XCTAssertEqual(try client.url(for: "/calendars/tim/", collection: true).absoluteString,
+                       "https://cloud.example.com/remote.php/dav/calendars/tim/")
+    }
+
+    func testDAVRootFromServerURL() throws {
+        XCTAssertEqual(try CalDAVClient.davRoot("https://c.example.com/remote.php/dav").absoluteString,
+                       "https://c.example.com/remote.php/dav/")
+        XCTAssertEqual(try CalDAVClient.davRoot("https://c.example.com/remote.php/dav/files/tim/").absoluteString,
+                       "https://c.example.com/remote.php/dav/", "an old files URL still works")
+        XCTAssertThrowsError(try CalDAVClient.davRoot("http://c.example.com/remote.php/dav/"))
     }
 
     func testPlainHTTPOnlyForLocalhost() throws {
@@ -118,50 +138,31 @@ final class WebDAVClientTests: XCTestCase {
 
     func testRefusesDotAndEmptySegments() async throws {
         let client = try makeClient()
-        for bad in ["a/../b", "..", "TodoTim/projects/../../outside.json", "./x", "a//b", "a/./b"] {
+        for bad in ["a/../b", "..", "calendars/tim/../../outside", "./x", "a//b", "a/./b"] {
             XCTAssertThrowsError(try client.url(for: bad), bad) { XCTAssertEqual($0 as? SyncError, .invalidPath(bad)) }
         }
         StubURLProtocol.handler = { _ in (200, [:], Data()) }
         do {
-            _ = try await client.get("TodoTim/projects/../../outside.json")
+            _ = try await client.send("GET", "calendars/../../outside")
             XCTFail("expected invalidPath")
         } catch {
-            XCTAssertEqual(error as? SyncError, .invalidPath("TodoTim/projects/../../outside.json"))
+            XCTAssertEqual(error as? SyncError, .invalidPath("calendars/../../outside"))
         }
         XCTAssertTrue(StubURLProtocol.requests.isEmpty, "no request is sent for an unsafe path")
-        // Dots inside a name are fine.
-        XCTAssertEqual(try client.url(for: "a/..b/c..json").absoluteString,
-                       "https://cloud.example.com/remote.php/dav/files/tim/a/..b/c..json")
+        XCTAssertEqual(try client.url(for: "a/..b/c..ics").absoluteString,
+                       "https://cloud.example.com/remote.php/dav/a/..b/c..ics")
     }
 
-    func testItemsKeepOnlyDirectChildrenOnSameServer() throws {
-        let base = try WebDAVClient.normalizedBaseURL("https://cloud.example.com/remote.php/dav/files/tim/")
-        let entries: [MultistatusParser.Entry] = [
-            .init(href: "/remote.php/dav/files/tim/T/", etag: nil, isCollection: true),
-            .init(href: "/remote.php/dav/files/tim/T/ok.json", etag: nil, isCollection: false),
-            .init(href: "https://cloud.example.com/remote.php/dav/files/tim/T/abs.json", etag: nil, isCollection: false),
-            .init(href: "https://evil.example.com/remote.php/dav/files/tim/T/evil.json", etag: nil, isCollection: false),
-            .init(href: "https://cloud.example.com:8443/remote.php/dav/files/tim/T/port.json", etag: nil, isCollection: false),
-            .init(href: "/remote.php/dav/files/tim/T/sub/nested.json", etag: nil, isCollection: false),
-            .init(href: "/remote.php/dav/files/tim/T/../outside.json", etag: nil, isCollection: false),
-            .init(href: "/remote.php/dav/files/other/T/x.json", etag: nil, isCollection: false),
-            .init(href: "/remote.php/dav/files/tim/T/%2E%2E", etag: nil, isCollection: false),
-        ]
-        XCTAssertEqual(WebDAVClient.items(from: entries, baseURL: base, listedPath: "T").map(\.path),
-                       ["T/ok.json", "T/abs.json"])
-    }
-
-    func testParserRefusesDTDAndCapsEntries() throws {
-        let xxe = """
-        <?xml version="1.0"?>
-        <!DOCTYPE d [<!ENTITY x SYSTEM "file:///etc/passwd">]>
-        <d:multistatus xmlns:d="DAV:"><d:response><d:href>&x;</d:href></d:response></d:multistatus>
-        """
-        XCTAssertThrowsError(try MultistatusParser.parse(Data(xxe.utf8)))
-        XCTAssertThrowsError(try MultistatusParser.parse(Data(nextcloudPropfind.utf8), maxEntries: 3)) {
-            guard case MultistatusParser.Failure.tooManyEntries = $0 else { return XCTFail("\($0)") }
+    func testRelativePathOfHrefStaysInsideBase() throws {
+        let client = try makeClient()
+        XCTAssertEqual(client.relativePath(ofHref: "/remote.php/dav/calendars/tim/work/a%20b.ics"), "calendars/tim/work/a b.ics")
+        XCTAssertEqual(client.relativePath(ofHref: "https://cloud.example.com/remote.php/dav/calendars/tim/"), "calendars/tim")
+        for bad in ["https://evil.example.com/remote.php/dav/calendars/tim/x.ics",
+                    "https://cloud.example.com:8443/remote.php/dav/calendars/tim/x.ics",
+                    "/remote.php/other/x.ics", "/remote.php/dav/../x",
+                    "/remote.php/dav/calendars/tim/%2E%2E/x", "/remote.php/dav/calendars/tim/a%2Fb.ics"] {
+            XCTAssertNil(client.relativePath(ofHref: bad), bad)
         }
-        XCTAssertEqual(try MultistatusParser.parse(Data(nextcloudPropfind.utf8), maxEntries: 4)?.count, 4)
     }
 
     func testResponseBodyIsCapped() async throws {
@@ -170,28 +171,29 @@ final class WebDAVClientTests: XCTestCase {
         // No Content-Length: the limit is enforced while reading.
         StubURLProtocol.handler = { _ in (200, [:], Data(count: 300_000)) }
         do {
-            _ = try await client.get("TodoTim/index.json")
+            _ = try await client.send("GET", "calendars/tim/x.ics")
             XCTFail("expected limitExceeded")
         } catch {
             guard case .limitExceeded? = error as? SyncError else { return XCTFail("\(error)") }
         }
         StubURLProtocol.handler = { _ in (200, [:], Data(count: 90_000)) }
-        let data = try await client.get("TodoTim/index.json").data
+        let data = try await client.send("GET", "calendars/tim/x.ics").data
         XCTAssertEqual(data.count, 90_000)
     }
 
+    #if !canImport(FoundationNetworking)  // the Linux URLSession cannot redirect from a URLProtocol stub
     func testRedirectsOutsideBaseAreRefused() async throws {
         let client = try makeClient()
-        for target in ["https://evil.example.com/remote.php/dav/files/tim/TodoTim/index.json",
-                       "http://cloud.example.com/remote.php/dav/files/tim/TodoTim/index.json",
-                       "https://cloud.example.com:8443/remote.php/dav/files/tim/TodoTim/index.json",
-                       "https://cloud.example.com/remote.php/dav/files/other/index.json"] {
+        for target in ["https://evil.example.com/remote.php/dav/calendars/tim/x.ics",
+                       "http://cloud.example.com/remote.php/dav/calendars/tim/x.ics",
+                       "https://cloud.example.com:8443/remote.php/dav/calendars/tim/x.ics",
+                       "https://cloud.example.com/remote.php/other/x.ics"] {
             StubURLProtocol.requests = []
             StubURLProtocol.handler = { req in
                 req.url!.absoluteString == target ? (200, [:], Data("leaked".utf8)) : (307, ["Location": target], Data())
             }
             do {
-                _ = try await client.get("TodoTim/index.json")
+                _ = try await client.send("GET", "calendars/tim/x.ics")
                 XCTFail("expected redirectRejected for \(target)")
             } catch {
                 guard case .redirectRejected? = error as? SyncError else { return XCTFail("\(error)") }
@@ -199,13 +201,14 @@ final class WebDAVClientTests: XCTestCase {
             XCTAssertEqual(StubURLProtocol.requests.count, 1, "redirect to \(target) is not followed")
         }
         // A redirect inside the base URL is followed.
-        let inside = "https://cloud.example.com/remote.php/dav/files/tim/TodoTim/moved.json"
+        let inside = "https://cloud.example.com/remote.php/dav/calendars/tim/moved.ics"
         StubURLProtocol.handler = { req in
             req.url!.absoluteString == inside ? (200, [:], Data("ok".utf8)) : (307, ["Location": inside], Data())
         }
-        let data = try await client.get("TodoTim/index.json").data
+        let data = try await client.send("GET", "calendars/tim/x.ics").data
         XCTAssertEqual(String(decoding: data, as: UTF8.self), "ok")
     }
+    #endif
 
     func testErrorMessages() {
         XCTAssertEqual(WebDAVClient.error(status: 401, path: "x").errorDescription, "Wrong username or app password")
@@ -216,79 +219,110 @@ final class WebDAVClientTests: XCTestCase {
         XCTAssertEqual(WebDAVClient.error(status: 507, path: "a"), .insufficientStorage)
     }
 
-    // MARK: - Requests via a stub URLProtocol (no network)
+    // MARK: - CalDAV requests via a stub URLProtocol (no network)
 
     private func makeClient() throws -> WebDAVClient {
         let config = URLSessionConfiguration.ephemeral
         config.protocolClasses = [StubURLProtocol.self]
-        return try WebDAVClient(serverURL: "https://cloud.example.com/remote.php/dav/files/tim/",
+        return try WebDAVClient(serverURL: "https://cloud.example.com/remote.php/dav/",
                                 username: "tim", password: "app-pass", session: URLSession(configuration: config))
     }
 
-    func testListSendsPropfindAndMapsItems() async throws {
-        StubURLProtocol.handler = { req in
-            let body = nextcloudPropfind.replacingOccurrences(of: "tim%20v", with: "tim")
-            return (207, [:], Data(body.utf8))
-        }
-        let listing = try await makeClient().listing("To Do")
-        XCTAssertEqual(listing.items.map(\.path), ["To Do/index.json", "To Do/projects", "To Do/café notes.json"])
-        XCTAssertNil(listing.serverDate)
+    func testListsOnlyOwnTaskCalendars() async throws {
+        StubURLProtocol.handler = { _ in (207, [:], Data(calendarHome.utf8)) }
+        let caldav = CalDAVClient(dav: try makeClient(), username: "tim")
+        let calendars = try await caldav.calendars()
+        XCTAssertEqual(calendars, [RemoteCalendar(path: "calendars/tim/todotim-inbox", name: "Inbox", color: "#808080",
+                                                  labels: #"[{"id":"l1","name":"A & B","order":1}]"#,
+                                                  syncToken: "http://sabre.io/ns/sync/7")])
         let req = try XCTUnwrap(StubURLProtocol.requests.first)
         XCTAssertEqual(req.httpMethod, "PROPFIND")
         XCTAssertEqual(req.value(forHTTPHeaderField: "Depth"), "1")
-        XCTAssertEqual(req.url?.absoluteString, "https://cloud.example.com/remote.php/dav/files/tim/To%20Do/")
+        XCTAssertEqual(req.url?.absoluteString, "https://cloud.example.com/remote.php/dav/calendars/tim/")
         XCTAssertEqual(req.value(forHTTPHeaderField: "Authorization"),
                        "Basic " + Data("tim:app-pass".utf8).base64EncodedString())
     }
 
-    func testPutConditionsAndETag() async throws {
-        StubURLProtocol.handler = { _ in (201, ["ETag": "\"new\""], Data()) }
-        let client = try makeClient()
-        let etag = try await client.put("TodoTim/index.json", data: Data("{}".utf8), condition: .ifMatch("\"old\""))
+    func testSyncCollectionKeepsOnlyDirectChildren() async throws {
+        StubURLProtocol.handler = { _ in (207, [:], Data(syncCollection.utf8)) }
+        let caldav = CalDAVClient(dav: try makeClient(), username: "tim")
+        let changes = try await caldav.changes(in: "calendars/tim/work", since: "http://sabre.io/ns/sync/3")
+        XCTAssertEqual(changes.changed.map(\.path), ["calendars/tim/work/a.ics"])
+        XCTAssertEqual(changes.changed.first?.etag, "\"e1\"")
+        XCTAssertEqual(changes.removed, ["calendars/tim/work/gone.ics"])
+        XCTAssertEqual(changes.syncToken, "http://sabre.io/ns/sync/9")
+        XCTAssertFalse(changes.isFull)
+        let body = try XCTUnwrap(StubURLProtocol.requests.first.flatMap(Self.body))
+        XCTAssertTrue(body.contains("<d:sync-token>http://sabre.io/ns/sync/3</d:sync-token>"), body)
+
+        // A rejected token (403 valid-sync-token) falls back to a full listing.
+        var calls = 0
+        StubURLProtocol.handler = { _ in
+            calls += 1
+            return calls == 1 ? (403, [:], Data()) : (207, [:], Data(syncCollection.utf8))
+        }
+        let full = try await caldav.changes(in: "calendars/tim/work", since: "stale")
+        XCTAssertTrue(full.isFull)
+        XCTAssertEqual(full.changed.count, 1)
+    }
+
+    func testWritesAreConditional() async throws {
+        StubURLProtocol.handler = { _ in (201, ["ETag": "\"new-gzip\""], Data()) }
+        let caldav = CalDAVClient(dav: try makeClient(), username: "tim")
+        let etag = try await caldav.put("calendars/tim/work/a.ics", ics: "X", ifMatch: "\"old\"")
         XCTAssertEqual(etag, "\"new\"")
-        _ = try await client.put("TodoTim/index.json", data: Data(), condition: .ifNoneMatch)
+        _ = try await caldav.put("calendars/tim/work/b.ics", ics: "X", ifMatch: nil)
+        try await caldav.move("calendars/tim/work/a.ics", to: "calendars/tim/home/a.ics", ifMatch: "\"new\"")
+        try await caldav.delete("calendars/tim/home/a.ics", ifMatch: "\"new\"")
         let reqs = StubURLProtocol.requests
-        XCTAssertEqual(reqs[0].httpMethod, "PUT")
+        XCTAssertEqual(reqs.map(\.httpMethod), ["PUT", "PUT", "MOVE", "DELETE"])
         XCTAssertEqual(reqs[0].value(forHTTPHeaderField: "If-Match"), "\"old\"")
         XCTAssertEqual(reqs[1].value(forHTTPHeaderField: "If-None-Match"), "*")
+        XCTAssertEqual(reqs[2].value(forHTTPHeaderField: "Destination"), "https://cloud.example.com/remote.php/dav/calendars/tim/home/a.ics")
+        XCTAssertEqual(reqs[2].value(forHTTPHeaderField: "If-Match"), "\"new\"")
+        XCTAssertEqual(reqs[3].value(forHTTPHeaderField: "If-Match"), "\"new\"")
 
         StubURLProtocol.handler = { _ in (412, [:], Data()) }
         do {
-            try await client.put("TodoTim/index.json", data: Data(), condition: .ifMatch("\"x\""))
+            _ = try await caldav.put("calendars/tim/work/a.ics", ics: "X", ifMatch: "\"x\"")
             XCTFail("expected 412")
         } catch {
-            XCTAssertEqual(error as? SyncError, .preconditionFailed("TodoTim/index.json"))
+            XCTAssertEqual(error as? SyncError, .preconditionFailed("calendars/tim/work/a.ics"))
         }
     }
 
-    func testMkcolTreats405AsSuccessAndGetReturnsETag() async throws {
-        StubURLProtocol.handler = { _ in (405, [:], Data()) }
-        let client = try makeClient()
-        try await client.makeCollection("TodoTim")
-        XCTAssertEqual(StubURLProtocol.requests.last?.httpMethod, "MKCOL")
-
-        StubURLProtocol.handler = { _ in (200, ["ETag": "\"e1\""], Data("hi".utf8)) }
-        let file = try await client.get("TodoTim/index.json")
-        XCTAssertEqual(String(data: file.data, encoding: .utf8), "hi")
-        XCTAssertEqual(file.etag, "\"e1\"")
-        XCTAssertNil(file.modified)
-
+    func testProppatchFailureIsReported() async throws {
         StubURLProtocol.handler = { _ in
-            (200, ["ETag": "\"e2-gzip\"", "Last-Modified": "Sat, 24 Oct 2026 18:20:05 GMT",
-                   "Date": "Sat, 24 Oct 2026 18:20:06 GMT"], Data("hi".utf8))
+            (207, [:], Data("""
+            <d:multistatus xmlns:d="DAV:"><d:response><d:href>/remote.php/dav/calendars/tim/w/</d:href>
+            <d:propstat><d:prop><d:displayname/></d:prop><d:status>HTTP/1.1 403 Forbidden</d:status></d:propstat></d:response></d:multistatus>
+            """.utf8))
         }
-        let dated = try await client.get("TodoTim/index.json")
-        XCTAssertEqual(dated.etag, "\"e2\"")
-        XCTAssertEqual(dated.modified, Date(timeIntervalSince1970: 1_792_866_005))
-        XCTAssertEqual(dated.serverDate, Date(timeIntervalSince1970: 1_792_866_006))
-
-        StubURLProtocol.handler = { _ in (401, [:], Data()) }
+        let caldav = CalDAVClient(dav: try makeClient(), username: "tim")
         do {
-            _ = try await client.list("")
-            XCTFail("expected 401")
+            try await caldav.setProperties("calendars/tim/w", [.name: "x"])
+            XCTFail("expected failure")
         } catch {
-            XCTAssertEqual((error as? SyncError)?.errorDescription, "Wrong username or app password")
+            XCTAssertEqual(error as? SyncError, .http(status: 424, path: "calendars/tim/w"))
         }
+        let body = try XCTUnwrap(StubURLProtocol.requests.first.flatMap(Self.body))
+        XCTAssertTrue(body.contains("<x:displayname xmlns:x=\"DAV:\">x</x:displayname>"), body)
+    }
+
+    /// URLProtocol may see the body as a stream.
+    static func body(_ req: URLRequest) -> String? {
+        if let data = req.httpBody { return String(decoding: data, as: UTF8.self) }
+        guard let stream = req.httpBodyStream else { return nil }
+        stream.open()
+        defer { stream.close() }
+        var data = Data()
+        var buffer = [UInt8](repeating: 0, count: 4096)
+        while stream.hasBytesAvailable {
+            let n = stream.read(&buffer, maxLength: buffer.count)
+            if n <= 0 { break }
+            data.append(buffer, count: n)
+        }
+        return String(decoding: data, as: UTF8.self)
     }
 }
 
@@ -328,45 +362,5 @@ final class ETagNormalizationTests: XCTestCase {
         XCTAssertEqual(WebDAVClient.normalizeETag("abc"), "\"abc\"")
         XCTAssertNil(WebDAVClient.normalizeETag(""))
         XCTAssertNil(WebDAVClient.normalizeETag(nil))
-    }
-}
-
-final class WebDAVListingDateTests: XCTestCase {
-    override func tearDown() {
-        StubURLProtocol.handler = nil
-        StubURLProtocol.requests = []
-        super.tearDown()
-    }
-
-    func testPropfindAsksForSizeAndTimeAndReportsServerDate() async throws {
-        StubURLProtocol.handler = { _ in
-            let body = nextcloudPropfind.replacingOccurrences(of: "tim%20v", with: "tim")
-            return (207, ["Date": "Sat, 24 Oct 2026 18:20:06 GMT"], Data(body.utf8))
-        }
-        let config = URLSessionConfiguration.ephemeral
-        config.protocolClasses = [StubURLProtocol.self]
-        let client = try WebDAVClient(serverURL: "https://cloud.example.com/remote.php/dav/files/tim/",
-                                      username: "tim", password: "pw", session: URLSession(configuration: config))
-        let listing = try await client.listing("To Do")
-        XCTAssertEqual(listing.serverDate, Date(timeIntervalSince1970: 1_792_866_006))
-        XCTAssertEqual(listing.items.first?.size, 1234)
-        let body = try XCTUnwrap(StubURLProtocol.requests.first.flatMap(Self.body))
-        XCTAssertTrue(body.contains("getcontentlength") && body.contains("getlastmodified") && body.contains("getetag"), body)
-    }
-
-    /// URLProtocol sees the body as a stream.
-    static func body(_ req: URLRequest) -> String? {
-        if let data = req.httpBody { return String(decoding: data, as: UTF8.self) }
-        guard let stream = req.httpBodyStream else { return nil }
-        stream.open()
-        defer { stream.close() }
-        var data = Data()
-        var buffer = [UInt8](repeating: 0, count: 4096)
-        while stream.hasBytesAvailable {
-            let n = stream.read(&buffer, maxLength: buffer.count)
-            if n <= 0 { break }
-            data.append(buffer, count: n)
-        }
-        return String(decoding: data, as: UTF8.self)
     }
 }

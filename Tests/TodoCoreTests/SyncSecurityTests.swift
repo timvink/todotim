@@ -4,7 +4,6 @@ import XCTest
 /// Remote data validation and resource limits.
 @MainActor
 final class SyncSecurityTests: XCTestCase {
-    let folder = "TodoTim"
     let now = Date()
 
     func testEntityIDValidation() {
@@ -16,38 +15,6 @@ final class SyncSecurityTests: XCTestCase {
         }
     }
 
-    func testInvalidRemoteEntitiesAreDroppedAndCounted() async throws {
-        let remote = InMemoryRemoteStorage()
-        let date = Date(timeIntervalSince1970: 1_700_000_000)
-        let index = IndexFile(schemaVersion: 1, projects: [
-            Project(id: "inbox", name: "Inbox", order: 0, isInbox: true, updatedAt: date),
-            Project(id: "../../outside", name: "Evil", order: 1, updatedAt: date),
-        ], labels: [Label(id: "l/1", name: "x", order: 0, updatedAt: date)])
-        let pf = ProjectFile(schemaVersion: 1, projectId: "inbox", sections: [
-            Section(id: "s1", projectId: "../x", name: "S", order: 0, updatedAt: date),
-        ], tasks: [
-            TodoTask(id: "ok", projectId: "inbox", content: "fine", order: 0, updatedAt: date),
-            TodoTask(id: "t2", projectId: "../../outside", content: "evil", order: 1, updatedAt: date),
-            TodoTask(id: "t3", projectId: "inbox", parentId: "a/b", content: "evil", order: 2, updatedAt: date),
-        ])
-        await remote.write("TodoTim/index.json", try JSONCoding.encoder.encode(index))
-        await remote.write("TodoTim/projects/inbox.json", try JSONCoding.encoder.encode(pf))
-        // A file not named after a valid id is ignored entirely.
-        await remote.write("TodoTim/projects/a.b.json", try JSONCoding.encoder.encode(pf))
-        try await remote.makeCollection("TodoTim")
-        try await remote.makeCollection("TodoTim/projects")
-
-        let result = try await SyncEngine.sync(local: Database(), storage: remote, folder: folder, now: { self.now })
-        XCTAssertEqual(result.droppedRemoteEntities, 5)
-        XCTAssertEqual(Set(result.merged.tasks.keys), ["ok"])
-        XCTAssertEqual(Set(result.merged.projects.keys), ["inbox"])
-        XCTAssertTrue(result.merged.labels.isEmpty && result.merged.sections.isEmpty)
-        let puts = await remote.putPaths
-        XCTAssertFalse(puts.contains { $0.contains("..") || $0.contains("outside") }, "\(puts)")
-        let ignored = await remote.data("TodoTim/projects/a.b.json")
-        XCTAssertNotNil(ignored, "invalid file names are never deleted either")
-    }
-
     func testLongTextIsTruncatedDeterministically() {
         var db = Database()
         var t = TodoTask(id: "t", projectId: "inbox", content: String(repeating: "é", count: 20_000), order: 0)
@@ -56,14 +23,14 @@ final class SyncSecurityTests: XCTestCase {
         t.due = DueDate(date: String(repeating: "9", count: 100))
         db.tasks["t"] = t
         let updatedAt = t.updatedAt
-        let merged = SyncEngine.merge([db], now: now)
+        let merged = lwwMerge([db], now: now)
         let out = merged.tasks["t"]!
         XCTAssertEqual(out.content.count, SyncLimits.maxContentLength)
         XCTAssertEqual(out.description.count, SyncLimits.maxDescriptionLength)
         XCTAssertEqual(out.labels.count, SyncLimits.maxLabelsPerTask)
         XCTAssertNil(out.due)
         XCTAssertEqual(out.updatedAt, updatedAt)
-        XCTAssertEqual(SyncEngine.merge([merged], now: now), merged, "idempotent")
+        XCTAssertEqual(lwwMerge([merged], now: now), merged, "idempotent")
     }
 
     func testDeepHierarchyIsCapped() {
@@ -73,7 +40,7 @@ final class SyncSecurityTests: XCTestCase {
             db.tasks["t\(i)"] = TodoTask(id: "t\(i)", projectId: "inbox", parentId: i == 0 ? nil : "t\(i - 1)",
                                          content: "\(i)", order: Double(i), updatedAt: now)
         }
-        let merged = SyncEngine.merge([db], now: now)
+        let merged = lwwMerge([db], now: now)
         // Depth of each task in the result.
         func depth(_ id: EntityID) -> Int {
             var d = 0, cur = id
@@ -87,23 +54,7 @@ final class SyncSecurityTests: XCTestCase {
         XCTAssertEqual(merged.tasks["t32"]?.parentId, "t31")
         XCTAssertEqual(merged.tasks["t34"]?.parentId, "t33")
         XCTAssertTrue(merged.tasks.values.allSatisfy { $0.updatedAt == now })
-        XCTAssertEqual(SyncEngine.merge([merged], now: now), merged, "idempotent")
-    }
-
-    func testCacheForgetsFilesRemovedRemotely() async throws {
-        let remote = InMemoryRemoteStorage()
-        let cache = RemoteFileCache()
-        let store = TodoStore()
-        let p = store.addProject(name: "P")
-        store.addTask(content: "x", projectId: p.id)
-        let path = "TodoTim/projects/\(p.id).json"
-        _ = try await SyncEngine.sync(local: store.db, storage: remote, folder: folder, cache: cache)
-        let before = await cache.cachedPaths
-        XCTAssertTrue(before.contains(path))
-        try await remote.delete(path, ifMatch: nil)
-        _ = try await SyncEngine.download(storage: remote, folder: folder, cache: cache)
-        let after = await cache.cachedPaths
-        XCTAssertFalse(after.contains(path))
+        XCTAssertEqual(lwwMerge([merged], now: now), merged, "idempotent")
     }
 }
 

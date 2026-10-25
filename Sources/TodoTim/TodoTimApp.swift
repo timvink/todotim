@@ -88,8 +88,13 @@ final class AppServices {
                 startupError = [startupError, message].compactMap { $0 }.joined(separator: "\n\n")
             }
         }
+        if let ignored = config?.ignoredKeys, !ignored.isEmpty {
+            NSLog("TodoTim: \(configURL.path): ignoring \(ignored.joined(separator: ", ")) (no longer used; sync uses CalDAV)")
+        }
+        // The CalDAV sync state sits next to the database it describes.
         sync = SyncController(store: store, defaults: defaults, credentials: KeychainCredentialStore(),
-                              config: config, configPath: configURL.path)
+                              config: config, configPath: configURL.path,
+                              stateURL: url.deletingLastPathComponent().appendingPathComponent("caldav-state.json"))
         model = AppModel(store: store, sync: sync, defaults: defaults)
         model.startupError = startupError
         // Only https links are opened from the Help menu.
@@ -108,6 +113,7 @@ final class AppServices {
             guard let self else { return }
             self.writer?.save(self.store.db)
         }
+        sync.flushDatabase = { [weak self] in self?.writer?.flush() }
     }
 
     /// Commits pending edits and writes the database synchronously (on quit).

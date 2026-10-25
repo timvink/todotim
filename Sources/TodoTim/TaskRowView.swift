@@ -261,6 +261,9 @@ struct TaskMetaRow: View {
                     HStack(spacing: 3) {
                         Image(systemName: "calendar").font(.system(size: 10))
                         Text(due.displayString())
+                        if let rule = task.recurrence {
+                            Image(systemName: "repeat").font(.system(size: 10)).help(Recurrence.summary(rule))
+                        }
                     }
                     .foregroundStyle(task.isCompleted ? .secondary : due.chipColor)
                 }

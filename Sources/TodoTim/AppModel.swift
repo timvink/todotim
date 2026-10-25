@@ -300,6 +300,16 @@ final class AppModel {
             store.toggleComplete(id)
             return
         }
+        if let rule = t.recurrence, Recurrence.advance(rule, from: t.due ?? DueDate(Date())) != nil {
+            // A repeating task moves to its next date instead.
+            store.toggleComplete(id)
+            let restore: () -> Void = { [weak self] in
+                self?.store.updateTask(id) { $0.due = t.due; $0.recurrence = t.recurrence }
+            }
+            registerUndo("Complete Task", restore)
+            showToast("Next due \(store.task(id)?.due?.displayString() ?? "date set")", undo: restore)
+            return
+        }
         let affected = ([id] + store.descendantIDs(of: id)).filter { store.task($0)?.isCompleted == false }
         if selectedTaskID == id, !showsCompleted(t.projectId) { selectedTaskID = neighbor(of: id) }
         store.toggleComplete(id)

@@ -1,90 +1,21 @@
 import Foundation
 
-/// `index.json` in the sync folder.
-public struct IndexFile: Codable, Equatable, Sendable {
-    public var schemaVersion: Int
-    public var projects: [Project]
-    public var labels: [Label]
-}
-
-/// `projects/<projectId>.json` in the sync folder.
-public struct ProjectFile: Codable, Equatable, Sendable {
-    public var schemaVersion: Int
-    public var projectId: EntityID
-    public var sections: [Section]
-    public var tasks: [TodoTask]
-}
-
-/// A downloaded remote file.
-public struct RemoteFile: Equatable, Sendable {
-    public var data: Data
-    public var etag: String?
-    /// Last modification time (server clock, whole seconds), if known.
-    public var modified: Date?
-    /// Server clock when this version was observed (Date header of the GET or listing), if known.
-    public var serverDate: Date?
-    public init(data: Data, etag: String?, modified: Date? = nil, serverDate: Date? = nil) {
-        self.data = data; self.etag = etag; self.modified = modified; self.serverDate = serverDate
-    }
-}
-
-/// The remote state as downloaded. Paths are relative to the sync folder.
-public struct RemoteSnapshot: Equatable, Sendable {
-    public var index: RemoteFile?
-    /// Keyed by project id (file name without ".json").
-    public var projectFiles: [EntityID: RemoteFile]
-    public init(index: RemoteFile? = nil, projectFiles: [EntityID: RemoteFile] = [:]) {
-        self.index = index; self.projectFiles = projectFiles
-    }
-}
-
-/// What a sync should do, computed without any I/O.
-public struct SyncPlan: Equatable, Sendable {
-    public enum Operation: Equatable, Sendable {
-        /// Path relative to the sync folder.
-        case put(path: String, data: Data, condition: PutCondition)
-        case delete(path: String, ifMatch: String?)
-
-        public var path: String {
-            switch self { case .put(let p, _, _), .delete(let p, _): return p }
-        }
-    }
-
-    /// The merged state; becomes the local database.
-    public var merged: Database
-    /// In execution order: project files, then index.json, then deletions.
-    /// Project files may be uploaded concurrently; index.json follows them, deletions run last.
-    public var operations: [Operation]
-    /// Decoded contents of each uploaded file, so the next sync need not decode its own uploads.
-    var uploadedContents: [String: DecodedFile] = [:]
-    /// Remote entities dropped as invalid (see `SyncResult.droppedRemoteEntities`).
-    public var droppedRemoteEntities: Int = 0
-
-    public var uploads: [String] { operations.compactMap { if case .put(let p, _, _) = $0 { p } else { nil } } }
-    public var deletions: [String] { operations.compactMap { if case .delete(let p, _) = $0 { p } else { nil } } }
-}
-
-public struct SyncResult: Equatable, Sendable {
-    public var merged: Database
-    public var uploaded: [String]
-    public var deleted: [String]
-    /// Remote entities ignored because their id or a reference was not a valid id
-    /// (see `isValidEntityID`). They are removed from the server by this sync's uploads.
-    public var droppedRemoteEntities: Int = 0
-}
-
 /// Bounds on remote data, so a broken or hostile server cannot exhaust memory or stack.
 public enum SyncLimits {
     /// Per HTTP response body, enforced while streaming.
     public static let maxResponseBytes = 32 * 1024 * 1024
-    /// Entries in one PROPFIND listing.
+    /// Entries in one PROPFIND or REPORT response.
     public static let maxListingEntries = 10_000
-    /// Files in `projects/`.
-    public static let maxProjectFiles = 10_000
-    /// Total size of the files that make up one remote snapshot.
-    public static let maxSnapshotBytes = 256 * 1024 * 1024
-    /// Projects + labels + sections + tasks in one remote snapshot.
+    /// Tasks in one calendar, and calendars in the home.
+    public static let maxTasks = 50_000
+    public static let maxCalendars = 1_000
+    /// Projects + labels + sections + tasks synced.
     public static let maxEntities = 200_000
+    /// Entries in a sections or labels property, and its size in bytes.
+    public static let maxPropertyEntries = 5_000
+    public static let maxPropertyBytes = 1 << 20
+    /// Largest Todoist snapshot file imported.
+    public static let maxSnapshotBytes = 256 * 1024 * 1024
     /// Text limits in characters; longer remote values are truncated.
     public static let maxContentLength = 10_000
     public static let maxDescriptionLength = 100_000
@@ -96,48 +27,24 @@ public enum SyncLimits {
     public static let maxTaskDepth = 32
 }
 
-/// Merge rules from AGENTS.md: every entity is merged globally by id (newer `updatedAt` wins,
-/// on a tie the tombstone wins), then re-partitioned by `projectId`.
+/// Database-level rules shared by sync (`CalDAVSync`) and its tests: last-writer-wins between
+/// two versions of an entity, validation of remote data, tombstone purging and the structural
+/// repair that makes any merged state a valid tree.
 public enum SyncEngine {
-    public static let schemaVersion = 1
     public static let tombstoneLifetime: TimeInterval = 30 * 24 * 3600
-    public static let indexPath = "index.json"
-    public static let projectsDir = "projects"
 
-    public static func projectPath(_ id: EntityID) -> String { "\(projectsDir)/\(id).json" }
-
-    // MARK: - Merge
-
-    /// Merges databases entity by entity (last-writer-wins) and normalizes the result
-    /// (purges old tombstones, drops contents of deleted projects, repairs the task hierarchy;
-    /// see `repairStructure`).
-    /// When versions are equivalent, the earlier database's copy is kept.
-    public static func merge(_ dbs: [Database], now: Date = Date()) -> Database {
-        var out = Database()
-        for db in dbs {
-            mergeInto(&out.projects, db.projects.values)
-            mergeInto(&out.sections, db.sections.values)
-            mergeInto(&out.tasks, db.tasks.values)
-            mergeInto(&out.labels, db.labels.values)
-        }
+    /// Normalizes a merged database: validates it (`sanitize`), purges old tombstones (except
+    /// those in `keepTombstones`, whose server delete is still pending) and repairs the task
+    /// hierarchy (`repairStructure`).
+    public static func clean(_ db: Database, now: Date = Date(), keepTombstones: Set<EntityID> = []) -> Database {
+        var out = db
         sanitize(&out)
-        var result = normalize(out, now: now)
-        repairStructure(&result)
-        return result
+        out = normalize(out, now: now, keep: keepTombstones)
+        repairStructure(&out)
+        return out
     }
 
-    static func mergeInto<T: SyncEntity>(_ dict: inout [EntityID: T], _ items: some Sequence<T>) {
-        for item in items {
-            if let existing = dict[item.id] {
-                dict[item.id] = winner(existing, item)
-            } else {
-                dict[item.id] = item
-            }
-        }
-    }
-
-    /// Timestamps are compared at millisecond precision, which is what the JSON files store,
-    /// so a local copy and its own round-tripped remote copy count as the same version.
+    /// Timestamps are compared at millisecond precision, which is what the database stores.
     static func millis(_ d: Date) -> Int64 { Int64((d.timeIntervalSince1970 * 1000).rounded()) }
 
     /// Last-writer-wins. Ties: deleted wins; otherwise `a` if equivalent, else a deterministic
@@ -155,11 +62,11 @@ public enum SyncEngine {
         return ea.lexicographicallyPrecedes(eb) ? b : a
     }
 
-    /// Purges tombstones older than `tombstoneLifetime` and removes sections/tasks of deleted
-    /// projects (the project tombstone in index.json stands for them).
-    public static func normalize(_ db: Database, now: Date = Date()) -> Database {
+    /// Purges tombstones older than `tombstoneLifetime` (except ids in `keep`) and removes
+    /// sections/tasks of deleted projects (deleting the calendar deletes them on the server).
+    static func normalize(_ db: Database, now: Date, keep ids: Set<EntityID>) -> Database {
         let cutoff = now.addingTimeInterval(-tombstoneLifetime)
-        func keep<T: SyncEntity>(_ e: T) -> Bool { !(e.deleted && e.updatedAt < cutoff) }
+        func keep<T: SyncEntity>(_ e: T) -> Bool { !(e.deleted && e.updatedAt < cutoff) || ids.contains(e.id) }
         var out = db
         let deletedProjects = Set(db.projects.values.filter(\.deleted).map(\.id))
         out.projects = db.projects.filter { keep($0.value) }
@@ -316,397 +223,30 @@ public enum SyncEngine {
         }
     }
 
-    // MARK: - Files
+    // MARK: - Rebase
 
-    static func decodeIndex(_ file: RemoteFile) throws -> IndexFile {
-        try decode(IndexFile.self, file.data, path: indexPath, version: \.schemaVersion)
-    }
-
-    static func decodeProject(_ file: RemoteFile, id: EntityID) throws -> ProjectFile {
-        try decode(ProjectFile.self, file.data, path: projectPath(id), version: \.schemaVersion)
-    }
-
-    private struct VersionProbe: Decodable { var schemaVersion: Int? }
-
-    private static func decode<T: Decodable>(_ type: T.Type, _ data: Data, path: String, version: KeyPath<T, Int>) throws -> T {
-        if let probe = try? JSONDecoder().decode(VersionProbe.self, from: data),
-           let v = probe.schemaVersion, v > schemaVersion {
-            throw SyncError.newerSchema(path)
+    /// Combines a sync result with local edits made while it ran: an entity the user changed
+    /// since `snapshot` (the database the sync started from) keeps the local version, every
+    /// other entity takes `merged`'s. The edits are pushed by the next sync.
+    public static func rebase(latest: Database, snapshot: Database, merged: Database) -> Database {
+        func pick<T: Equatable>(_ l: [EntityID: T], _ s: [EntityID: T], _ m: [EntityID: T]) -> [EntityID: T] {
+            var out = m
+            for id in Set(l.keys).union(s.keys) where l[id] != s[id] { out[id] = l[id] }
+            return out
         }
-        do {
-            return try JSONCoding.decoder.decode(T.self, from: data)
-        } catch {
-            throw SyncError.badRemoteData(path: path, reason: describe(error))
-        }
-    }
-
-    private static func describe(_ error: Error) -> String {
-        switch error {
-        case DecodingError.dataCorrupted(let c): return c.debugDescription
-        case DecodingError.keyNotFound(let k, _): return "missing field “\(k.stringValue)”"
-        case DecodingError.typeMismatch(_, let c), DecodingError.valueNotFound(_, let c):
-            return "unexpected value at \(c.codingPath.map(\.stringValue).joined(separator: "."))"
-        default: return error.localizedDescription
-        }
-    }
-
-    /// Canonical contents of every remote file for a database, as values.
-    static func partitions(for db: Database) -> (index: IndexFile, projects: [EntityID: ProjectFile]) {
-        let index = IndexFile(schemaVersion: schemaVersion,
-                              projects: db.projects.values.sorted { $0.id < $1.id },
-                              labels: db.labels.values.sorted { $0.id < $1.id })
-        var sections: [EntityID: [Section]] = [:]
-        var tasks: [EntityID: [TodoTask]] = [:]
-        for s in db.sections.values { sections[s.projectId, default: []].append(s) }
-        for t in db.tasks.values { tasks[t.projectId, default: []].append(t) }
-        let ids = Set(db.projects.values.filter { !$0.deleted }.map(\.id))
-            .union(sections.keys).union(tasks.keys)
-        var projects: [EntityID: ProjectFile] = [:]
-        for id in ids {
-            projects[id] = ProjectFile(schemaVersion: schemaVersion, projectId: id,
-                                       sections: (sections[id] ?? []).sorted { $0.id < $1.id },
-                                       tasks: (tasks[id] ?? []).sorted { $0.id < $1.id })
-        }
-        return (index, projects)
-    }
-
-    /// Canonical file contents for a database: path (relative to the sync folder) → bytes.
-    public static func files(for db: Database) throws -> [String: Data] {
-        let enc = JSONCoding.encoder
-        let (index, projects) = partitions(for: db)
-        var out: [String: Data] = [indexPath: try enc.encode(index)]
-        for (id, file) in projects { out[projectPath(id)] = try enc.encode(file) }
+        var out = Database()
+        out.projects = pick(latest.projects, snapshot.projects, merged.projects)
+        out.sections = pick(latest.sections, snapshot.sections, merged.sections)
+        out.tasks = pick(latest.tasks, snapshot.tasks, merged.tasks)
+        out.labels = pick(latest.labels, snapshot.labels, merged.labels)
+        repairStructure(&out)
         return out
     }
 
-    // MARK: - Plan
+    // MARK: - Concurrency
 
-    /// Decoded remote files, keyed like `RemoteSnapshot`.
-    struct DecodedRemote: Sendable {
-        var index: IndexFile?
-        var projects: [EntityID: ProjectFile] = [:]
-
-        /// Throws when the files hold more than `SyncLimits.maxEntities` entities.
-        func database() throws -> Database {
-            var count = (index?.projects.count ?? 0) + (index?.labels.count ?? 0)
-            for pf in projects.values { count += pf.sections.count + pf.tasks.count }
-            guard count <= SyncLimits.maxEntities else {
-                throw SyncError.limitExceeded("more than \(SyncLimits.maxEntities) entries")
-            }
-            var db = Database()
-            if let index {
-                mergeInto(&db.projects, index.projects)
-                mergeInto(&db.labels, index.labels)
-            }
-            for (_, pf) in projects.sorted(by: { $0.key < $1.key }) {
-                mergeInto(&db.sections, pf.sections)
-                mergeInto(&db.tasks, pf.tasks)
-            }
-            return db
-        }
-    }
-
-    static func decodeAll(_ remote: RemoteSnapshot) throws -> DecodedRemote {
-        var out = DecodedRemote()
-        out.index = try remote.index.map(decodeIndex)
-        for (id, file) in remote.projectFiles { out.projects[id] = try decodeProject(file, id: id) }
-        return out
-    }
-
-    /// Merges local state with the remote snapshot and lists the writes needed so that the
-    /// remote matches the merged state. Files whose canonical bytes are unchanged are skipped.
-    public static func plan(local: Database, remote: RemoteSnapshot, now: Date = Date()) throws -> SyncPlan {
-        try plan(local: local, remote: remote, decoded: try decodeAll(remote), now: now)
-    }
-
-    /// `decoded` must be the decoded form of `remote`. A partition whose merged content equals the
-    /// decoded remote file is skipped without encoding it.
-    static func plan(local: Database, remote: RemoteSnapshot, decoded: DecodedRemote, now: Date) throws -> SyncPlan {
-        var remoteDB = try decoded.database()
-        let dropped = sanitize(&remoteDB)
-        let merged = merge([local, remoteDB], now: now)
-        let (targetIndex, targetProjects) = partitions(for: merged)
-        let enc = JSONCoding.encoder
-
-        func condition(_ existing: RemoteFile?) -> PutCondition {
-            guard let existing else { return .ifNoneMatch }
-            return existing.etag.map { .ifMatch($0) } ?? .none
-        }
-
-        var plan = SyncPlan(merged: merged, operations: [])
-        plan.droppedRemoteEntities = dropped
-        for id in targetProjects.keys.sorted() {
-            let target = targetProjects[id]!
-            let existing = remote.projectFiles[id]
-            if existing != nil, decoded.projects[id] == target { continue }
-            let data = try enc.encode(target)
-            if existing?.data == data { continue }
-            let path = projectPath(id)
-            plan.operations.append(.put(path: path, data: data, condition: condition(existing)))
-            plan.uploadedContents[path] = .project(target)
-        }
-        if remote.index == nil || decoded.index != targetIndex {
-            let data = try enc.encode(targetIndex)
-            if remote.index?.data != data {
-                plan.operations.append(.put(path: indexPath, data: data, condition: condition(remote.index)))
-                plan.uploadedContents[indexPath] = .index(targetIndex)
-            }
-        }
-        // Deleting a project file is safe only after index.json holds the project tombstone,
-        // so deletions run last.
-        for id in remote.projectFiles.keys.sorted() where targetProjects[id] == nil {
-            plan.operations.append(.delete(path: projectPath(id), ifMatch: remote.projectFiles[id]?.etag))
-        }
-        return plan
-    }
-
-    // MARK: - Run
-
-    /// Concurrent requests for downloads and project-file uploads.
-    public static let maxConcurrentRequests = 4
-
-    /// Full sync against `storage`: download, merge, upload changed files. On a 412 (another
-    /// device wrote in between) the whole sync is retried, up to `maxAttempts` times.
-    /// Each file is written at most once per attempt (`plan` emits one operation per path).
-    public static func sync(local: Database, storage: RemoteStorage, folder: String,
-                            cache: RemoteFileCache? = nil, now: @Sendable () -> Date = { Date() },
-                            maxAttempts: Int = 3) async throws -> SyncResult {
-        try await sync(local: local, storage: storage, folder: folder, cache: cache, now: now,
-                       maxAttempts: maxAttempts, sleep: defaultSleep, settleFreshFiles: true)
-    }
-
-    static let defaultSleep: @Sendable (TimeInterval) async throws -> Void = { try await Task.sleep(for: .seconds($0)) }
-
-    /// `sleep` waits for the given number of seconds (tests advance a fake server clock).
-    /// `settleFreshFiles: false` disables the same-second guard (tests only, to show what it prevents).
-    static func sync(local: Database, storage: RemoteStorage, folder: String, cache: RemoteFileCache?,
-                     now: @Sendable () -> Date, maxAttempts: Int,
-                     sleep: @escaping @Sendable (TimeInterval) async throws -> Void,
-                     settleFreshFiles: Bool) async throws -> SyncResult {
-        for attempt in 1...maxAttempts {
-            do {
-                let snapshot = try await download(storage: storage, folder: folder, cache: cache)
-                let decoded = try await decode(snapshot, folder: folder, cache: cache)
-                let plan = try plan(local: local, remote: snapshot, decoded: decoded, now: now())
-                try await execute(plan, snapshot: snapshot, storage: storage, folder: folder, cache: cache,
-                                  settle: settleFreshFiles ? sleep : nil)
-                return SyncResult(merged: plan.merged, uploaded: plan.uploads, deleted: plan.deletions,
-                                  droppedRemoteEntities: plan.droppedRemoteEntities)
-            } catch SyncError.preconditionFailed where attempt < maxAttempts {
-                continue
-            } catch SyncError.preconditionFailed {
-                throw SyncError.tooManyConflicts
-            }
-        }
-        throw SyncError.tooManyConflicts
-    }
-
-    /// Decodes the snapshot, reusing decoded files from `cache` when their ETag is unchanged.
-    static func decode(_ snapshot: RemoteSnapshot, folder: String, cache: RemoteFileCache?) async throws -> DecodedRemote {
-        var out = DecodedRemote()
-        if let file = snapshot.index {
-            let full = joinPath(folder, indexPath)
-            if case .index(let cached)? = await cache?.decoded(at: full, for: file) {
-                out.index = cached
-            } else {
-                let index = try decodeIndex(file)
-                out.index = index
-                await cache?.storeDecoded(.index(index), at: full, for: file)
-            }
-        }
-        var misses: [(EntityID, RemoteFile)] = []
-        for (id, file) in snapshot.projectFiles {
-            if case .project(let cached)? = await cache?.decoded(at: joinPath(folder, projectPath(id)), for: file) {
-                out.projects[id] = cached
-            } else {
-                misses.append((id, file))
-            }
-        }
-        // Decoding is CPU-bound; spread cold-cache decodes over a few tasks.
-        let decodedMisses = try await forEachConcurrently(misses, limit: maxConcurrentRequests) { entry in
-            (entry.0, try decodeProject(entry.1, id: entry.0))
-        }
-        for (id, pf) in decodedMisses {
-            out.projects[id] = pf
-            if let file = snapshot.projectFiles[id] {
-                await cache?.storeDecoded(.project(pf), at: joinPath(folder, projectPath(id)), for: file)
-            }
-        }
-        return out
-    }
-
-    /// Downloads index.json and all project files, creating the folder structure if missing.
-    /// Up to `maxConcurrentRequests` files are fetched at once.
-    public static func download(storage: RemoteStorage, folder: String, cache: RemoteFileCache? = nil) async throws -> RemoteSnapshot {
-        let projectsFolder = joinPath(folder, projectsDir)
-        let top: RemoteListing
-        do {
-            top = try await storage.listing(folder)
-        } catch SyncError.notFound {
-            try await ensureFolders(storage: storage, folder: folder)
-            return RemoteSnapshot()
-        }
-        var snapshot = RemoteSnapshot()
-        let indexFull = joinPath(folder, indexPath)
-        var items: [(key: EntityID?, item: RemoteItem, serverDate: Date?)] = []
-        if let item = top.items.first(where: { $0.path == indexFull && !$0.isCollection }) {
-            items.append((nil, item, top.serverDate))
-        }
-        if top.items.contains(where: { $0.path == projectsFolder && $0.isCollection }) {
-            let projects = try await storage.listing(projectsFolder)
-            for item in projects.items where !item.isCollection && item.name.hasSuffix(".json") {
-                // Files not named after a valid id are ignored (never read, written or deleted).
-                let id = String(item.name.dropLast(5))
-                guard isValidEntityID(id) else { continue }
-                items.append((id, item, projects.serverDate))
-            }
-            guard items.count <= SyncLimits.maxProjectFiles + 1 else {
-                throw SyncError.limitExceeded("more than \(SyncLimits.maxProjectFiles) project files")
-            }
-        } else {
-            try await storage.makeCollection(projectsFolder)
-        }
-        // Cached files of the folder that are no longer listed are forgotten.
-        await cache?.retain(Set(items.map(\.item.path)), under: folder)
-        let fetched = try await forEachConcurrently(items, limit: maxConcurrentRequests) { entry in
-            (entry.key, try await fetch(entry.item, serverDate: entry.serverDate, storage: storage, cache: cache))
-        }
-        let totalBytes = fetched.reduce(0) { $0 + ($1.1?.data.count ?? 0) }
-        guard totalBytes <= SyncLimits.maxSnapshotBytes else {
-            throw SyncError.limitExceeded("more than \(SyncLimits.maxSnapshotBytes / 1024 / 1024) MB of files")
-        }
-        for (key, file) in fetched {
-            guard let file else { continue }
-            if let key { snapshot.projectFiles[key] = file } else { snapshot.index = file }
-        }
-        return snapshot
-    }
-
-    /// Creates `folder` (and its parents) and `folder/projects`. Existing ones are fine.
-    public static func ensureFolders(storage: RemoteStorage, folder: String) async throws {
-        var current = ""
-        for part in folder.split(separator: "/") {
-            current = joinPath(current, String(part))
-            try await storage.makeCollection(current)
-        }
-        try await storage.makeCollection(joinPath(folder, projectsDir))
-    }
-
-    /// Downloads `item`, or takes it from `cache` when ETag, size and modification time match the
-    /// listing. `serverDate` is the server clock of the listing.
-    private static func fetch(_ item: RemoteItem, serverDate: Date?, storage: RemoteStorage,
-                              cache: RemoteFileCache?) async throws -> RemoteFile? {
-        if let cache, var hit = await cache.file(at: item.path, matching: item) {
-            hit.modified = item.modified
-            hit.serverDate = serverDate
-            return hit
-        }
-        do {
-            var file = try await storage.get(item.path)
-            let listedVersion = file.etag == nil || item.etag.map { RemoteFileCache.same($0, file.etag!) } == true
-            if file.etag == nil { file.etag = item.etag }
-            if file.modified == nil, listedVersion { file.modified = item.modified }
-            // The listing is older than the GET, so its clock only makes the file look fresher.
-            if file.serverDate == nil { file.serverDate = serverDate }
-            // A file written in the last seconds may still be replaced without a new ETag (see
-            // `settleInterval`), so its content is not cached; the next sync downloads it again.
-            if isSettled(file) { await cache?.store(file, at: item.path) }
-            return file
-        } catch SyncError.notFound {
-            return nil  // deleted between listing and download
-        }
-    }
-
-    // MARK: - Same-second writes
-
-    /// Nextcloud keeps a file's ETag when the file is rewritten within the same second as the
-    /// previous write (modification times have whole-second precision). Until the server clock
-    /// has moved on, an `If-Match` with the old ETag still succeeds although the content changed,
-    /// which would silently overwrite the other write. A version counts as settled once the
-    /// server clock (Date header) is this many seconds past its modification time: one second for
-    /// the write's own second, and one for skew between the Date header and file times.
-    static let settleInterval: TimeInterval = 2
-
-    /// Whether `file` can no longer change without a new ETag. True when the server reports no
-    /// modification time or clock (nothing to check against).
-    static func isSettled(_ file: RemoteFile) -> Bool {
-        guard let modified = file.modified, let serverDate = file.serverDate else { return true }
-        return serverDate.timeIntervalSince(modified) >= settleInterval
-    }
-
-    /// Before overwriting or deleting `file`, waits until it is settled and downloads it again.
-    /// Content or ETag differences mean another device wrote within that second: the write is
-    /// treated as a conflict (`preconditionFailed`, which retries the sync). Once settled, any
-    /// later write gets a new modification second and hence a new ETag, which `If-Match` catches.
-    static func settle(_ path: String, _ file: RemoteFile, storage: RemoteStorage,
-                       sleep: @Sendable (TimeInterval) async throws -> Void) async throws {
-        guard !isSettled(file), let modified = file.modified, let observed = file.serverDate else { return }
-        var delay = min(max(settleInterval - observed.timeIntervalSince(modified), 0.1), settleInterval + 1)
-        for _ in 0..<5 {
-            try await sleep(delay)
-            let current: RemoteFile
-            do {
-                current = try await storage.get(path)
-            } catch SyncError.notFound {
-                throw SyncError.preconditionFailed(path)
-            }
-            let sameETag = switch (current.etag, file.etag) {
-            case (nil, nil): true
-            case (let a?, let b?): RemoteFileCache.same(a, b)
-            default: false
-            }
-            guard sameETag, current.data == file.data else { throw SyncError.preconditionFailed(path) }
-            if isSettled(RemoteFile(data: Data(), etag: nil, modified: current.modified ?? modified,
-                                    serverDate: current.serverDate)) { return }
-            delay = 0.5  // the server clock has not moved on yet
-        }
-    }
-
-    /// Project files are uploaded concurrently; index.json only after all of them succeeded;
-    /// deletions only after index.json (which holds the project tombstones).
-    /// `settle` (a sleep function) enables the same-second guard for files in `snapshot`.
-    private static func execute(_ plan: SyncPlan, snapshot: RemoteSnapshot, storage: RemoteStorage, folder: String,
-                                cache: RemoteFileCache?,
-                                settle sleep: (@Sendable (TimeInterval) async throws -> Void)?) async throws {
-        var byPath: [String: RemoteFile] = [:]
-        if let index = snapshot.index { byPath[indexPath] = index }
-        for (id, file) in snapshot.projectFiles { byPath[projectPath(id)] = file }
-        let existing = byPath
-        let projectPuts = plan.operations.filter { if case .put = $0 { return $0.path != indexPath } else { return false } }
-        let indexPut = plan.operations.filter { if case .put = $0 { return $0.path == indexPath } else { return false } }
-        let deletes = plan.operations.filter { if case .delete = $0 { return true } else { return false } }
-        let contents = plan.uploadedContents
-
-        @Sendable func run(_ op: SyncPlan.Operation) async throws {
-            let full = joinPath(folder, op.path)
-            if let sleep, let file = existing[op.path] {
-                try await settle(full, file, storage: storage, sleep: sleep)
-            }
-            switch op {
-            case .put(_, let data, let condition):
-                let etag = try await storage.put(full, data: data, condition: condition)
-                // `settle` made this write land in a later second than the version it replaces, so
-                // the returned ETag is new. The modification time is unknown (nil), so the next sync
-                // reuses this entry only if the listed ETag and size match. An unchanged ETag means
-                // the guard did not apply (no server clock); then the entry is dropped.
-                var etagChanged = true
-                if let etag, case .ifMatch(let previous) = condition { etagChanged = !RemoteFileCache.same(previous, etag) }
-                if let etag, etagChanged {
-                    let uploaded = RemoteFile(data: data, etag: etag)
-                    await cache?.store(uploaded, at: full)
-                    if let decoded = contents[op.path] { await cache?.storeDecoded(decoded, at: full, for: uploaded) }
-                } else {
-                    await cache?.remove(full)
-                }
-            case .delete(_, let ifMatch):
-                try await storage.delete(full, ifMatch: ifMatch)
-                await cache?.remove(full)
-            }
-        }
-        _ = try await forEachConcurrently(projectPuts, limit: maxConcurrentRequests) { try await run($0) }
-        for op in indexPut { try await run(op) }
-        _ = try await forEachConcurrently(deletes, limit: maxConcurrentRequests) { try await run($0) }
-    }
+    /// Concurrent requests for uploads.
+    static let maxConcurrentRequests = 4
 
     /// Runs `body` for every element with at most `limit` in flight; results in input order.
     /// The first error cancels the remaining work and is rethrown.
@@ -729,99 +269,5 @@ public enum SyncEngine {
             }
             return results.map { $0! }
         }
-    }
-}
-
-/// Decoded contents of a remote file.
-enum DecodedFile: Equatable, Sendable {
-    case index(IndexFile)
-    case project(ProjectFile)
-}
-
-/// Remembers downloaded files (and their decoded contents) so unchanged files are neither
-/// downloaded nor decoded again. An entry is reused only when the listing reports the same ETag,
-/// size and modification time (an entry without a modification time, from our own upload, matches
-/// on ETag and size).
-///
-/// Limit: a rewrite within the same second that keeps the size is invisible to all three (Nextcloud
-/// keeps the ETag, and the time has whole-second precision). Sync avoids producing such rewrites
-/// (`SyncEngine.settle`) and does not cache files fetched within `SyncEngine.settleInterval` of
-/// their last write, so only a writer without that guard can make an entry stale.
-public actor RemoteFileCache {
-    struct Version: Equatable, Sendable {
-        var etag: String
-        var size: Int
-        var modified: Date?
-
-        init?(_ file: RemoteFile) {
-            guard let etag = file.etag else { return nil }
-            self.etag = etag; size = file.data.count; modified = file.modified
-        }
-
-        /// nil arguments are unknown and match anything.
-        func matches(etag: String?, size: Int?, modified: Date?) -> Bool {
-            guard let etag, RemoteFileCache.same(self.etag, etag) else { return false }
-            if let size, size != self.size { return false }
-            if let modified, let mine = self.modified, mine != modified { return false }
-            return true
-        }
-    }
-
-    private var files: [String: (version: Version, data: Data)] = [:]
-    private var decodedFiles: [String: (version: Version, value: DecodedFile)] = [:]
-
-    public init() {}
-
-    /// The cached file for a listed item, without `modified`/`serverDate` (the caller sets them).
-    func file(at path: String, matching item: RemoteItem) -> RemoteFile? {
-        guard let f = files[path], f.version.matches(etag: item.etag, size: item.size, modified: item.modified) else { return nil }
-        return RemoteFile(data: f.data, etag: f.version.etag)
-    }
-
-    func decoded(at path: String, for file: RemoteFile) -> DecodedFile? {
-        guard let d = decodedFiles[path],
-              d.version.matches(etag: file.etag, size: file.data.count, modified: file.modified) else { return nil }
-        return d.value
-    }
-
-    /// Files without an ETag are not cached (and replace any older entry).
-    func store(_ file: RemoteFile, at path: String) {
-        guard let version = Version(file) else { return remove(path) }
-        files[path] = (version, file.data)
-        if let d = decodedFiles[path], d.version != version { decodedFiles[path] = nil }
-    }
-
-    /// Ignored for files without an ETag or written within the last seconds (see `SyncEngine.isSettled`).
-    func storeDecoded(_ value: DecodedFile, at path: String, for file: RemoteFile) {
-        guard SyncEngine.isSettled(file), let version = Version(file) else { return }
-        decodedFiles[path] = (version, value)
-    }
-
-    func remove(_ path: String) {
-        files[path] = nil
-        decodedFiles[path] = nil
-    }
-
-    public func clear() {
-        files = [:]
-        decodedFiles = [:]
-    }
-
-    /// Paths with a cached file or decoded file (tests, diagnostics).
-    var cachedPaths: Set<String> { Set(files.keys).union(decodedFiles.keys) }
-
-    /// Removes entries inside `folder` whose path is not in `paths`.
-    func retain(_ paths: Set<String>, under folder: String) {
-        let prefix = joinPath(folder).isEmpty ? "" : joinPath(folder) + "/"
-        for key in files.keys where key.hasPrefix(prefix) && !paths.contains(key) { files[key] = nil }
-        for key in decodedFiles.keys where key.hasPrefix(prefix) && !paths.contains(key) { decodedFiles[key] = nil }
-    }
-
-    /// ETags may differ only in weak prefix / quoting between PROPFIND and GET.
-    static func same(_ a: String, _ b: String) -> Bool { strip(a) == strip(b) }
-    private static func strip(_ s: String) -> String {
-        var s = s.trimmingCharacters(in: .whitespaces)
-        if s.hasPrefix("W/") { s.removeFirst(2) }
-        return s.trimmingCharacters(in: CharacterSet(charactersIn: "\""))
     }
 }

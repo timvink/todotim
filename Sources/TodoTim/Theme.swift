@@ -11,53 +11,15 @@ extension Color {
     }
 }
 
-/// Todoist's project/label color palette, keyed by lowercase name (stored in `Project.color`).
+/// SwiftUI/AppKit view of `ProjectColor`, the palette keyed by name (stored in `Project.color`).
 enum Palette {
-    struct Entry: Identifiable {
-        let key: String
-        let name: String
-        let hex: UInt32
-        var id: String { key }
-        var color: Color { Color(hex: hex) }
-    }
+    typealias Entry = ProjectColor.Entry
 
-    static let entries: [Entry] = [
-        Entry(key: "berry_red", name: "Berry Red", hex: 0xB8255F),
-        Entry(key: "red", name: "Red", hex: 0xDB4035),
-        Entry(key: "orange", name: "Orange", hex: 0xFF9933),
-        Entry(key: "yellow", name: "Yellow", hex: 0xFAD000),
-        Entry(key: "olive_green", name: "Olive Green", hex: 0xAFB83B),
-        Entry(key: "lime_green", name: "Lime Green", hex: 0x7ECC49),
-        Entry(key: "green", name: "Green", hex: 0x299438),
-        Entry(key: "mint_green", name: "Mint Green", hex: 0x6ACCBC),
-        Entry(key: "teal", name: "Teal", hex: 0x158FAD),
-        Entry(key: "sky_blue", name: "Sky Blue", hex: 0x14AAF5),
-        Entry(key: "light_blue", name: "Light Blue", hex: 0x96C3EB),
-        Entry(key: "blue", name: "Blue", hex: 0x4073FF),
-        Entry(key: "grape", name: "Grape", hex: 0x884DFF),
-        Entry(key: "violet", name: "Violet", hex: 0xAF38EB),
-        Entry(key: "lavender", name: "Lavender", hex: 0xEB96EB),
-        Entry(key: "magenta", name: "Magenta", hex: 0xE05194),
-        Entry(key: "salmon", name: "Salmon", hex: 0xFF8D85),
-        Entry(key: "charcoal", name: "Charcoal", hex: 0x808080),
-        Entry(key: "grey", name: "Grey", hex: 0xB8B8B8),
-        Entry(key: "taupe", name: "Taupe", hex: 0xCCAC93),
-    ]
+    static var entries: [Entry] { ProjectColor.entries }
 
-    /// Accepts "olive_green", "olive green", "olivegreen" and "mint" (Todoist's short names).
-    private static let byKey: [String: Entry] = Dictionary(uniqueKeysWithValues: entries.map { ($0.key, $0) })
+    static func entry(_ key: String) -> Entry { ProjectColor.entry(key) }
 
-    static func entry(_ key: String) -> Entry {
-        if let e = byKey[key] { return e }
-        let k = key.lowercased().replacingOccurrences(of: " ", with: "_")
-        if let e = entries.first(where: { $0.key == k }) { return e }
-        let squashed = k.replacingOccurrences(of: "_", with: "")
-        if let e = entries.first(where: { $0.key.replacingOccurrences(of: "_", with: "") == squashed }) { return e }
-        if k == "mint" { return entries.first { $0.key == "mint_green" }! }
-        return entries.first { $0.key == "charcoal" }!
-    }
-
-    static func color(_ key: String) -> Color { entry(key).color }
+    static func color(_ key: String) -> Color { Color(hex: entry(key).hex) }
 
     /// Non-template image so menus keep the color.
     static func swatch(_ key: String, size: CGFloat = 12) -> NSImage {
