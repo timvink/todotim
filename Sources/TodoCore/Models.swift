@@ -5,9 +5,9 @@ public typealias EntityID = String
 public func newID() -> EntityID { UUID().uuidString.lowercased() }
 
 /// Whether `id` is acceptable as an entity id or reference: 1–64 characters from
-/// `[A-Za-z0-9_-]`. Ids become remote file names (`projects/<id>.json`), so anything that could
-/// form a path (separators, dot segments, control characters) is rejected. App-created ids are
-/// lowercase UUIDs; the inbox is `inbox`.
+/// `[A-Za-z0-9_-]`. Ids become remote names (calendar `<id>/`, task `<id>.ics`; see
+/// `docs/caldav.md`), so anything that could form a path (separators, dot segments, control
+/// characters) is rejected. App-created ids are lowercase UUIDs; the inbox is `inbox`.
 public func isValidEntityID(_ id: String) -> Bool {
     let utf8 = id.utf8
     guard (1...64).contains(utf8.count) else { return false }
@@ -109,6 +109,9 @@ public struct TodoTask: SyncEntity {
     public var order: Double
     /// Whether subtasks are hidden in the list.
     public var collapsed: Bool
+    /// iCalendar RRULE value (e.g. "FREQ=WEEKLY;INTERVAL=2") of a repeating task, as synced from
+    /// CalDAV. Completing such a task moves its due date to the next occurrence (`Recurrence`).
+    public var recurrence: String?
     public var createdAt: Date
     public var updatedAt: Date
     public var deleted: Bool
@@ -117,12 +120,13 @@ public struct TodoTask: SyncEntity {
                 parentId: EntityID? = nil, content: String, description: String = "",
                 priority: Priority = .p4, due: DueDate? = nil, labels: [String] = [],
                 isCompleted: Bool = false, completedAt: Date? = nil, order: Double,
-                collapsed: Bool = false, createdAt: Date = Date(), updatedAt: Date = Date(),
-                deleted: Bool = false) {
+                collapsed: Bool = false, recurrence: String? = nil, createdAt: Date = Date(),
+                updatedAt: Date = Date(), deleted: Bool = false) {
         self.id = id; self.projectId = projectId; self.sectionId = sectionId; self.parentId = parentId
         self.content = content; self.description = description; self.priority = priority
         self.due = due; self.labels = labels; self.isCompleted = isCompleted
         self.completedAt = completedAt; self.order = order; self.collapsed = collapsed
+        self.recurrence = recurrence
         self.createdAt = createdAt; self.updatedAt = updatedAt; self.deleted = deleted
     }
 }

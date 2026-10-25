@@ -1,4 +1,3 @@
-import CryptoKit
 import Foundation
 
 public struct TodoistImportOptions: Equatable, Sendable {
@@ -103,20 +102,8 @@ public enum TodoistImport {
         return importer.report
     }
 
-    // MARK: - UUID v5
-
-    /// Fixed namespace for TodoTim's Todoist ids. Never change it: ids derived from it are stored.
+    /// Fixed namespace for TodoTim's Todoist ids (UUID v5). Never change it: ids derived from it are stored.
     static let namespace = UUID(uuidString: "5311d57f-6e3b-4629-900e-ab1e66711ea1")!
-
-    static func uuidV5(namespace: UUID, name: String) -> String {
-        var input = withUnsafeBytes(of: namespace.uuid) { Array($0) }
-        input.append(contentsOf: Array(name.utf8))
-        var bytes = Array(Insecure.SHA1.hash(data: input).prefix(16))
-        bytes[6] = (bytes[6] & 0x0F) | 0x50  // version 5
-        bytes[8] = (bytes[8] & 0x3F) | 0x80  // RFC 4122 variant
-        let uuid = bytes.withUnsafeBytes { $0.loadUnaligned(as: uuid_t.self) }
-        return UUID(uuid: uuid).uuidString.lowercased()
-    }
 }
 
 // MARK: - Importer

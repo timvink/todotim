@@ -1,9 +1,20 @@
 import Foundation
+#if canImport(FoundationNetworking)
+import FoundationNetworking
+#endif
 
-/// WebDAV client for a Nextcloud-style server. `baseURL` is the WebDAV root of the user,
-/// e.g. https://host/remote.php/dav/files/USER/ ; paths passed to the methods are relative
-/// to it and are percent-encoded per segment here. Uses Basic auth (Nextcloud app password).
-public final class WebDAVClient: RemoteStorage, @unchecked Sendable {
+/// A WebDAV response with the body read (bounded) and the ETag normalized.
+public struct DAVResponse: Sendable {
+    public var status: Int
+    public var data: Data
+    public var etag: String?
+}
+
+/// HTTP client for a Nextcloud-style WebDAV server. `baseURL` is the DAV root, e.g.
+/// https://host/remote.php/dav/ ; paths passed to the methods are relative to it and are
+/// percent-encoded per segment here. Uses Basic auth (Nextcloud app password). The security
+/// rules live here: https only (except localhost), no redirects outside `baseURL`, capped bodies.
+public final class WebDAVClient: @unchecked Sendable {
     public let baseURL: URL
     private let authorization: String
     private let session: URLSession
@@ -104,67 +115,48 @@ public final class WebDAVClient: RemoteStorage, @unchecked Sendable {
         return url
     }
 
-    // MARK: - RemoteStorage
+    // MARK: - Requests
 
-    public func listing(_ path: String) async throws -> RemoteListing {
-        let body = """
-        <?xml version="1.0" encoding="utf-8"?>
-        <d:propfind xmlns:d="DAV:"><d:prop><d:getetag/><d:resourcetype/><d:getcontentlength/><d:getlastmodified/></d:prop></d:propfind>
-        """
-        var req = try request(path, method: "PROPFIND", collection: true)
-        req.setValue("1", forHTTPHeaderField: "Depth")
-        req.setValue("application/xml; charset=utf-8", forHTTPHeaderField: "Content-Type")
-        req.httpBody = Data(body.utf8)
+    /// Sends a request to `path` (relative to `baseURL`). `collection` adds a trailing slash.
+    /// Any status is returned; callers map errors with `error(status:path:)`.
+    public func send(_ method: String, _ path: String, collection: Bool = false, headers: [String: String] = [:],
+                     body: Data? = nil) async throws -> DAVResponse {
+        var req = URLRequest(url: try url(for: path, collection: collection))
+        req.httpMethod = method
+        req.setValue(authorization, forHTTPHeaderField: "Authorization")
+        req.cachePolicy = .reloadIgnoringLocalCacheData
+        for (k, v) in headers { req.setValue(v, forHTTPHeaderField: k) }
+        req.httpBody = body
         let (data, response) = try await send(req)
-        switch response.statusCode {
-        case 207:
-            let entries: [MultistatusParser.Entry]?
-            do {
-                entries = try MultistatusParser.parse(data)
-            } catch MultistatusParser.Failure.tooManyEntries {
-                throw SyncError.limitExceeded("more than \(SyncLimits.maxListingEntries) entries in “\(path)”")
-            } catch {
-                throw SyncError.badRemoteData(path: path, reason: "the folder listing is not plain WebDAV XML (\(error))")
-            }
-            guard let entries else { throw SyncError.notWebDAV }
-            return RemoteListing(items: Self.items(from: entries, baseURL: baseURL, listedPath: path),
-                                 serverDate: Self.httpDate(response.value(forHTTPHeaderField: "Date")))
-        case 200...299:
-            throw SyncError.notWebDAV
-        default:
-            throw Self.error(status: response.statusCode, path: path)
+        return DAVResponse(status: response.statusCode, data: data,
+                           etag: Self.normalizeETag(response.value(forHTTPHeaderField: "ETag")
+                                                    ?? response.value(forHTTPHeaderField: "OC-ETag")))
+    }
+
+    /// The path of `href` (absolute or relative, percent-encoded, from a multistatus response)
+    /// relative to `baseURL`, decoded, without leading or trailing slash. nil when it is outside
+    /// the base URL, on another server, or has a segment that decodes to "/", "." or "..".
+    public func relativePath(ofHref href: String) -> String? {
+        guard let url = URL(string: href, relativeTo: baseURL)?.absoluteURL, Self.isWithin(url, base: baseURL) else { return nil }
+        var basePath = baseURL.path(percentEncoded: true)
+        if !basePath.hasSuffix("/") { basePath += "/" }
+        var p = url.path(percentEncoded: true)
+        if !p.hasSuffix("/") { p += "/" }
+        guard p.hasPrefix(basePath) else { return nil }
+        var segments: [String] = []
+        for raw in p.dropFirst(basePath.count).split(separator: "/") {
+            guard let s = String(raw).removingPercentEncoding, !s.isEmpty, s != ".", s != "..", !s.contains("/") else { return nil }
+            segments.append(s)
         }
+        return segments.joined(separator: "/")
     }
 
-    public func get(_ path: String) async throws -> RemoteFile {
-        let (data, response) = try await send(try request(path, method: "GET"))
-        guard (200...299).contains(response.statusCode) else {
-            throw Self.error(status: response.statusCode, path: path)
-        }
-        return RemoteFile(data: data, etag: Self.normalizeETag(response.value(forHTTPHeaderField: "ETag")),
-                          modified: Self.httpDate(response.value(forHTTPHeaderField: "Last-Modified")),
-                          serverDate: Self.httpDate(response.value(forHTTPHeaderField: "Date")))
-    }
-
-    /// Parses an HTTP date (RFC 9110 IMF-fixdate, e.g. "Sun, 06 Nov 1994 08:49:37 GMT"), as
-    /// used by the Date and Last-Modified headers and `getlastmodified`. nil if absent or invalid.
-    public static func httpDate(_ string: String?) -> Date? {
-        guard let s = string?.trimmingCharacters(in: .whitespaces), !s.isEmpty else { return nil }
-        return httpDateLock.withLock { httpDateFormatter.date(from: s) }
-    }
-
-    private static let httpDateLock = NSLock()
-    nonisolated(unsafe) private static let httpDateFormatter: DateFormatter = {
-        let f = DateFormatter()
-        f.locale = Locale(identifier: "en_US_POSIX")
-        f.timeZone = TimeZone(identifier: "GMT")
-        f.dateFormat = "EEE, dd MMM yyyy HH:mm:ss zzz"
-        return f
-    }()
+    /// Absolute URL string for `path`, for the `Destination` header of MOVE.
+    func absoluteString(for path: String) throws -> String { try url(for: path).absoluteString }
 
     /// Undoes what compressing reverse proxies do to a response's ETag, so it can be sent back
     /// in `If-Match`: Caddy and Apache append "-gzip"/"-br"/"-zstd" inside the quotes, and nginx
-    /// marks it weak (`W/`). Without this, every update of a downloaded file fails with 412.
+    /// marks it weak (`W/`). Without this, every update of a downloaded task fails with 412.
     public static func normalizeETag(_ etag: String?) -> String? {
         guard var e = etag?.trimmingCharacters(in: .whitespaces), !e.isEmpty else { return nil }
         if e.hasPrefix("W/") { e.removeFirst(2) }
@@ -178,50 +170,7 @@ public final class WebDAVClient: RemoteStorage, @unchecked Sendable {
         return "\"\(inner)\""
     }
 
-    @discardableResult
-    public func put(_ path: String, data: Data, condition: PutCondition) async throws -> String? {
-        var req = try request(path, method: "PUT")
-        req.setValue("application/json", forHTTPHeaderField: "Content-Type")
-        switch condition {
-        case .none: break
-        case .ifMatch(let etag): req.setValue(etag, forHTTPHeaderField: "If-Match")
-        case .ifNoneMatch: req.setValue("*", forHTTPHeaderField: "If-None-Match")
-        }
-        req.httpBody = data
-        let (_, response) = try await send(req)
-        guard (200...299).contains(response.statusCode) else {
-            throw Self.error(status: response.statusCode, path: path)
-        }
-        return Self.normalizeETag(response.value(forHTTPHeaderField: "ETag") ?? response.value(forHTTPHeaderField: "OC-ETag"))
-    }
-
-    public func makeCollection(_ path: String) async throws {
-        let (_, response) = try await send(try request(path, method: "MKCOL", collection: true))
-        switch response.statusCode {
-        case 200...299, 405: return  // 405 Method Not Allowed = already exists
-        default: throw Self.error(status: response.statusCode, path: path)
-        }
-    }
-
-    public func delete(_ path: String, ifMatch: String?) async throws {
-        var req = try request(path, method: "DELETE")
-        if let ifMatch { req.setValue(ifMatch, forHTTPHeaderField: "If-Match") }
-        let (_, response) = try await send(req)
-        switch response.statusCode {
-        case 200...299, 404: return
-        default: throw Self.error(status: response.statusCode, path: path)
-        }
-    }
-
     // MARK: - Helpers
-
-    private func request(_ path: String, method: String, collection: Bool = false) throws -> URLRequest {
-        var req = URLRequest(url: try url(for: path, collection: collection))
-        req.httpMethod = method
-        req.setValue(authorization, forHTTPHeaderField: "Authorization")
-        req.cachePolicy = .reloadIgnoringLocalCacheData
-        return req
-    }
 
     /// Sends `req`, reading at most `SyncLimits.maxResponseBytes` of the body (also when the
     /// server sends no or a wrong Content-Length). Redirects outside `baseURL` are refused.
@@ -229,6 +178,16 @@ public final class WebDAVClient: RemoteStorage, @unchecked Sendable {
         let delegate = RedirectGuard(base: baseURL)
         let limit = maxResponseBytes
         do {
+            #if canImport(FoundationNetworking)
+            // swift-corelibs-foundation (Linux, used for tests only) has no `bytes(for:)`: the body
+            // is read whole and the final URL checked after the fact.
+            let (data, response) = try await session.data(for: req, delegate: delegate)
+            guard let http = response as? HTTPURLResponse else { throw SyncError.network("Invalid server response") }
+            if let target = delegate.rejectedTarget { throw SyncError.redirectRejected(target) }
+            if let url = http.url, !Self.isWithin(url, base: baseURL) { throw SyncError.redirectRejected(Self.displayString(url)) }
+            if data.count > limit { throw SyncError.limitExceeded("a server response is larger than \(limit / 1024 / 1024) MB") }
+            return (data, http)
+            #else
             let (bytes, response) = try await session.bytes(for: req, delegate: delegate)
             guard let http = response as? HTTPURLResponse else { throw SyncError.network("Invalid server response") }
             if let target = delegate.rejectedTarget {
@@ -258,6 +217,7 @@ public final class WebDAVClient: RemoteStorage, @unchecked Sendable {
             data.append(contentsOf: chunk)
             if data.count > limit { throw tooLarge }
             return (data, http)
+            #endif
         } catch let e as SyncError {
             throw e
         } catch let e as URLError {
@@ -316,159 +276,10 @@ public final class WebDAVClient: RemoteStorage, @unchecked Sendable {
         case 404: return path.isEmpty ? .baseNotFound : .notFound(path)
         case 409: return .conflict(path)
         case 412: return .preconditionFailed(path)
+        case 429: return .rateLimited(path)
         case 507: return .insufficientStorage
         default: return .http(status: status, path: path)
         }
     }
-
-    /// Maps multistatus entries to items relative to `baseURL`, dropping the listed collection
-    /// itself and anything that is not a direct child of it on the same server.
-    static func items(from entries: [MultistatusParser.Entry], baseURL: URL, listedPath: String) -> [RemoteItem] {
-        var basePath = baseURL.standardized.path(percentEncoded: false)
-        if !basePath.hasSuffix("/") { basePath += "/" }
-        let listed = joinPath(listedPath)
-        return entries.compactMap { entry -> RemoteItem? in
-            guard let hrefURL = URL(string: entry.href, relativeTo: baseURL)?.absoluteURL.standardized,
-                  isWithin(hrefURL, base: baseURL) else { return nil }
-            var p = hrefURL.path(percentEncoded: false)
-            if !p.hasSuffix("/") { p += "/" }
-            guard p.hasPrefix(basePath) else { return nil }
-            let rel = joinPath(String(p.dropFirst(basePath.count)))
-            guard rel != listed else { return nil }
-            var parts = rel.split(separator: "/")
-            guard let name = parts.popLast(), name != ".", name != "..",
-                  parts.joined(separator: "/") == listed else { return nil }
-            return RemoteItem(path: rel, etag: entry.etag, isCollection: entry.isCollection,
-                              size: entry.size, modified: entry.modified)
-        }
-    }
 }
 
-/// Parses a WebDAV 207 Multi-Status body into hrefs, ETags, collection flags, sizes and
-/// modification dates. Only properties inside a propstat with a 2xx status are used.
-enum MultistatusParser {
-    struct Entry: Equatable {
-        var href: String
-        var etag: String?
-        var isCollection: Bool
-        var size: Int? = nil
-        var modified: Date? = nil
-    }
-
-    enum Failure: Error {
-        /// The document declares a DTD or entities (never needed for WebDAV; refused to rule out
-        /// entity expansion).
-        case dtd
-        case tooManyEntries
-        case textTooLong
-    }
-
-    /// Longest text content of one element.
-    static let maxTextLength = 64 * 1024
-
-    /// nil if the body is not a DAV multistatus document. Throws `Failure` for documents with a
-    /// DTD, more than `maxEntries` responses or over-long text.
-    static func parse(_ data: Data, maxEntries: Int = SyncLimits.maxListingEntries) throws -> [Entry]? {
-        if data.range(of: Data("<!DOCTYPE".utf8)) != nil || data.range(of: Data("<!ENTITY".utf8)) != nil {
-            throw Failure.dtd
-        }
-        let delegate = Delegate(maxEntries: maxEntries)
-        let parser = XMLParser(data: data)
-        parser.shouldProcessNamespaces = true
-        parser.shouldResolveExternalEntities = false
-        parser.delegate = delegate
-        let ok = parser.parse()
-        if let failure = delegate.failure { throw failure }
-        guard ok, delegate.sawMultistatus else { return nil }
-        return delegate.entries
-    }
-
-    private final class Delegate: NSObject, XMLParserDelegate {
-        let maxEntries: Int
-        var entries: [Entry] = []
-        var sawMultistatus = false
-        var failure: Failure?
-
-        init(maxEntries: Int) { self.maxEntries = maxEntries }
-
-        private func fail(_ parser: XMLParser, _ f: Failure) {
-            failure = f
-            parser.abortParsing()
-        }
-
-        func parser(_ parser: XMLParser, foundInternalEntityDeclarationWithName name: String, value: String?) {
-            fail(parser, .dtd)
-        }
-
-        func parser(_ parser: XMLParser, foundExternalEntityDeclarationWithName name: String, publicID: String?, systemID: String?) {
-            fail(parser, .dtd)
-        }
-
-        func parser(_ parser: XMLParser, resolveExternalEntityName name: String, systemID: String?) -> Data? {
-            fail(parser, .dtd)
-            return nil
-        }
-
-        private var text = ""
-        private var href: String?
-        private var propEtag: String?
-        private var propCollection = false
-        private var propSize: Int?
-        private var propModified: Date?
-        private var propStatusOK = true
-        private var etag: String?
-        private var isCollection = false
-        private var size: Int?
-        private var modified: Date?
-        private var inResourceType = false
-
-        func parser(_ parser: XMLParser, didStartElement name: String, namespaceURI: String?,
-                    qualifiedName: String?, attributes: [String: String] = [:]) {
-            text = ""
-            guard namespaceURI == "DAV:" else { return }
-            switch name {
-            case "multistatus": sawMultistatus = true
-            case "response": href = nil; etag = nil; isCollection = false; size = nil; modified = nil
-            case "propstat": propEtag = nil; propCollection = false; propSize = nil; propModified = nil; propStatusOK = true
-            case "resourcetype": inResourceType = true
-            case "collection" where inResourceType: propCollection = true
-            default: break
-            }
-        }
-
-        func parser(_ parser: XMLParser, foundCharacters string: String) {
-            guard failure == nil else { return }
-            text += string
-            if text.utf8.count > MultistatusParser.maxTextLength { fail(parser, .textTooLong) }
-        }
-
-        func parser(_ parser: XMLParser, didEndElement name: String, namespaceURI: String?, qualifiedName: String?) {
-            defer { text = "" }
-            guard namespaceURI == "DAV:" else { return }
-            let value = text.trimmingCharacters(in: .whitespacesAndNewlines)
-            switch name {
-            case "href" where href == nil: href = value
-            case "getetag": propEtag = WebDAVClient.normalizeETag(value)
-            case "getcontentlength": propSize = Int(value).flatMap { $0 >= 0 ? $0 : nil }
-            case "getlastmodified": propModified = WebDAVClient.httpDate(value)
-            case "resourcetype": inResourceType = false
-            case "status":
-                // e.g. "HTTP/1.1 200 OK"; inside propstat it qualifies the props.
-                let parts = value.split(separator: " ")
-                if parts.count >= 2, let code = Int(parts[1]) { propStatusOK = (200...299).contains(code) }
-            case "propstat":
-                if propStatusOK {
-                    if let propEtag { etag = propEtag }
-                    if propCollection { isCollection = true }
-                    if let propSize { size = propSize }
-                    if let propModified { modified = propModified }
-                }
-            case "response":
-                guard let href else { break }
-                if entries.count >= maxEntries { return fail(parser, .tooManyEntries) }
-                entries.append(Entry(href: href, etag: etag, isCollection: isCollection, size: size, modified: modified))
-            default: break
-            }
-        }
-    }
-}

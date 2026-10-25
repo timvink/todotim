@@ -333,11 +333,22 @@ public final class TodoStore {
     }
 
     /// Completing a task also completes its subtasks. Uncompleting only affects the task
-    /// itself and its ancestors (so it becomes visible again).
-    public func toggleComplete(_ id: EntityID) {
+    /// itself and its ancestors (so it becomes visible again). Completing a repeating task
+    /// (`recurrence`) moves its due date to the next occurrence instead, while the rule allows
+    /// (`Recurrence.advance`).
+    public func toggleComplete(_ id: EntityID, calendar: Calendar = .current) {
         perform {
             guard let t = storage.tasks[id] else { return }
             let now = Self.timestamp()
+            if !t.isCompleted, let rule = t.recurrence,
+               let next = Recurrence.advance(rule, from: t.due ?? DueDate(Date(), calendar: calendar), calendar: calendar) {
+                var advanced = t
+                advanced.due = next.due
+                advanced.recurrence = next.rule
+                advanced.updatedAt = now
+                writeTask(advanced)
+                return
+            }
             if t.isCompleted {
                 var cur: EntityID? = id
                 var seen = Set<EntityID>()
@@ -703,7 +714,7 @@ public final class TodoStore {
     }
 
     /// The inbox has a fixed id so that two devices starting fresh do not create two inboxes.
-    public static let inboxID = "inbox"
+    nonisolated public static let inboxID = "inbox"
 
     private static func ensureInbox(in db: inout Database) {
         if db.projects[inboxID] == nil {

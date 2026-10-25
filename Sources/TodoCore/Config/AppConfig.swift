@@ -9,11 +9,12 @@ import Foundation
 ///
 ///     [sync]
 ///     enabled = true
-///     server_url = "https://cloud.example.com/remote.php/dav/files/tim/"
+///     server_url = "https://cloud.example.com/remote.php/dav/"
 ///     username = "tim"
-///     folder = "TodoTim"
 ///     # Prints the password; run once when the Keychain has none, then cached there.
 ///     password_command = "rbw get 'Nextcloud app password'"
+///     # Optional: Nextcloud users that new lists are shared with (read-write).
+///     share_with = ["tasks-agent"]
 public struct AppConfig: Equatable, Sendable {
     public static let defaultRepository = "https://github.com/timvink/todotim"
 
@@ -21,9 +22,14 @@ public struct AppConfig: Equatable, Sendable {
     /// nil when the file has no `[sync]` table.
     public var sync: SyncSettings?
     public var passwordCommand: String?
+    /// `sync.share_with`: users each new calendar is shared with.
+    public var shareWith: [String] = []
+    /// Keys that are accepted but no longer used (`sync.folder`, from the WebDAV-file sync).
+    public var ignoredKeys: [String] = []
 
-    public init(repository: String = AppConfig.defaultRepository, sync: SyncSettings? = nil, passwordCommand: String? = nil) {
-        self.repository = repository; self.sync = sync; self.passwordCommand = passwordCommand
+    public init(repository: String = AppConfig.defaultRepository, sync: SyncSettings? = nil, passwordCommand: String? = nil,
+                shareWith: [String] = []) {
+        self.repository = repository; self.sync = sync; self.passwordCommand = passwordCommand; self.shareWith = shareWith
     }
 
     public static var defaultURL: URL {
@@ -127,7 +133,7 @@ public struct AppConfig: Equatable, Sendable {
     public static func parse(_ text: String) throws -> AppConfig {
         let values = try TOML.parse(text)
         let known: Set<String> = ["repository", "sync.enabled", "sync.server_url", "sync.username",
-                                  "sync.folder", "sync.password_command"]
+                                  "sync.password_command", "sync.share_with", "sync.folder"]
         if let unknown = values.keys.sorted().first(where: { !known.contains($0) }) {
             throw SchemaError(message: "Unknown key '\(unknown)'")
         }
@@ -148,9 +154,19 @@ public struct AppConfig: Equatable, Sendable {
             }
             config.sync = SyncSettings(serverURL: try string("sync.server_url") ?? "",
                                        username: try string("sync.username") ?? "",
-                                       folder: try string("sync.folder") ?? "TodoTim",
                                        enabled: enabled)
             config.passwordCommand = try string("sync.password_command")
+            switch values["sync.share_with"] {
+            case nil: break
+            case let .array(items)?:
+                config.shareWith = try items.map {
+                    guard case let .string(user) = $0, !user.isEmpty, !user.contains("/"), !user.contains("<"), !user.contains("&")
+                    else { throw SchemaError(message: "'sync.share_with' must be a list of user names") }
+                    return user
+                }
+            default: throw SchemaError(message: "'sync.share_with' must be a list of user names, e.g. [\"tasks-agent\"]")
+            }
+            if values["sync.folder"] != nil { config.ignoredKeys.append("sync.folder") }
         }
         return config
     }
@@ -188,6 +204,7 @@ public enum PasswordCommand {
         var isSet: Bool { lock.withLock { value } }
     }
 
+    #if os(macOS)
     static func runBlocking(_ command: String, timeout: TimeInterval, cancelled: CancelFlag) throws -> String {
         let shell = ProcessInfo.processInfo.environment["SHELL"].flatMap { $0.isEmpty ? nil : $0 } ?? "/bin/zsh"
         var outPipe: [Int32] = [-1, -1], errPipe: [Int32] = [-1, -1]
@@ -306,4 +323,17 @@ public enum PasswordCommand {
         guard !password.isEmpty else { throw Failure(message: "password_command printed nothing") }
         return password
     }
+    #else
+    /// Linux builds (tests only) have no login shell or posix_spawn flags to rely on.
+    static func runBlocking(_ command: String, timeout: TimeInterval, cancelled: CancelFlag) throws -> String {
+        throw Failure(message: "password_command is only supported on macOS")
+    }
+    #endif
 }
+
+#if !os(macOS)
+extension NSString {
+    /// Linux has no home-relative abbreviation; the path is shown as is.
+    var abbreviatingWithTildeInPath: String { self as String }
+}
+#endif

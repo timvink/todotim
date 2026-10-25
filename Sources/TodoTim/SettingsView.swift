@@ -1,7 +1,7 @@
 import SwiftUI
 import TodoCore
 
-/// Settings (⌘,): WebDAV sync configuration.
+/// Settings (⌘,): CalDAV sync configuration.
 struct SettingsView: View {
     @Environment(SyncController.self) private var sync
     @Environment(AppModel.self) private var model
@@ -10,7 +10,6 @@ struct SettingsView: View {
     /// A new password typed by the user. The saved one is never loaded into the view.
     @State private var password = ""
     @State private var hasStoredPassword = false
-    @State private var folder = "TodoTim"
     @State private var enabled = false
     @State private var testing = false
     @State private var testResult: (ok: Bool, message: String)?
@@ -24,22 +23,20 @@ struct SettingsView: View {
                     LabeledContent("Server URL", value: serverURL.isEmpty ? "—" : serverURL)
                     LabeledContent("Username", value: username.isEmpty ? "—" : username)
                     SecureField("App password", text: $password, prompt: Text(hasStoredPassword ? "Saved in Keychain" : ""))
-                    LabeledContent("Folder", value: folder)
                     LabeledContent("Sync", value: enabled ? "Enabled" : "Disabled")
                     Text("Managed by \(Self.abbreviatingHome(managed))")
                         .font(.system(size: 11))
                         .foregroundStyle(.secondary)
                 } else {
-                    TextField("Server URL", text: $serverURL, prompt: Text("https://cloud.example.com/remote.php/dav/files/USERNAME/"))
+                    TextField("Server URL", text: $serverURL, prompt: Text("https://cloud.example.com/remote.php/dav/"))
                     TextField("Username", text: $username)
                     SecureField("App password", text: $password, prompt: Text(hasStoredPassword ? "Saved in Keychain" : ""))
-                    TextField("Folder", text: $folder, prompt: Text("TodoTim"))
                     Toggle("Enable sync", isOn: $enabled)
                 }
             } header: {
-                Text("WebDAV (Nextcloud)")
+                Text("CalDAV (Nextcloud)")
             } footer: {
-                Text("Use a Nextcloud app password (Settings → Security → Devices & sessions). The password is stored in the Keychain.")
+                Text("Your projects sync as Nextcloud task lists (CalDAV). Use a Nextcloud app password (Settings → Security → Devices & sessions); it is stored in the Keychain.")
                     .font(.system(size: 11))
                     .foregroundStyle(.secondary)
                     .frame(maxWidth: .infinity, alignment: .leading)
@@ -49,6 +46,11 @@ struct SettingsView: View {
                 HStack {
                     statusText
                     Spacer()
+                }
+                if let warning = sync.warning {
+                    SwiftUI.Label(warning, systemImage: "exclamationmark.triangle")
+                        .foregroundStyle(.secondary)
+                        .textSelection(.enabled)
                 }
                 if let err = sync.credentialError {
                     SwiftUI.Label(err, systemImage: "key.slash")
@@ -101,7 +103,6 @@ struct SettingsView: View {
             let s = sync.settings
             serverURL = s.serverURL
             username = s.username
-            folder = s.folder.isEmpty ? "TodoTim" : s.folder
             enabled = s.enabled
             password = ""
             hasStoredPassword = !(sync.storedPassword() ?? "").isEmpty
@@ -120,8 +121,6 @@ struct SettingsView: View {
     private var currentSettings: SyncSettings {
         SyncSettings(serverURL: serverURL.trimmingCharacters(in: .whitespaces),
                      username: username.trimmingCharacters(in: .whitespaces),
-                     folder: folder.trimmingCharacters(in: CharacterSet(charactersIn: "/ ")).isEmpty
-                        ? "TodoTim" : folder.trimmingCharacters(in: CharacterSet(charactersIn: "/ ")),
                      enabled: enabled)
     }
 

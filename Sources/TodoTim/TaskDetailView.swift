@@ -187,6 +187,11 @@ private struct TaskDetailContent: View {
                     .foregroundStyle(task.due?.chipColor ?? .secondary)
                 if let due = task.due {
                     Text(due.displayString()).foregroundStyle(due.chipColor)
+                    if let rule = task.recurrence {
+                        SwiftUI.Label(Recurrence.summary(rule), systemImage: "repeat")
+                            .font(.system(size: 11))
+                            .foregroundStyle(.secondary)
+                    }
                     Spacer()
                     Button { store.updateTask(task.id) { $0.due = nil } } label: {
                         Image(systemName: "xmark").font(.system(size: 10, weight: .bold))

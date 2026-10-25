@@ -9,15 +9,26 @@ final class AppConfigTests: XCTestCase {
 
         [sync]
         enabled = true   # trailing comment
-        server_url = "https://cloud.example.com/remote.php/dav/files/tim/"
+        server_url = "https://cloud.example.com/remote.php/dav/"
         username = 'tim'
-        folder = "Todo # Tim"
         password_command = "rbw get \\"Nextcloud app\\""
+        share_with = ["tasks-agent", 'other # not a comment', ]
         """)
         XCTAssertEqual(config.repository, "https://github.com/timvink/todotim")
-        XCTAssertEqual(config.sync, SyncSettings(serverURL: "https://cloud.example.com/remote.php/dav/files/tim/",
-                                                 username: "tim", folder: "Todo # Tim", enabled: true))
+        XCTAssertEqual(config.sync, SyncSettings(serverURL: "https://cloud.example.com/remote.php/dav/",
+                                                 username: "tim", enabled: true))
         XCTAssertEqual(config.passwordCommand, "rbw get \"Nextcloud app\"")
+        XCTAssertEqual(config.shareWith, ["tasks-agent", "other # not a comment"])
+        XCTAssertEqual(config.ignoredKeys, [])
+    }
+
+    func testOldFolderKeyIsIgnoredAndShareWithIsValidated() throws {
+        let config = try AppConfig.parse("[sync]\nusername = \"tim\"\nfolder = \"TodoTim\"\n")
+        XCTAssertEqual(config.ignoredKeys, ["sync.folder"])
+        XCTAssertThrowsError(try AppConfig.parse("[sync]\nshare_with = \"tasks-agent\"\n"))
+        XCTAssertThrowsError(try AppConfig.parse("[sync]\nshare_with = [1]\n"))
+        XCTAssertThrowsError(try AppConfig.parse("[sync]\nshare_with = [\"a</x>\"]\n"))
+        XCTAssertEqual(try AppConfig.parse("[sync]\nshare_with = []\n").shareWith, [])
     }
 
     func testDefaultsWithoutSyncTable() throws {
@@ -30,7 +41,7 @@ final class AppConfigTests: XCTestCase {
     func testSyncDefaults() throws {
         let config = try AppConfig.parse("[sync]\nusername = \"tim\"\n")
         XCTAssertEqual(config.sync?.enabled, true)
-        XCTAssertEqual(config.sync?.folder, "TodoTim")
+        XCTAssertEqual(config.shareWith, [])
     }
 
     func testRejectsUnknownKeysAndBadTypes() {
@@ -55,6 +66,7 @@ final class AppConfigTests: XCTestCase {
         }
     }
 
+    #if os(macOS)  // password_command needs posix_spawn's macOS flags and a login shell
     func testPasswordCommand() async throws {
         let password = try await PasswordCommand.run("printf 's3cret\\nignored'")
         XCTAssertEqual(password, "s3cret")
@@ -78,8 +90,10 @@ final class AppConfigTests: XCTestCase {
             XCTAssertTrue(error.localizedDescription.contains("timed out"))
         }
     }
+    #endif
 }
 
+#if os(macOS)  // password_command needs posix_spawn's macOS flags and a login shell
 final class PasswordCommandLimitTests: XCTestCase {
     private func elapsed(_ body: () async throws -> Void) async -> (TimeInterval, Error?) {
         let start = Date()
@@ -136,6 +150,7 @@ final class PasswordCommandLimitTests: XCTestCase {
         guard case .failure(let error) = result, error is CancellationError else { return XCTFail("\(result)") }
     }
 }
+#endif
 
 final class ConfigTrustTests: XCTestCase {
     private var dir: URL!
