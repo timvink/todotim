@@ -81,7 +81,7 @@ enum VTodo {
             createdAt: created, updatedAt: modified)
         if task.parentId == task.id { task.parentId = nil }
         return VTodoTask(task: task, uid: uid,
-                         sectionName: sectionID == nil ? nil : sectionLine?.param("X-NAME").map { clip($0, SyncLimits.maxNameLength) },
+                         sectionName: sectionID == nil ? nil : sectionLine?.param("X-NAME").map { clip(normalizeNewlines($0), SyncLimits.maxNameLength) },
                          sectionOrder: sectionID == nil ? nil : sectionLine?.param("X-ORDER").flatMap(finiteDouble))
     }
 
@@ -142,6 +142,12 @@ enum VTodo {
     /// Shortest representation that reads back as the same Double.
     static func format(_ d: Double) -> String {
         d == d.rounded() && abs(d) < 1e15 ? String(Int64(d)) : "\(d)"
+    }
+
+    /// CR LF and CR become LF (a parameter cannot hold a CR, so names are compared without it).
+    static func normalizeNewlines(_ s: String) -> String {
+        guard s.contains("\r") else { return s }
+        return s.replacingOccurrences(of: "\r\n", with: "\n").replacingOccurrences(of: "\r", with: "\n")
     }
 
     private static func clip(_ s: String, _ max: Int) -> String {

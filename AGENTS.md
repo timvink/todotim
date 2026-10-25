@@ -57,10 +57,14 @@ dead properties on the calendars plus `X-TODOTIM-SECTION` parameters and `CATEGO
 
 Merge: if only one side changed since the base, that side wins. If both changed, tasks are
 last-writer-wins on `updatedAt` ↔ `LAST-MODIFIED` (whole seconds on the server), and project, section and
-label fields keep the local value. Nothing is deleted on the server without a local tombstone. A task synced
-back from the server replaces the local copy (second precision), so the next sync sees no change. After
-merging, `SyncEngine.repairStructure` fixes parent cycles, orphaned subtasks and tasks in deleted sections.
-Tombstones are purged after 30 days, except while the server still has the entity.
+label fields keep the local value. Nothing is deleted on the server without a local tombstone. A local edit
+is a difference from `CalDAVState.synced` (each task as the database held it after the last sync), not from
+the parsed object. After a write the local copy takes the server's fields (second precision), so the next
+sync sees no change. After merging, `SyncEngine.repairStructure` fixes parent cycles, orphaned subtasks and
+tasks in deleted sections. That repair is local only: a write keeps the server's parent, section and list
+unless the user changed them. Tombstones are purged after 30 days, except while the server still has the
+entity. A sync with refused or conflicting writes is `isComplete == false`, and the next one is never
+treated as idle.
 
 Nextcloud quirks: `calendars/<user>/inbox/` is the scheduling inbox (hence `todotim-inbox`); `calendar-order`
 is stored as an integer (projects are renumbered 1…N); dead properties sent with MKCALENDAR are dropped

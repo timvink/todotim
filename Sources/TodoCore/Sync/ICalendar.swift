@@ -9,6 +9,9 @@ struct ICalProperty: Equatable, Sendable {
     /// In order of appearance; names upper-cased, values unquoted and RFC 6868-decoded.
     var params: [(name: String, value: String)]
     var value: String
+    /// The parameter values as written (quotes and lists intact), when parsed; used to write
+    /// them back unchanged. Cleared when `params` no longer matches.
+    var rawParams: [String]?
 
     init(_ name: String, params: [(name: String, value: String)] = [], value: String) {
         self.name = name; self.params = params; self.value = value
@@ -70,20 +73,25 @@ enum ICalendar {
     static let maxParams = 64
 
     /// Parses one iCalendar object; the result is the outermost component (normally VCALENDAR).
+    /// Works on UTF-8 bytes: folding may split a line before any code point, including one that
+    /// combines with the previous character, so `Character`s would misread continuation lines.
     static func parse(_ text: String) throws -> ICalComponent {
-        guard text.utf8.count <= maxBytes else { throw Failure.tooLarge }
+        let bytes = Array(text.utf8)
+        guard bytes.count <= maxBytes else { throw Failure.tooLarge }
         // Unfold (RFC 5545 §3.1): a line starting with a space or tab continues the previous one.
         // Servers may deliver LF instead of CRLF (e.g. inside XML), so both are accepted.
-        var lines: [Substring] = []
-        for raw in text.split(omittingEmptySubsequences: false, whereSeparator: { $0 == "\n" || $0 == "\r\n" }) {
+        var lines: [[UInt8]] = []
+        var physical = 0
+        for raw in bytes.split(separator: UInt8(ascii: "\n"), omittingEmptySubsequences: false) {
             var line = raw
-            if line.hasSuffix("\r") { line = line.dropLast() }
-            if let first = line.first, first == " " || first == "\t" {
+            if line.last == UInt8(ascii: "\r") { line = line.dropLast() }
+            physical += 1
+            guard physical <= maxLines else { throw Failure.tooLarge }
+            if let first = line.first, first == UInt8(ascii: " ") || first == UInt8(ascii: "\t") {
                 guard !lines.isEmpty else { throw Failure.malformed("continuation without a line") }
-                lines[lines.count - 1] = Substring(lines[lines.count - 1] + line.dropFirst())
+                lines[lines.count - 1].append(contentsOf: line.dropFirst())
             } else if !line.isEmpty {
-                lines.append(line)
-                guard lines.count <= maxLines else { throw Failure.tooLarge }
+                lines.append(Array(line))
             }
         }
         var stack: [ICalComponent] = []
@@ -110,39 +118,49 @@ enum ICalendar {
         return root
     }
 
-    /// `NAME;P=V;P2="a:b":value`.
-    static func parseLine(_ line: Substring) throws -> ICalProperty {
-        var i = line.startIndex
-        func isNameChar(_ c: Character) -> Bool { c.isASCII && (c.isLetter || c.isNumber || c == "-") }
-        while i < line.endIndex, isNameChar(line[i]) { i = line.index(after: i) }
-        let name = line[line.startIndex..<i].uppercased()
-        guard !name.isEmpty, i < line.endIndex else { throw Failure.malformed("bad content line") }
+    /// `NAME;P=V;P2="a:b":value`, as UTF-8 bytes (all delimiters are ASCII).
+    static func parseLine(_ line: [UInt8]) throws -> ICalProperty {
+        func isNameByte(_ c: UInt8) -> Bool {
+            (c >= 0x41 && c <= 0x5A) || (c >= 0x61 && c <= 0x7A) || (c >= 0x30 && c <= 0x39) || c == 0x2D
+        }
+        func text(_ r: Range<Int>) -> String { String(decoding: line[r], as: UTF8.self) }
+        let n = line.count
+        var i = 0
+        while i < n, isNameByte(line[i]) { i += 1 }
+        let name = text(0..<i).uppercased()
+        guard !name.isEmpty, i < n else { throw Failure.malformed("bad content line") }
         var params: [(name: String, value: String)] = []
-        while line[i] == ";" {
-            i = line.index(after: i)
+        var raw: [String] = []
+        while line[i] == UInt8(ascii: ";") {
+            i += 1
             let start = i
-            while i < line.endIndex, isNameChar(line[i]) { i = line.index(after: i) }
-            let pname = line[start..<i].uppercased()
-            guard !pname.isEmpty, i < line.endIndex, line[i] == "=" else { throw Failure.malformed("bad parameter") }
-            i = line.index(after: i)
+            while i < n, isNameByte(line[i]) { i += 1 }
+            let pname = text(start..<i).uppercased()
+            guard !pname.isEmpty, i < n, line[i] == UInt8(ascii: "=") else { throw Failure.malformed("bad parameter") }
+            i += 1
             // A parameter may hold a comma-separated list; quoted parts may contain ; : ,
-            var value = ""
-            while i < line.endIndex, line[i] != ";", line[i] != ":" {
-                if line[i] == "\"" {
-                    i = line.index(after: i)
-                    guard let close = line[i...].firstIndex(of: "\"") else { throw Failure.malformed("unterminated quote") }
-                    value += line[i..<close]
-                    i = line.index(after: close)
+            let valueStart = i
+            var value: [UInt8] = []
+            while i < n, line[i] != UInt8(ascii: ";"), line[i] != UInt8(ascii: ":") {
+                if line[i] == UInt8(ascii: "\"") {
+                    guard let close = line[(i + 1)...].firstIndex(of: UInt8(ascii: "\"")) else {
+                        throw Failure.malformed("unterminated quote")
+                    }
+                    value.append(contentsOf: line[(i + 1)..<close])
+                    i = close + 1
                 } else {
                     value.append(line[i])
-                    i = line.index(after: i)
+                    i += 1
                 }
             }
-            params.append((pname, decodeParam(value)))
-            guard params.count <= maxParams, i < line.endIndex else { throw Failure.malformed("bad parameters") }
+            params.append((pname, decodeParam(String(decoding: value, as: UTF8.self))))
+            raw.append(text(valueStart..<i))
+            guard params.count <= maxParams, i < n else { throw Failure.malformed("bad parameters") }
         }
-        guard line[i] == ":" else { throw Failure.malformed("missing ':'") }
-        return ICalProperty(name, params: params, value: String(line[line.index(after: i)...]))
+        guard line[i] == UInt8(ascii: ":") else { throw Failure.malformed("missing ':'") }
+        var p = ICalProperty(name, params: params, value: text((i + 1)..<n))
+        p.rawParams = raw
+        return p
     }
 
     static func serialize(_ c: ICalComponent) -> String {
@@ -159,7 +177,12 @@ enum ICalendar {
 
     static func line(for p: ICalProperty) -> String {
         var s = p.name
-        for (name, value) in p.params {
+        let raw = p.rawParams.flatMap { $0.count == p.params.count ? $0 : nil }
+        for (k, (name, value)) in p.params.enumerated() {
+            if let raw {
+                s += ";\(name)=\(raw[k])"
+                continue
+            }
             let encoded = encodeParam(value)
             let needsQuotes = encoded.contains { $0 == ":" || $0 == ";" || $0 == "," } || encoded.isEmpty
             s += ";\(name)=" + (needsQuotes ? "\"\(encoded)\"" : encoded)
@@ -296,8 +319,8 @@ enum ICalendar {
                 timePart = nil
             } else {
                 let t = String(v.dropFirst(8))
-                let digits = t.dropFirst().prefix(6)
-                guard t.hasPrefix("T"), digits.count == 6, digits.allSatisfy(\.isNumber),
+                let digits = t.utf8.dropFirst().prefix(6)
+                guard t.hasPrefix("T"), digits.count == 6, digits.allSatisfy({ (48...57).contains($0) }),
                       t.count == 7 || (t.count == 8 && t.hasSuffix("Z")) else { return nil }
                 timePart = t
             }
@@ -310,7 +333,7 @@ enum ICalendar {
         /// time converted (an unknown TZID is read as floating).
         func localDate(calendar: Calendar) -> DueDate {
             guard let t = timePart else { return DueDate(date: String(format: "%04d-%02d-%02d", year, month, day)) }
-            let digits = Array(t.dropFirst().prefix(6)).map { Int(String($0))! }
+            let digits = t.utf8.dropFirst().prefix(6).map { Int($0) - 48 }
             let comps = DateComponents(year: year, month: month, day: day, hour: digits[0] * 10 + digits[1],
                                        minute: digits[2] * 10 + digits[3], second: digits[4] * 10 + digits[5])
             var zone: TimeZone?
@@ -367,7 +390,7 @@ enum ICalendar {
         var comps = DateComponents(year: v.year, month: v.month, day: v.day)
         var zone = TimeZone(identifier: "UTC")!
         if let t = v.timePart {
-            let digits = Array(t.dropFirst().prefix(6)).map { Int(String($0))! }
+            let digits = t.utf8.dropFirst().prefix(6).map { Int($0) - 48 }
             comps.hour = digits[0] * 10 + digits[1]
             comps.minute = digits[2] * 10 + digits[3]
             comps.second = digits[4] * 10 + digits[5]

@@ -34,7 +34,7 @@ public enum Recurrence {
                 parts.append("")  // placeholder, replaced below
                 continue
             case "UNTIL":
-                guard kv[1].count >= 8, kv[1].prefix(8).allSatisfy(\.isNumber) else { return nil }
+                guard kv[1].count >= 8, kv[1].utf8.prefix(8).allSatisfy({ (48...57).contains($0) }) else { return nil }
                 until = String(kv[1].prefix(8))
             case "WKST": break
             default: return nil

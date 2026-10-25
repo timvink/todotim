@@ -29,6 +29,30 @@ final class ICalendarTests: XCTestCase {
         XCTAssertEqual(back.components.first?.first("X-A")?.param("X-NAME"), "say \"hi\"\n")
     }
 
+    func testFoldingBeforeACombiningCodePointRoundTrips() throws {
+        // A fold may fall just before U+FE0F (emoji presentation), a ZWJ or a combining accent;
+        // as `Character`s the continuation line would not start with a space.
+        for tail in ["❤️", "👨‍👩‍👧", "é", "👍🏽"] {
+            for pad in 60...76 {
+                let summary = String(repeating: "a", count: pad) + tail + " end"
+                let t = TodoTask(id: "t", projectId: "p", content: summary, order: 1)
+                let ics = VTodo.make(t, uid: "t", parentUID: nil, section: nil)
+                XCTAssertEqual(VTodo.read(ics, projectId: "p")?.task.content, summary, "\(pad) \(tail)")
+            }
+        }
+    }
+
+    func testHostileDatesAndParametersDoNotCrashOrChange() throws {
+        let ics = "BEGIN:VCALENDAR\r\nBEGIN:VTODO\r\nUID:x\r\nDUE:20261103T١٢٣٤٥٦Z\r\nCREATED:20261103T１２３４５６\r\n"
+            + "ATTENDEE;MEMBER=\"mailto:a@x\",\"mailto:b@x\";CN=A:mailto:c@x\r\nEND:VTODO\r\nEND:VCALENDAR\r\n"
+        let v = try XCTUnwrap(VTodo.read(ics, projectId: "p"))
+        XCTAssertNil(v.task.due)
+        var t = v.task
+        t.content = "changed"
+        let patched = try XCTUnwrap(VTodo.patch(ics, old: v, to: t, parentUID: nil, section: nil))
+        XCTAssertTrue(patched.contains("ATTENDEE;MEMBER=\"mailto:a@x\",\"mailto:b@x\";CN=A:mailto:c@x"), patched)
+    }
+
     func testRejectsMalformedAndOversizedInput() {
         for bad in ["BEGIN:VCALENDAR\r\n", "END:VCALENDAR\r\n", "BEGIN:A\r\nEND:B\r\n", "SUMMARY:x\r\n",
                     "BEGIN:A\r\nnovalue\r\nEND:A\r\n", "BEGIN:A\r\nX;P=\"open:x\r\nEND:A\r\n"] {

@@ -125,7 +125,9 @@ final class CalDAVClient: CalDAVServer {
                   r.properties["\(Self.caldavNS)|supported-calendar-component-set"]?.children == ["\(Self.caldavNS)|comp=VTODO"]
             else { continue }
             // Calendars shared by other users also appear in the home (Nextcloud names them
-            // "<uri>_shared_by_<owner>"); only the user's own are synced.
+            // "<uri>_shared_by_<owner>"); only the user's own are synced. Calendars that Nextcloud
+            // apps generate (such as Deck boards, "app-generated--…") are read-only.
+            if path.split(separator: "/").last?.hasPrefix("app-generated--") == true { continue }
             if let owner = r.text("http://owncloud.org/ns|owner-principal"),
                owner.trimmingCharacters(in: CharacterSet(charactersIn: "/")) != "principals/users/\(username)" { continue }
             func value(_ p: CalendarProperty) -> String? { r.text("\(p.element.ns)|\(p.element.name)") }
@@ -148,7 +150,8 @@ final class CalDAVClient: CalDAVServer {
             """
             let doc: Multistatus.Document
             do {
-                doc = try await multistatus("REPORT", calendar, collection: true, depth: nil, body: body)
+                doc = try await multistatus("REPORT", calendar, collection: true, depth: nil, body: body,
+                                            maxEntries: SyncLimits.maxTasks + 1)
             } catch let error as SyncError where result.syncToken != nil {
                 // valid-sync-token precondition failed (RFC 6578 §3.2, 403 or 409): start over.
                 switch error {
@@ -266,17 +269,18 @@ final class CalDAVClient: CalDAVServer {
 
     private let xmlHeaders = ["Content-Type": "application/xml; charset=utf-8"]
 
-    private func multistatus(_ method: String, _ path: String, collection: Bool, depth: String?, body: String) async throws -> Multistatus.Document {
+    private func multistatus(_ method: String, _ path: String, collection: Bool, depth: String?, body: String,
+                             maxEntries: Int = SyncLimits.maxListingEntries) async throws -> Multistatus.Document {
         var headers = xmlHeaders
         if let depth { headers["Depth"] = depth }
         let r = try await dav.send(method, path, collection: collection, headers: headers, body: Data(body.utf8))
         switch r.status {
         case 207:
             do {
-                guard let doc = try Multistatus.parse(r.data) else { throw SyncError.notCalDAV }
+                guard let doc = try Multistatus.parse(r.data, maxEntries: maxEntries) else { throw SyncError.notCalDAV }
                 return doc
             } catch Multistatus.Failure.tooManyEntries {
-                throw SyncError.limitExceeded("more than \(SyncLimits.maxListingEntries) entries in “\(path)”")
+                throw SyncError.limitExceeded("more than \(maxEntries) entries in “\(path)”")
             } catch let e as SyncError {
                 throw e
             } catch {

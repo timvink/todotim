@@ -242,8 +242,9 @@ public final class SyncController {
                 scheduleSync()
             }
             saveState(result.state)
-            lastSynced = latest == snapshot ? store.db : nil
-            warning = result.warnings.isEmpty ? nil : result.warnings.joined(separator: "\n")
+            // An idle sync is allowed next time only if everything was written.
+            lastSynced = latest == snapshot && result.isComplete ? store.db : nil
+            if !result.isIdle { warning = result.warnings.isEmpty ? nil : result.warnings.joined(separator: "\n") }
             lastSync = Date()
             status = .idle(lastSync: lastSync)
         } catch is CancellationError {

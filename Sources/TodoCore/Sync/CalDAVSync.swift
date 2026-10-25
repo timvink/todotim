@@ -9,6 +9,11 @@ public struct CalDAVState: Codable, Equatable, Sendable {
     var calendars: [String: RemoteCalendar] = [:]
     /// Calendar objects by path.
     var resources: [String: ResourceRecord] = [:]
+    /// Each synced task as the local database held it after the last sync: the base for telling
+    /// local edits apart. (Comparing with the parsed object instead would mistake changes in how
+    /// it reads, such as a DATE-TIME due date after a timezone change, or the local structure
+    /// repair, for edits.)
+    var synced: [EntityID: TodoTask] = [:]
 
     public init(account: String) { self.account = account }
 
@@ -26,6 +31,10 @@ public struct SyncResult: Equatable, Sendable {
     public var warnings: [String] = []
     /// Number of write requests sent.
     public var writes = 0
+    /// Every write succeeded (no conflicts, refusals or lists that could not be created).
+    public var isComplete = true
+    /// Nothing had changed on either side; nothing was merged.
+    public var isIdle = false
 }
 
 /// Two-way sync between the local database and the user's CalDAV task lists (`docs/caldav.md`).
@@ -53,6 +62,8 @@ enum CalDAVSync {
             result.state = pass.state
             result.warnings += pass.warnings
             result.writes += pass.writes
+            result.isComplete = !pass.incomplete && !pass.conflicted
+            result.isIdle = pass.idle
             if !pass.conflicted { return result }
             previous = nil
         }
@@ -74,6 +85,11 @@ private struct Pass {
     var warnings: [String] = []
     var writes = 0
     var conflicted = false
+    /// Some write was refused or skipped; retried by the next sync.
+    var incomplete = false
+    var idle = false
+    /// Base local versions of tasks (`CalDAVState.synced`, else the parsed base object).
+    private var baseLocal: [EntityID: TodoTask] = [:]
 
     init(local: Database, state: CalDAVState, server: CalDAVServer, shareWith: [String], now: Date) {
         self.local = local; self.state = state; self.server = server; self.shareWith = shareWith; self.now = now
@@ -188,11 +204,13 @@ private struct Pass {
         // Nothing changed on either side: an idle sync costs one PROPFIND.
         if !remoteChanged, let previous, previous == local {
             merged = local
+            idle = true
             return self
         }
 
         let base = Self.view(baseState.calendars, baseState.resources)
         let remote = Self.view(calendars, resources)
+        for (id, b) in base.tasks { baseLocal[id] = baseState.synced[id] ?? b.todo.task }
         merge(base: base, remote: remote)
         try await write(remote: remote)
         return self
@@ -248,7 +266,7 @@ private struct Pass {
 
         // Tasks.
         for id in Set(local.tasks.keys).union(base.tasks.keys).union(remote.tasks.keys) {
-            let l = local.tasks[id], b = base.tasks[id]?.todo.task, r = remote.tasks[id]?.todo.task
+            let l = local.tasks[id], b = baseLocal[id], r = remote.tasks[id]?.todo.task
             switch (r, b) {
             case let (r?, b?):
                 guard let l else { db.tasks[id] = r; continue }
@@ -353,12 +371,18 @@ private struct Pass {
             var cal: RemoteCalendar
             if let existing = remote.calendarOf[p.id] {
                 cal = existing
+                // Write the color and order only when they differ from what TodoTim read (so an
+                // unset or foreign value is left alone until changed here).
+                let read = remote.projects[p.id]
+                if p.color == read?.color { props[.color] = nil }
+                if p.isInbox || p.order == read?.order { props[.order] = nil }
             } else {
                 do {
                     try await server.createCalendar(path, name: props[.name]!!, color: props[.color]!!, order: props[.order]!!)
                 } catch let e as SyncError where e.isPerResource {
                     warnings.append(SyncController.message(for: e))
                     unavailable.insert(p.id)
+                    incomplete = true
                     continue
                 }
                 writes += 1
@@ -377,7 +401,7 @@ private struct Pass {
                 switch key {
                 case .name: value != cal.name
                 case .color: value.flatMap(ProjectColor.key(hex:)) != cal.color.flatMap(ProjectColor.key(hex:))
-                case .order: !p.isInbox && value.flatMap(VTodo.finiteDouble) != cal.order.flatMap(VTodo.finiteDouble)
+                case .order: value.flatMap(VTodo.finiteDouble) != cal.order.flatMap(VTodo.finiteDouble)
                 case .sections: value.flatMap(PropertyList.decode) != cal.sections.flatMap(PropertyList.decode)
                 case .labels: value.flatMap(PropertyList.decode) != cal.labels.flatMap(PropertyList.decode)
                 }
@@ -387,6 +411,7 @@ private struct Pass {
                     try await server.setProperties(path, props)
                 } catch let e as SyncError where e.isPerResource {
                     warnings.append(SyncController.message(for: e))
+                    incomplete = true
                     continue
                 }
                 writes += 1
@@ -405,19 +430,38 @@ private struct Pass {
 
         // 2. Tasks, a few at a time.
         let liveProjects = Set(merged.projects.values.filter { !$0.deleted }.map(\.id)).subtracting(unavailable)
+        var onServer = Set(remote.tasks.keys)
+        var pending = Set<EntityID>()  // not written as intended; `synced` keeps their old base
         var ops: [TaskOp] = []
         for t in merged.tasks.values.sorted(by: { $0.id < $1.id }) where liveProjects.contains(t.projectId) {
             let r = remote.tasks[t.id]
-            let section = t.sectionId.flatMap { merged.sections[$0] }.flatMap { $0.deleted ? nil : $0 }
-            let parentUID = t.parentId.map { remote.uid(of: $0) }
             if t.deleted {
-                if let r { ops.append(.delete(path: r.path, etag: r.etag)) }
+                if let r { ops.append(.delete(id: t.id, path: r.path, etag: r.etag)) }
                 continue
             }
-            let target = calendarPath(t.projectId)
+            // What to write: the merged task, except that structure only the local repair changed
+            // (a parent, section or list TodoTim cannot see) stays as the server has it.
+            var w = t
+            if let r = r?.todo.task {
+                let l = local.tasks[t.id], b = baseLocal[t.id]
+                func userChanged<V: Equatable>(_ key: KeyPath<TodoTask, V>) -> Bool {
+                    guard let l else { return false }
+                    return b.map { l[keyPath: key] != $0[keyPath: key] } ?? true
+                }
+                if w.parentId != r.parentId && !userChanged(\.parentId) { w.parentId = r.parentId }
+                if w.sectionId != r.sectionId && !userChanged(\.sectionId) { w.sectionId = r.sectionId }
+                if w.projectId != r.projectId && !userChanged(\.projectId) { w.projectId = r.projectId }
+            }
+            var section = w.sectionId.flatMap { merged.sections[$0] }.flatMap { $0.deleted ? nil : $0 }
+            if section == nil, let r, let sid = w.sectionId, sid == r.todo.task.sectionId {
+                // A section unknown here: keep the task's parameters as they are.
+                section = Section(id: sid, projectId: w.projectId, name: r.todo.sectionName ?? "", order: r.todo.sectionOrder ?? 0)
+            }
+            let parentUID = w.parentId.map { remote.uid(of: $0) }
+            let target = calendarPath(w.projectId)
             guard let r else {
                 ops.append(.put(id: t.id, path: "\(target)/\(t.id).ics", projectId: t.projectId,
-                                ics: VTodo.make(t, uid: t.id, parentUID: parentUID, section: section), etag: nil, moveFrom: nil))
+                                ics: VTodo.make(w, uid: t.id, parentUID: parentUID, section: section), etag: nil, moveFrom: nil))
                 continue
             }
             let parent = String(r.path[..<(r.path.lastIndex(of: "/") ?? r.path.startIndex)])
@@ -425,14 +469,16 @@ private struct Pass {
             if let movePath, state.resources[movePath] != nil {
                 // Another object already has this name in the target list (a duplicate UID).
                 warnings.append("Could not move “\(t.content)”: “\(movePath)” already exists on the server")
+                pending.insert(t.id)
                 continue
             }
-            let patched = VTodo.patch(r.ics, old: r.todo, to: t, parentUID: parentUID, section: section)
+            let patched = VTodo.patch(r.ics, old: r.todo, to: w, parentUID: parentUID, section: section)
             if patched == nil && movePath == nil {
-                merged.tasks[t.id] = r.todo.task  // same content: adopt the server's (second-precision) copy
+                // Same content: adopt the server's copy (whole-second times), keeping the local structure.
+                merged.tasks[t.id] = Self.adopt(r.todo.task, structureOf: t)
                 continue
             }
-            ops.append(.put(id: t.id, path: movePath ?? r.path, projectId: t.projectId, ics: patched, etag: r.etag,
+            ops.append(.put(id: t.id, path: movePath ?? r.path, projectId: w.projectId, ics: patched, etag: r.etag,
                             moveFrom: movePath == nil ? nil : r.path))
         }
         let server = self.server
@@ -443,37 +489,66 @@ private struct Pass {
             switch outcome {
             case .conflict:
                 conflicted = true
+                pending.insert(op.id)
             case .failed(let message):
                 warnings.append(message)
+                incomplete = true
+                pending.insert(op.id)
             case .done(let requests, let etag):
                 writes += requests
                 switch op {
-                case .delete(let path, _):
+                case .delete(let id, let path, _):
                     // The local tombstone stays until it expires (`SyncEngine.tombstoneLifetime`).
                     state.resources[path] = nil
+                    onServer.remove(id)
                 case .put(let id, let path, let projectId, let patched, let oldETag, let moveFrom):
                     var record = moveFrom.flatMap { state.resources.removeValue(forKey: $0) }
                     if let patched { record = .init(etag: etag, ics: patched) } else { record?.etag = etag ?? oldETag }
                     guard let record else { continue }
                     state.resources[path] = record
-                    let ics = record.ics
+                    onServer.insert(id)
                     // The task as the server now holds it (whole-second times), so the next sync
                     // sees no local change.
-                    if let t = VTodoCache.shared.read(path: path, ics: ics, projectId: projectId)?.task, t.id == id {
-                        merged.tasks[id] = t
+                    if let server = VTodoCache.shared.read(path: path, ics: record.ics, projectId: projectId)?.task,
+                       server.id == id, let t = merged.tasks[id] {
+                        merged.tasks[id] = Self.adopt(server, structureOf: t)
                     }
                 }
             }
         }
+        if !pending.isEmpty { incomplete = true }
 
         // 3. Deleted lists last (their tasks go with them).
         for p in projects where p.deleted && !p.isInbox {
             guard let cal = remote.calendarOf[p.id] else { continue }
-            try await server.deleteCalendar(cal.path)
+            do {
+                try await server.deleteCalendar(cal.path)
+            } catch let e as SyncError where e.isPerResource {
+                warnings.append(SyncController.message(for: e))
+                incomplete = true
+                continue
+            }
             writes += 1
             state.calendars[cal.path] = nil
             for path in state.resources.keys where path.hasPrefix(cal.path + "/") { state.resources[path] = nil }
+            for (id, t) in merged.tasks where t.projectId == p.id { onServer.remove(id) }
         }
+
+        // The base for the next sync: each task on the server as the database now holds it, or,
+        // where the write did not happen, the old base (so the local edit is still seen).
+        var synced: [EntityID: TodoTask] = [:]
+        for id in onServer {
+            if pending.contains(id) { synced[id] = baseLocal[id] ?? remote.tasks[id]?.todo.task } else { synced[id] = merged.tasks[id] }
+        }
+        state.synced = synced
+    }
+
+    /// The server's copy of a task with the local structure (project, section, parent), which
+    /// the repair may have changed for display.
+    private static func adopt(_ server: TodoTask, structureOf t: TodoTask) -> TodoTask {
+        var out = server
+        out.projectId = t.projectId; out.sectionId = t.sectionId; out.parentId = t.parentId
+        return out
     }
 
     /// The calendar properties for a project (sections on every list, labels on the inbox).
@@ -496,7 +571,11 @@ private struct Pass {
         /// PUT `ics` at `path` (`etag` nil: create); with `moveFrom`, MOVE it there first (then `ics`
         /// nil means the content stays as it is).
         case put(id: EntityID, path: String, projectId: EntityID, ics: String?, etag: String?, moveFrom: String?)
-        case delete(path: String, etag: String?)
+        case delete(id: EntityID, path: String, etag: String?)
+
+        var id: EntityID {
+            switch self { case .put(let id, _, _, _, _, _), .delete(let id, _, _): id }
+        }
     }
 
     enum Outcome: Sendable {
@@ -510,7 +589,7 @@ private struct Pass {
     private static func execute(_ op: TaskOp, server: CalDAVServer) async throws -> Outcome {
         do {
             switch op {
-            case .delete(let path, let etag):
+            case .delete(_, let path, let etag):
                 try await server.delete(path, ifMatch: etag)
                 return .done(requests: 1, etag: nil)
             case .put(_, let path, _, let ics, let etag, let moveFrom):
@@ -550,7 +629,7 @@ enum PropertyList {
         for item in raw.prefix(SyncLimits.maxPropertyEntries) {
             guard let o = item as? [String: Any], let id = o["id"] as? String, isValidEntityID(id), seen.insert(id).inserted
             else { continue }
-            let name = (o["name"] as? String).map { String($0.prefix(SyncLimits.maxNameLength)) } ?? ""
+            let name = (o["name"] as? String).map { String(VTodo.normalizeNewlines($0).prefix(SyncLimits.maxNameLength)) } ?? ""
             let order = (o["order"] as? NSNumber)?.doubleValue ?? 0
             let color = (o["color"] as? String).map { String($0.prefix(SyncLimits.maxColorLength)) }
             out.append(Entry(id: id, name: name, order: order.isFinite ? order : 0, color: color))

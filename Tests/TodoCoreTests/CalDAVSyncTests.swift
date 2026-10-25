@@ -270,6 +270,35 @@ final class CalDAVSyncTests: XCTestCase {
         XCTAssertTrue(ics.contains("UID:Foreign UID with spaces"))
     }
 
+    func testLocalRepairIsNotWrittenToOtherClientsTasks() async throws {
+        let server = FakeCalDAVServer()
+        let a = Device()
+        try await a.sync(server)
+        let path = "\(inbox)/orphan.ics"
+        await server.store(path, "BEGIN:VCALENDAR\r\nBEGIN:VTODO\r\nUID:orphan\r\nSUMMARY:Sub\r\n"
+            + "RELATED-TO:parent-elsewhere\r\nX-TODOTIM-SECTION;X-NAME=Gone;X-ORDER=3:gone-section\r\nEND:VTODO\r\nEND:VCALENDAR\r\n")
+        await server.resetCounts()
+        try await a.sync(server)
+        try await a.sync(server)
+        XCTAssertNil(a.store.task("orphan")?.parentId, "shown as a top-level task")
+        XCTAssertNil(a.store.task("orphan")?.sectionId)
+        var puts = await server.count("PUT")
+        XCTAssertEqual(puts, 0, "the repair stays local")
+
+        // A real edit is written, and keeps the relation and section TodoTim cannot see.
+        a.store.updateTask("orphan") { $0.content = "Sub (edited)" }
+        try await a.sync(server)
+        puts = await server.count("PUT")
+        XCTAssertEqual(puts, 1)
+        let ics = await server.ics(path)!
+        XCTAssertTrue(ics.contains("SUMMARY:Sub (edited)"))
+        XCTAssertTrue(ics.contains("RELATED-TO:parent-elsewhere"))
+        XCTAssertTrue(ics.contains("X-TODOTIM-SECTION;X-NAME=Gone;X-ORDER=3:gone-section"))
+        try await a.sync(server)
+        let again = await server.count("PUT")
+        XCTAssertEqual(again, 1, "converged")
+    }
+
     func testEventCalendarsAndSharedCalendarsAreIgnored() async throws {
         let server = FakeCalDAVServer()
         await server.addCalendar("personal", components: ["VEVENT", "VTODO"])
@@ -343,9 +372,11 @@ final class CalDAVSyncTests: XCTestCase {
         let inInbox = await server.paths(in: inbox)
         XCTAssertEqual(inInbox.count, 1)
         XCTAssertNotNil(a.store.task(t.id), "the local task stays")
-        // Once the server allows it, the list and its task follow.
+        XCTAssertFalse(r.isComplete)
+        // Once the server allows it, the list and its task follow (an incomplete sync is never
+        // treated as idle).
         await server.setRateLimitedCreates([])
-        let r2 = try await a.sync(server)
+        let r2 = try await a.sync(server, previous: a.store.db)
         XCTAssertEqual(r2.warnings, [])
         let created = await server.paths(in: "\(home)/\(blocked.id)")
         XCTAssertEqual(created, ["\(home)/\(blocked.id)/\(t.id).ics"])

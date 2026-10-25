@@ -12,9 +12,10 @@ Paths below are relative to the DAV root (`server_url`, for example
 ## Projects: calendars
 
 - A **project** is a calendar in the home whose `supported-calendar-component-set` is exactly `VTODO`.
-  TodoTim ignores calendars that allow VEVENT (for example "Personal"), subscriptions, and calendars that
+  TodoTim ignores calendars that allow VEVENT (for example "Personal"), subscriptions, calendars that
   other users share (Nextcloud lists them as `<uri>_shared_by_<owner>`, with another
-  `{http://owncloud.org/ns}owner-principal`). It syncs only the user's own calendars.
+  `{http://owncloud.org/ns}owner-principal`), and calendars that Nextcloud apps generate
+  (`app-generated--…`, such as Deck boards). It syncs only the user's own calendars.
 - **Project id** = the calendar URI (the last path segment) when it is a valid id
   (`[A-Za-z0-9_-]{1,64}`). Otherwise the id is a name-based UUID (v5) derived from the URI, and TodoTim keeps
   the mapping to the path. TodoTim creates a new project with MKCALENDAR at `calendars/<user>/<project id>/`,
@@ -27,8 +28,8 @@ Paths below are relative to the DAV root (`server_url`, for example
   | Project | Property | Notes |
   |---|---|---|
   | name | `{DAV:}displayname` | |
-  | color | `{http://apple.com/ns/ical/}calendar-color` | Written as `#RRGGBB` (TodoTim's palette). `#RRGGBB` and `#RRGGBBAA` are read and mapped to the nearest palette color. TodoTim writes a color only when it is changed in TodoTim. |
-  | order | `{http://apple.com/ns/ical/}calendar-order` | An **integer**: Nextcloud rounds anything else. TodoTim renumbers its lists 1…N before it writes when an order has a fraction. The inbox always comes first; TodoTim gives it `0` and does not sync its order after that. |
+  | color | `{http://apple.com/ns/ical/}calendar-color` | Written as `#RRGGBB` (TodoTim's palette). `#RRGGBB` and `#RRGGBBAA` are read and mapped to the nearest palette color. On an existing calendar, TodoTim writes a color only when it is changed in TodoTim. |
+  | order | `{http://apple.com/ns/ical/}calendar-order` | An **integer**: Nextcloud rounds anything else. TodoTim renumbers its lists 1…N before it writes when an order has a fraction, and writes the order only when it changes. The inbox always comes first; TodoTim gives it `0` when it creates it and does not sync its order after that. |
   | sections | `{https://todotim.app/ns}sections` | See below. |
   | labels | `{https://todotim.app/ns}labels` | Only on the inbox calendar. See below. |
 
@@ -101,7 +102,12 @@ Paths below are relative to the DAV root (`server_url`, for example
 
 - **Other properties are preserved.** TodoTim keeps each task's original object and, on a change, rewrites
   only the properties in the table whose values differ. VALARM, DTSTART, GEO, URL, ATTACH, other clients'
-  X- properties, unknown parameters and overrides (VTODOs with RECURRENCE-ID) survive unchanged.
+  X- properties, parameters (as written, including quoted lists) and overrides (VTODOs with RECURRENCE-ID)
+  survive unchanged.
+- **Structure TodoTim cannot show is left alone.** TodoTim shows a subtask whose parent it cannot see
+  (another list, an unreadable object) as a top-level task, and a task in an unknown section without one.
+  It does not write that back: the server keeps `RELATED-TO`, `X-TODOTIM-SECTION` and the list until the
+  task's parent, section or list is changed in TodoTim.
 - **Repeating tasks.** If a task has an `RRULE`, completing it in TodoTim moves `DUE` (and `DTSTART`) to the
   next occurrence instead of completing it. This works for `FREQ=DAILY|WEEKLY|MONTHLY|YEARLY` with
   `INTERVAL`, `COUNT` and `UNTIL` (`WKST` is ignored). The next date counts from the current due date (today
@@ -118,7 +124,8 @@ Paths below are relative to the DAV root (`server_url`, for example
    asking for `getetag` and `calendar-data`. TodoTim follows truncated results (507) page by page, and a
    rejected token (403/409) falls back to a full listing. An idle sync is the single PROPFIND.
 3. **Merge**: three-way per entity: the local version, the server's, and the base (what the previous sync
-   saw; TodoTim keeps it in `caldav-state.json` next to `db.json`). A side that did not change since the
+   saw: the server objects and calendar properties, and each task as the local database held it; TodoTim
+   keeps it in `caldav-state.json` next to `db.json`). A side that did not change since the
    base takes the other side's version. When both changed: tasks are last-writer-wins on
    `updatedAt`/`LAST-MODIFIED` (a delete wins a tie), and project, section and label fields take the
    local value. Merging never deletes a task or list on the server unless TodoTim deleted it locally
