@@ -11,8 +11,9 @@ struct ProjectView: View {
     var body: some View {
         // Rebuilt only when structure, sections, parents' collapsed state or view inputs change;
         // never on selection changes (rows observe the selection themselves).
-        TaskListView(items: model.display().items)
-            .navigationTitle(store.project(projectId)?.name ?? "")
+        let name = store.project(projectId)?.name ?? ""
+        TaskListView(items: model.display().items, title: name)
+            .navigationTitle(name)
     }
 }
 
@@ -21,8 +22,11 @@ struct ProjectView: View {
 struct TaskListView: View {
     @Environment(AppModel.self) private var model
     let items: [DisplayItem]
+    /// Shown centred in the toolbar once the list's own large title has scrolled away.
+    var title: String = ""
     var topPadding: CGFloat = 12
     @State private var visible = VisibleRows()
+    @State private var titleScrolledAway = false
 
     var body: some View {
         // Reads the drag state here only, so a drag invalidates this body (an O(rows) pass)
@@ -50,10 +54,33 @@ struct TaskListView: View {
                 .padding(.bottom, 80)
                 .frame(maxWidth: .infinity)
             }
+            .onScrollGeometryChange(for: Bool.self) { geo in
+                geo.contentOffset.y + geo.contentInsets.top > 60
+            } action: { _, scrolled in
+                titleScrolledAway = scrolled
+            }
             .onScrollTargetVisibilityChange(idType: String.self, threshold: 0.9) { ids in
                 visible.ids = Set(ids)
             }
             .background { SelectionScroller(proxy: proxy, visible: visible) }
+        }
+        // Opaque strip under the (transparent) toolbar, like Todoist: rows scroll under it instead
+        // of under the window buttons. A zero-height view at the top of the safe area whose
+        // background extends up to the window edge covers exactly the toolbar area of this column.
+        .overlay(alignment: .top) {
+            Color.clear.frame(height: 0)
+                .background(alignment: .bottom) {
+                    Color(nsColor: .textBackgroundColor).ignoresSafeArea(edges: .top)
+                }
+                .overlay(alignment: .top) { if titleScrolledAway { Divider() } }
+        }
+        .toolbar {
+            ToolbarItem(placement: .principal) {
+                Text(title)
+                    .font(.system(size: 14, weight: .semibold))
+                    .opacity(titleScrolledAway && !title.isEmpty ? 1 : 0)
+                    .animation(.easeOut(duration: 0.15), value: titleScrolledAway)
+            }
         }
         .onAppear { Perf.firstListAppeared() }
     }

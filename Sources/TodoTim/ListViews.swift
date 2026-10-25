@@ -53,7 +53,7 @@ struct LabelView: View {
     let name: String
 
     var body: some View {
-        TaskListView(items: model.display().items)
+        TaskListView(items: model.display().items, title: name)
             .navigationTitle(name)
     }
 }
