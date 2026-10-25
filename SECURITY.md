@@ -7,7 +7,7 @@ Please report security issues privately through GitHub:
 (the **Security** tab of this repository › **Report a vulnerability**).
 
 Don't open a public issue for a vulnerability. Include the TodoTim version, what an attacker needs (for example
-control of the WebDAV server or of a local file), and steps to reproduce.
+control of the CalDAV (WebDAV) server or of a local file), and steps to reproduce.
 
 ## Supported versions
 
@@ -15,5 +15,5 @@ Only the latest release gets fixes.
 
 ## Scope
 
-TodoTim is a single-user app that syncs to a WebDAV server you control. See the Security section of the
+TodoTim is a single-user app that syncs to a CalDAV server you control. See the Security section of the
 [README](README.md#security) for how it stores credentials and what it trusts.

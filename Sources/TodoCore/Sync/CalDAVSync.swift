@@ -252,7 +252,10 @@ private struct Pass {
             case let (r?, b?):
                 guard let l else { db.tasks[id] = r; continue }
                 let localChanged = l != b
-                let remoteChanged = remote.tasks[id]!.ics != base.tasks[id]!.ics || remote.tasks[id]!.path != base.tasks[id]!.path
+                let rr = remote.tasks[id]!, br = base.tasks[id]!
+                // The server may hand back our own upload with other line endings: compare ETags first.
+                let remoteChanged = rr.path != br.path
+                    || (rr.etag != nil && br.etag != nil ? rr.etag != br.etag : rr.ics != br.ics)
                 switch (localChanged, remoteChanged) {
                 case (false, _): db.tasks[id] = r
                 case (true, false): db.tasks[id] = l
@@ -395,10 +398,9 @@ private struct Pass {
         }
 
         // 2. Tasks, a few at a time.
-        let deletedProjects = Set(merged.projects.values.filter(\.deleted).map(\.id))
+        let liveProjects = Set(merged.projects.values.filter { !$0.deleted }.map(\.id)).subtracting(unavailable)
         var ops: [TaskOp] = []
-        for t in merged.tasks.values.sorted(by: { $0.id < $1.id })
-        where !deletedProjects.contains(t.projectId) && !unavailable.contains(t.projectId) {
+        for t in merged.tasks.values.sorted(by: { $0.id < $1.id }) where liveProjects.contains(t.projectId) {
             let r = remote.tasks[t.id]
             let section = t.sectionId.flatMap { merged.sections[$0] }.flatMap { $0.deleted ? nil : $0 }
             let parentUID = t.parentId.map { remote.uid(of: $0) }
@@ -430,6 +432,8 @@ private struct Pass {
             switch outcome {
             case .conflict:
                 conflicted = true
+            case .failed(let message):
+                warnings.append(message)
             case .done(let requests, let etag):
                 writes += requests
                 switch op {
@@ -482,7 +486,10 @@ private struct Pass {
 
     enum Outcome: Sendable {
         case done(requests: Int, etag: String?)
+        /// 412: the server version changed; the next pass merges it.
         case conflict
+        /// Refused for this task only (e.g. 403); reported, retried next sync.
+        case failed(String)
     }
 
     private static func execute(_ op: TaskOp, server: CalDAVServer) async throws -> Outcome {
@@ -502,6 +509,8 @@ private struct Pass {
             }
         } catch SyncError.preconditionFailed {
             return .conflict
+        } catch let e as SyncError where e.isPerResource {
+            return .failed(SyncController.message(for: e))
         }
     }
 }

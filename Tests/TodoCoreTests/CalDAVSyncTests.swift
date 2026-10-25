@@ -360,7 +360,7 @@ final class CalDAVSyncTests: XCTestCase {
 
 extension String {
     /// Calendar data with folded lines joined, for content checks.
-    var unfolded: String { replacingOccurrences(of: "\r\n ", with: "") }
+    var unfolded: String { replacingOccurrences(of: "\r\n ", with: "").replacingOccurrences(of: "\n ", with: "") }
 }
 
 extension Calendar {

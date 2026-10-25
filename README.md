@@ -1,7 +1,7 @@
 # TodoTim
 
 A fast, native macOS to-do app modelled on [Todoist](https://todoist.com), that keeps your data in your own
-[Nextcloud](https://nextcloud.com) (or any WebDAV) folder.
+[Nextcloud](https://nextcloud.com), as CalDAV task lists that other task apps can share.
 
 ![TodoTim showing a project with sections, tasks and subtasks](docs/screenshot.png)
 
@@ -16,7 +16,7 @@ subtasks, all driven from the keyboard. It leaves out Today, Upcoming, the calen
 - Quick Add with natural language: `Renew passport next friday p1 @errands #Home /Admin`
 - Keyboard shortcuts for almost everything (press `?` in the app)
 - Search, label views, completed-task view, and undo for complete and delete
-- Local-first: works offline, and syncs to a WebDAV folder in the background
+- Local-first: works offline, and syncs to Nextcloud over CalDAV in the background
 - Native SwiftUI app with no third-party dependencies
 
 ## Install
@@ -42,16 +42,31 @@ Requires macOS 15 (Sequoia) or later, on Apple silicon or Intel.
 
 ## Sync with Nextcloud
 
+TodoTim syncs with Nextcloud over CalDAV. Each project is a task list (a calendar that holds only to-dos), and
+the inbox is the list "Inbox". Other CalDAV task apps, such as the Nextcloud Tasks app or DAVx⁵-based clients
+on Android, see and edit the same tasks. Sections, labels, subtasks and manual order sync too, and TodoTim
+keeps what other apps add, such as reminders. Calendars with events are left alone.
+[docs/caldav.md](docs/caldav.md) describes the mapping.
+
 1. In Nextcloud, go to **Settings › Security › Devices & sessions** and create an app password.
 2. In TodoTim, open **Settings** (`⌘,`) and fill in:
-   - **Server URL**: `https://your.cloud/remote.php/dav/files/USERNAME/`
-     (shown in Nextcloud Files under **Files settings › WebDAV**)
+   - **Server URL**: `https://your.cloud/remote.php/dav/`
    - **Username** and the **app password**
-   - **Folder**: where TodoTim keeps its files, `TodoTim` by default
 3. Click **Test connection**, turn on sync, and close the window.
 
-TodoTim syncs a few seconds after each change, every minute, and when you press `⌘R`. Your password is stored
-in the macOS Keychain, per server: after you change the server URL, enter the password again. Local data lives in `~/Library/Application Support/TodoTim/db.json`.
+The first sync uploads your existing projects and tasks. Running it again creates no duplicates.
+
+TodoTim syncs a few seconds after each change, every minute, and when you press `⌘R`. An idle sync is a single
+request. Your password is stored in the macOS Keychain, per server: after you change the server URL, enter the
+password again. Local data lives in `~/Library/Application Support/TodoTim/` (`db.json`, plus
+`caldav-state.json`, which records what the last sync saw).
+
+When two devices edit the same task, the most recent edit wins. When TodoTim and another app change the same
+project, section or label, TodoTim's change wins.
+
+Completing a repeating task (one with a repeat rule from another app) moves it to its next due date, as other
+task apps do. Daily, weekly, monthly and yearly repeats with an interval, count or end date are supported;
+TodoTim completes tasks with other repeat rules normally.
 
 ### Configure with a dotfile
 
@@ -65,32 +80,32 @@ repository = "https://github.com/timvink/todotim"
 
 [sync]
 enabled = true
-server_url = "https://your.cloud/remote.php/dav/files/USERNAME/"
+server_url = "https://your.cloud/remote.php/dav/"
 username = "USERNAME"
-folder = "TodoTim"
 # Optional. Prints the password; runs once when the Keychain has none, then the Keychain keeps it.
 password_command = "rbw get 'Nextcloud app password'"
+# Optional. Nextcloud users each new list is shared with (read-write), e.g. an assistant's account.
+share_with = ["tasks-agent"]
 ```
 
 `password_command` runs in your login shell, so tools from Homebrew are found. Leave it out to enter the
-password in Settings instead.
-
-On the server, the folder holds an `index.json` with projects and labels, and one JSON file per project under
-`projects/`. When two devices edit the same item, the most recent edit wins.
+password in Settings instead. TodoTim versions before CalDAV sync used `folder` and a
+`.../remote.php/dav/files/USERNAME/` URL. TodoTim ignores `folder` now, and accepts that URL as the DAV root.
 
 ## Security
 
-- **Credentials.** The app password is stored in the macOS Keychain (service `TodoTim WebDAV`), under an account
-  named after both user and server, for example `tim@cloud.example.com`. A password saved for one server is never
-  sent to another. TodoTim never logs it or shows `password_command` output.
+- **Credentials.** The app password is stored in the macOS Keychain (service `TodoTim WebDAV`, a name kept from
+  earlier versions), under an account named after both user and server, for example `tim@cloud.example.com`.
+  A password saved for one server is never sent to another. TodoTim never logs it or shows `password_command` output.
 - **HTTPS only.** TodoTim refuses `http://` server URLs (except `localhost`), and does not follow redirects
   that leave the configured server URL.
 - **Config file trust.** `~/.todotim.toml` (and `TODOTIM_CONFIG`) can run a command and decides where the
   password is sent, so TodoTim only reads it when the file (after following symlinks) is a regular file owned by
   you and not writable by group or others, in a folder others can't write to. `chmod 600 ~/.todotim.toml` is
   a good default.
-- **Remote data.** Data from the server is validated: ids must be short `[A-Za-z0-9_-]` strings, and
-  responses, file counts, text lengths and subtask depth are limited.
+- **Remote data.** Data from the server is validated: ids must be short `[A-Za-z0-9_-]` strings (others are
+  mapped to derived ids), calendar data is parsed with size, line and nesting limits, and responses, text
+  lengths and subtask depth are limited.
 - **Local data** in `~/Library/Application Support/TodoTim/` is readable only by you.
 
 Report vulnerabilities privately as described in [SECURITY.md](SECURITY.md).

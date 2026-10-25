@@ -83,7 +83,7 @@ Keep the `gh attestation verify` step: it ties the zip to this repository, which
 
 ## Why ad-hoc builds trigger repeated Keychain prompts
 
-TodoTim stores the WebDAV password as a generic password in the login keychain. When an app creates such an
+TodoTim stores the Nextcloud app password as a generic password in the login keychain. When an app creates such an
 item, macOS adds the app to the item's access list by its *designated requirement*: the rule that identifies
 "the same app" in later versions.
 
