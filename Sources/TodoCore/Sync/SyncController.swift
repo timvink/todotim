@@ -58,9 +58,10 @@ public final class SyncController {
     /// Called after sync replaced the store's database with merged remote changes.
     /// The app uses it to persist the database.
     @ObservationIgnored public var onDatabaseReplaced: (() -> Void)?
-    /// Called before the sync state is saved; must write any pending database save to disk. The
-    /// state describes what the database holds, so it may never be on disk ahead of it.
-    @ObservationIgnored public var flushDatabase: (() -> Void)?
+    /// Called before the sync state is saved; must write any pending database save to disk and
+    /// return whether the database on disk is current. The state describes what the database
+    /// holds, so it is saved only then (never ahead of the database).
+    @ObservationIgnored public var flushDatabase: (() -> Bool)?
 
     @ObservationIgnored public var debounceInterval: Duration = .seconds(2)
     @ObservationIgnored public var syncInterval: Duration = .seconds(60)
@@ -76,6 +77,8 @@ public final class SyncController {
     @ObservationIgnored private let stateURL: URL?
     @ObservationIgnored private let stateQueue = DispatchQueue(label: "TodoTim.CalDAVState", qos: .utility)
     @ObservationIgnored private var state: CalDAVState?
+    /// The state as last written to `stateURL`.
+    @ObservationIgnored private var savedState: CalDAVState?
     /// The database right after the last sync, so an idle sync can skip merging.
     @ObservationIgnored private var lastSynced: Database?
     @ObservationIgnored private var debounceTask: Task<Void, Never>?
@@ -262,6 +265,7 @@ public final class SyncController {
         if let stateURL, let data = try? Data(contentsOf: stateURL),
            let saved = try? JSONDecoder().decode(CalDAVState.self, from: data), saved.account == account {
             state = saved
+            savedState = saved
             return saved
         }
         let fresh = CalDAVState(account: account)
@@ -270,10 +274,15 @@ public final class SyncController {
     }
 
     private func saveState(_ new: CalDAVState) {
-        guard new != state else { return }
         state = new
-        guard let stateURL else { return }
-        flushDatabase?()
+        guard let stateURL, new != savedState else { return }
+        guard flushDatabase?() ?? true else {
+            // The database could not be written: keep the file's older state (safe with an
+            // older or newer database) and try again after the next sync.
+            NSLog("TodoTim: not saving the sync state, because the database could not be saved")
+            return
+        }
+        savedState = new
         stateQueue.async {
             do {
                 try LocalPersistence.writePrivately(try JSONEncoder().encode(new), to: stateURL)

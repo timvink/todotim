@@ -173,7 +173,7 @@ final class SyncControllerTests: XCTestCase {
         let c = makeController(store, remote, stateURL: url)
         var events: [String] = []
         c.onDatabaseReplaced = { events.append("db") }
-        c.flushDatabase = { events.append("flush") }
+        c.flushDatabase = { events.append("flush"); return true }
         c.configure(settings, password: "pw")
         try await waitUntil { c.lastSync != nil }
         try await waitUntil { FileManager.default.fileExists(atPath: url.path) }
@@ -181,6 +181,17 @@ final class SyncControllerTests: XCTestCase {
         let saved = try JSONDecoder().decode(CalDAVState.self, from: Data(contentsOf: url))
         XCTAssertEqual(saved.resources.count, 1)
         XCTAssertEqual(saved.account, "https://cloud.example.com/remote.php/dav/|tim")
+
+        // When the database cannot be saved, the state file is left as it was.
+        let before = try Data(contentsOf: url)
+        c.flushDatabase = { false }
+        store.addTask(content: "y", projectId: TodoStore.inboxID)
+        await c.syncNow()
+        try await Task.sleep(for: .milliseconds(200))
+        XCTAssertEqual(try Data(contentsOf: url), before)
+        c.flushDatabase = { true }
+        await c.syncNow()
+        try await waitUntil { (try? Data(contentsOf: url)) != before }
 
         // A new controller (next launch) syncs from the saved state: nothing to write.
         await remote.resetCounts()

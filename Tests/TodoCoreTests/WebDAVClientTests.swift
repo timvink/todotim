@@ -266,6 +266,22 @@ final class WebDAVClientTests: XCTestCase {
         XCTAssertEqual(full.changed.count, 1)
     }
 
+    func testEndlessPagingFailsInsteadOfReturningAPartialListing() async throws {
+        let truncated = syncCollection.replacingOccurrences(of: " <d:sync-token>", with: """
+         <d:response><d:href>/remote.php/dav/calendars/tim/work/</d:href><d:status>HTTP/1.1 507 Insufficient Storage</d:status></d:response>
+         <d:sync-token>
+        """)
+        StubURLProtocol.handler = { _ in (207, [:], Data(truncated.utf8)) }
+        let caldav = CalDAVClient(dav: try makeClient(), username: "tim")
+        do {
+            _ = try await caldav.changes(in: "calendars/tim/work", since: nil)
+            XCTFail("expected limitExceeded")
+        } catch {
+            guard case .limitExceeded? = error as? SyncError else { return XCTFail("\(error)") }
+        }
+        XCTAssertEqual(StubURLProtocol.requests.count, CalDAVClient.maxPages)
+    }
+
     func testWritesAreConditional() async throws {
         StubURLProtocol.handler = { _ in (201, ["ETag": "\"new-gzip\""], Data()) }
         let caldav = CalDAVClient(dav: try makeClient(), username: "tim")

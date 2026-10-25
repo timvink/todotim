@@ -17,9 +17,17 @@ final class LiveCalDAVTests: XCTestCase {
         else { throw XCTSkip("set TODOTIM_LIVE_URL, TODOTIM_LIVE_USER and TODOTIM_LIVE_PASSWORD to run") }
         server = CalDAVClient(dav: try WebDAVClient(serverURL: url, username: user, password: password), username: user)
         shareWith = env["TODOTIM_LIVE_SHARE_WITH"].map { [$0] } ?? []
-        // Start from an empty account: remove the lists earlier runs left, for good (a list in
-        // Nextcloud's trash bin blocks a new one at its path), and their properties (which
-        // Nextcloud would otherwise keep for a new list at the same path).
+        try await removeAllLists()
+    }
+
+    override func tearDown() async throws {
+        if server != nil { try await removeAllLists() }
+    }
+
+    /// Removes the account's lists for good (a list in Nextcloud's trash bin blocks a new one at
+    /// its path), and first their properties (which Nextcloud would otherwise keep, also for a
+    /// new list at the same path).
+    private func removeAllLists() async throws {
         var paths = Set(try await server.calendars().map(\.path))
         paths.insert("\(server.home)/\(CalDAVSync.inboxURI)")
         for path in paths {

@@ -201,6 +201,32 @@ final class VTodoTests: XCTestCase {
         XCTAssertFalse(again.contains("DUE"))
     }
 
+    func testNewDueDateFitsAForeignStartAndDuration() throws {
+        let ics = vtodo("UID:x\nDTSTART;TZID=Europe/Amsterdam:20261110T090000\nDURATION:PT1H")
+        let old = try XCTUnwrap(VTodo.read(ics, projectId: "p"))
+        var t = old.task
+        t.due = DueDate(date: "2026-11-05")
+        let patched = try XCTUnwrap(VTodo.patch(ics, old: old, to: t, parentUID: nil, section: nil))
+        XCTAssertTrue(patched.contains("DUE:20261105T235959\r\n"), "a DATE-TIME like DTSTART: \(patched)")
+        XCTAssertTrue(patched.contains("DTSTART;TZID=Europe/Amsterdam:20261105T090000"), "the start is not after the due date")
+        XCTAssertFalse(patched.contains("DURATION"), "DUE and DURATION exclude each other")
+        XCTAssertEqual(VTodo.read(patched, projectId: "p")?.task.due?.date, "2026-11-05")
+
+        // A DATE start keeps the DATE due.
+        let dateStart = vtodo("UID:y\nDTSTART;VALUE=DATE:20261101")
+        let o2 = try XCTUnwrap(VTodo.read(dateStart, projectId: "p"))
+        var t2 = o2.task
+        t2.due = DueDate(date: "2026-11-05")
+        XCTAssertTrue(VTodo.patch(dateStart, old: o2, to: t2, parentUID: nil, section: nil)!.contains("DUE;VALUE=DATE:20261105"))
+    }
+
+    func testOverrideOnlyObjectIsNotATask() {
+        let ics = vtodo("UID:x\nRECURRENCE-ID:20261101T090000Z\nSUMMARY:One occurrence")
+        XCTAssertNil(VTodo.read(ics, projectId: "p"))
+        let master = ics.replacingOccurrences(of: "END:VCALENDAR", with: "BEGIN:VTODO\r\nUID:x\r\nSUMMARY:Series\r\nEND:VTODO\r\nEND:VCALENDAR")
+        XCTAssertEqual(VTodo.read(master, projectId: "p")?.task.content, "Series", "the master, not the override")
+    }
+
     func testRecurrenceAdvance() {
         let cal = Calendar.amsterdam
         func next(_ rule: String, _ due: String) -> String? {
@@ -208,11 +234,20 @@ final class VTodoTests: XCTestCase {
         }
         XCTAssertEqual(next("FREQ=DAILY", "2026-10-31"), "2026-11-01 FREQ=DAILY")
         XCTAssertEqual(next("FREQ=WEEKLY;INTERVAL=2;WKST=MO", "2026-10-25"), "2026-11-08 FREQ=WEEKLY;INTERVAL=2;WKST=MO")
-        XCTAssertEqual(next("FREQ=MONTHLY", "2026-01-31"), "2026-02-28 FREQ=MONTHLY")
+        XCTAssertEqual(next("FREQ=MONTHLY", "2026-01-31"), "2026-03-31 FREQ=MONTHLY", "February 31 is skipped, not clamped")
+        XCTAssertEqual(next("FREQ=MONTHLY;INTERVAL=1", "2026-03-31"), "2026-05-31 FREQ=MONTHLY;INTERVAL=1")
+        XCTAssertEqual(next("FREQ=YEARLY", "2028-02-29"), "2032-02-29 FREQ=YEARLY", "leap day stays a leap day")
+        XCTAssertEqual(next("FREQ=MONTHLY", "2026-01-15"), "2026-02-15 FREQ=MONTHLY")
         XCTAssertEqual(next("FREQ=YEARLY;COUNT=3", "2026-03-01"), "2027-03-01 FREQ=YEARLY;COUNT=2")
         XCTAssertNil(next("FREQ=YEARLY;COUNT=1", "2026-03-01"), "last occurrence: complete")
         XCTAssertEqual(next("FREQ=DAILY;UNTIL=20261102", "2026-11-01"), "2026-11-02 FREQ=DAILY;UNTIL=20261102")
         XCTAssertNil(next("FREQ=DAILY;UNTIL=20261102T000000Z", "2026-11-02"))
+        // A DATE-TIME UNTIL bounds the start time, which a date-only task doesn't know: advance
+        // only with two days to spare.
+        XCTAssertNil(next("FREQ=DAILY;UNTIL=20261102T100000Z", "2026-11-01"))
+        XCTAssertNil(next("FREQ=DAILY;UNTIL=20261104T100000Z", "2026-11-02"))
+        XCTAssertEqual(next("FREQ=DAILY;UNTIL=20261104T100000Z", "2026-11-01"), "2026-11-02 FREQ=DAILY;UNTIL=20261104T100000Z")
+        XCTAssertNil(next("FREQ=DAILY;UNTIL=garbage", "2026-11-01"))
         XCTAssertNil(next("FREQ=WEEKLY;BYDAY=MO,WE", "2026-11-02"), "unsupported parts: complete")
         XCTAssertNil(next("FREQ=HOURLY", "2026-11-02"))
         XCTAssertEqual(Recurrence.summary("FREQ=WEEKLY;INTERVAL=2"), "Every 2 weeks")

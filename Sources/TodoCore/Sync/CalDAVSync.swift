@@ -14,6 +14,10 @@ public struct CalDAVState: Codable, Equatable, Sendable {
     /// it reads, such as a DATE-TIME due date after a timezone change, or the local structure
     /// repair, for edits.)
     var synced: [EntityID: TodoTask] = [:]
+    /// Objects that were tasks but can no longer be read (malformed, over a limit, or only
+    /// overrides), by path, with the task id they had. Their tasks are left as they are on both
+    /// sides; they are not taken for deleted.
+    var unreadable: [String: EntityID] = [:]
 
     public init(account: String) { self.account = account }
 
@@ -90,6 +94,11 @@ private struct Pass {
     var idle = false
     /// Base local versions of tasks (`CalDAVState.synced`, else the parsed base object).
     private var baseLocal: [EntityID: TodoTask] = [:]
+    /// Tasks whose object exists but cannot be read now (`CalDAVState.unreadable`): neither
+    /// merged nor written.
+    private var frozen: Set<EntityID> = []
+    /// `CalDAVState.synced` as this pass started.
+    private var previousSynced: [EntityID: TodoTask] = [:]
 
     init(local: Database, state: CalDAVState, server: CalDAVServer, shareWith: [String], now: Date) {
         self.local = local; self.state = state; self.server = server; self.shareWith = shareWith; self.now = now
@@ -106,6 +115,8 @@ private struct Pass {
         /// Projects whose sections come from the calendar property (else from the tasks).
         var hasSectionsProperty: Set<EntityID> = []
         var tasks: [EntityID: (todo: VTodoTask, path: String, etag: String?, ics: String)] = [:]
+        /// Objects in a synced calendar that hold no readable task.
+        var unreadablePaths: Set<String> = []
 
         func uid(of id: EntityID) -> String { tasks[id]?.todo.uid ?? id }
     }
@@ -144,9 +155,12 @@ private struct Pass {
         let byCalendarPath = Dictionary(v.calendarOf.map { ($0.value.path, $0.key) }, uniquingKeysWith: { a, _ in a })
         for (path, record) in resources.sorted(by: { $0.key < $1.key }) {
             let parent = String(path[..<(path.lastIndex(of: "/") ?? path.startIndex)])
-            guard let projectId = byCalendarPath[parent],
-                  let todo = VTodoCache.shared.read(path: path, ics: record.ics, projectId: projectId),
-                  v.tasks[todo.task.id] == nil else { continue }  // a duplicate UID: the first path wins
+            guard let projectId = byCalendarPath[parent] else { continue }
+            guard let todo = VTodoCache.shared.read(path: path, ics: record.ics, projectId: projectId) else {
+                v.unreadablePaths.insert(path)
+                continue
+            }
+            guard v.tasks[todo.task.id] == nil else { continue }  // a duplicate UID: the first path wins
             v.tasks[todo.task.id] = (todo, path, record.etag, record.ics)
             // Without the sections property (e.g. a list shared with this user), sections come
             // from the tasks' X-TODOTIM-SECTION parameters.
@@ -210,7 +224,15 @@ private struct Pass {
 
         let base = Self.view(baseState.calendars, baseState.resources)
         let remote = Self.view(calendars, resources)
+        previousSynced = baseState.synced
         for (id, b) in base.tasks { baseLocal[id] = baseState.synced[id] ?? b.todo.task }
+        let basePaths = Dictionary(base.tasks.map { ($0.value.path, $0.key) }, uniquingKeysWith: { a, _ in a })
+        state.unreadable = [:]
+        for path in remote.unreadablePaths {
+            guard let id = baseState.unreadable[path] ?? basePaths[path], remote.tasks[id] == nil else { continue }
+            state.unreadable[path] = id
+            frozen.insert(id)
+        }
         merge(base: base, remote: remote)
         try await write(remote: remote)
         return self
@@ -267,6 +289,10 @@ private struct Pass {
         // Tasks.
         for id in Set(local.tasks.keys).union(base.tasks.keys).union(remote.tasks.keys) {
             let l = local.tasks[id], b = baseLocal[id], r = remote.tasks[id]?.todo.task
+            if frozen.contains(id) {
+                if let l { db.tasks[id] = l }
+                continue
+            }
             switch (r, b) {
             case let (r?, b?):
                 guard let l else { db.tasks[id] = r; continue }
@@ -316,7 +342,7 @@ private struct Pass {
         }
 
         // Tombstones of tasks still on the server stay until their DELETE succeeds.
-        let pending = Set(db.tasks.values.filter { $0.deleted && remote.tasks[$0.id] != nil }.map(\.id))
+        let pending = Set(db.tasks.values.filter { $0.deleted && (remote.tasks[$0.id] != nil || frozen.contains($0.id)) }.map(\.id))
             .union(db.projects.values.filter { $0.deleted && remote.calendarOf[$0.id] != nil }.map(\.id))
         merged = SyncEngine.clean(db, now: now, keepTombstones: pending)
     }
@@ -432,9 +458,20 @@ private struct Pass {
         let liveProjects = Set(merged.projects.values.filter { !$0.deleted }.map(\.id)).subtracting(unavailable)
         var onServer = Set(remote.tasks.keys)
         var pending = Set<EntityID>()  // not written as intended; `synced` keeps their old base
+        /// Lists that must not be deleted yet: a task still has to move out of them.
+        var keepCalendars = Set<String>()
+        func parentPath(_ path: String) -> String { String(path[..<(path.lastIndex(of: "/") ?? path.startIndex)]) }
         var ops: [TaskOp] = []
-        for t in merged.tasks.values.sorted(by: { $0.id < $1.id }) where liveProjects.contains(t.projectId) {
+        for t in merged.tasks.values.sorted(by: { $0.id < $1.id }) where !frozen.contains(t.id) {
             let r = remote.tasks[t.id]
+            guard liveProjects.contains(t.projectId) else {
+                // Its list could not be created: the task (and any move into that list) waits.
+                if unavailable.contains(t.projectId), let r {
+                    pending.insert(t.id)
+                    keepCalendars.insert(parentPath(r.path))
+                }
+                continue
+            }
             if t.deleted {
                 if let r { ops.append(.delete(id: t.id, path: r.path, etag: r.etag)) }
                 continue
@@ -470,6 +507,7 @@ private struct Pass {
                 // Another object already has this name in the target list (a duplicate UID).
                 warnings.append("Could not move “\(t.content)”: “\(movePath)” already exists on the server")
                 pending.insert(t.id)
+                keepCalendars.insert(parent)
                 continue
             }
             let patched = VTodo.patch(r.ics, old: r.todo, to: w, parentUID: parentUID, section: section)
@@ -490,10 +528,12 @@ private struct Pass {
             case .conflict:
                 conflicted = true
                 pending.insert(op.id)
+                if case .put(_, _, _, _, _, let from?) = op { keepCalendars.insert(parentPath(from)) }
             case .failed(let message):
                 warnings.append(message)
                 incomplete = true
                 pending.insert(op.id)
+                if case .put(_, _, _, _, _, let from?) = op { keepCalendars.insert(parentPath(from)) }
             case .done(let requests, let etag):
                 writes += requests
                 switch op {
@@ -521,6 +561,12 @@ private struct Pass {
         // 3. Deleted lists last (their tasks go with them).
         for p in projects where p.deleted && !p.isInbox {
             guard let cal = remote.calendarOf[p.id] else { continue }
+            if keepCalendars.contains(cal.path) {
+                // Deleting it now would destroy a task that was meant to move out of it.
+                warnings.append("Kept the list “\(cal.name ?? cal.uri)” on the server until its moved tasks are out of it")
+                incomplete = true
+                continue
+            }
             do {
                 try await server.deleteCalendar(cal.path)
             } catch let e as SyncError where e.isPerResource {
@@ -537,9 +583,14 @@ private struct Pass {
         // The base for the next sync: each task on the server as the database now holds it, or,
         // where the write did not happen, the old base (so the local edit is still seen).
         var synced: [EntityID: TodoTask] = [:]
+    /// Objects that were tasks but can no longer be read (malformed, over a limit, or only
+    /// overrides), by path, with the task id they had. Their tasks are left as they are on both
+    /// sides; they are not taken for deleted.
+    var unreadable: [String: EntityID] = [:]
         for id in onServer {
             if pending.contains(id) { synced[id] = baseLocal[id] ?? remote.tasks[id]?.todo.task } else { synced[id] = merged.tasks[id] }
         }
+        for id in frozen { synced[id] = previousSynced[id] ?? baseLocal[id] }
         state.synced = synced
     }
 

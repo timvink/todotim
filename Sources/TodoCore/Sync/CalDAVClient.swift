@@ -87,6 +87,8 @@ final class CalDAVClient: CalDAVServer {
     let dav: WebDAVClient
     let username: String
     let home: String
+    /// Pages of a sync-collection REPORT followed before giving up.
+    static let maxPages = 100
 
     init(dav: WebDAVClient, username: String) {
         self.dav = dav
@@ -141,8 +143,9 @@ final class CalDAVClient: CalDAVServer {
     func changes(in calendar: String, since token: String?) async throws -> CalendarChanges {
         var result = CalendarChanges(syncToken: token, changed: [], removed: [], isFull: token == nil)
         var seen: [String: Int] = [:]
+        var finished = false
         // Servers may return results in pages (a 507 response for the collection means "more").
-        for _ in 0..<100 {
+        for _ in 0..<Self.maxPages {
             let body = """
             <?xml version="1.0" encoding="utf-8"?>
             <d:sync-collection xmlns:d="DAV:" xmlns:c="\(Self.caldavNS)"><d:sync-token>\(xmlEscape(result.syncToken ?? ""))</d:sync-token>\
@@ -183,8 +186,13 @@ final class CalDAVClient: CalDAVServer {
                 }
             }
             result.syncToken = doc.syncToken ?? result.syncToken
-            if !more { break }
+            if !more {
+                finished = true
+                break
+            }
         }
+        // A listing cut short must not count as complete (missing objects would look deleted).
+        guard finished else { throw SyncError.limitExceeded("more than \(Self.maxPages) pages of changes in “\(calendar)”") }
         result.changed.removeAll { $0.ics.isEmpty }
         guard result.changed.count <= SyncLimits.maxTasks else {
             throw SyncError.limitExceeded("more than \(SyncLimits.maxTasks) tasks in “\(calendar)”")

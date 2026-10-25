@@ -87,9 +87,10 @@ enum VTodo {
 
     static let maxRuleLength = 1_000
 
+    /// The VTODO without RECURRENCE-ID. An object that holds only overrides of another object's
+    /// occurrences has none and is not a task of its own.
     private static func master(_ root: ICalComponent) -> ICalComponent? {
-        let todos = root.components.filter { $0.name == "VTODO" }
-        return todos.first { $0.first("RECURRENCE-ID") == nil } ?? todos.first
+        root.components.first { $0.name == "VTODO" && $0.first("RECURRENCE-ID") == nil }
     }
 
     private static func isParent(_ p: ICalProperty) -> Bool {
@@ -209,7 +210,7 @@ enum VTodo {
         let before = Fields(old), after = Fields(task, section: section)
         guard before != after, var root = try? ICalendar.parse(ics),
               let index = root.components.firstIndex(where: { $0.name == "VTODO" && $0.first("RECURRENCE-ID") == nil })
-                ?? root.components.firstIndex(where: { $0.name == "VTODO" }) else { return nil }
+        else { return nil }
         apply(task, parentUID: parentUID, section: section, changed: (before, after), old: root.components[index],
               to: &root.components[index])
         return ICalendar.serialize(root)
@@ -280,11 +281,17 @@ enum VTodo {
     /// TodoTim writes `DUE;VALUE=DATE`. A DATE-TIME due date from another client keeps its time
     /// of day and is moved by the same number of days; DTSTART (if any) moves along, so the
     /// span between start and due stays the same.
+    ///
+    /// RFC 5545 §3.6.2: DUE must have DTSTART's value type and be later than it, and excludes
+    /// DURATION. So a new due date on a task with a DATE-TIME start is written as the end of that
+    /// day (floating, so it reads back as the same date), the start moves back to that day if it
+    /// was later, and DURATION is removed.
     private static func setDue(_ due: DueDate?, old: ICalComponent?, to todo: inout ICalComponent) {
         guard let due else {
             todo.remove("DUE")
             return
         }
+        todo.remove("DURATION")
         let oldDueProp = old?.first("DUE")
         let oldValue = oldDueProp.flatMap(ICalendar.DateValue.init)
         var delta: Int?
@@ -293,6 +300,13 @@ enum VTodo {
         }
         if let oldDueProp, let oldValue, !oldValue.isDate, let delta {
             todo.set(oldValue.shifted(days: delta).property("DUE", keeping: oldDueProp))
+        } else if delta == nil, let start = todo.first("DTSTART"), let startValue = ICalendar.DateValue(start), !startValue.isDate {
+            todo.set(ICalProperty("DUE", value: due.date.replacingOccurrences(of: "-", with: "") + "T235959"))
+            if let startDay = startValue.localDate(calendar: .current).day(), let dueDay = due.day(),
+               let back = Calendar.current.dateComponents([.day], from: startDay, to: dueDay).day, back < 0 {
+                todo.set(startValue.shifted(days: back).property("DTSTART", keeping: start))
+            }
+            return
         } else {
             todo.set(ICalendar.dateProperty("DUE", due))
         }

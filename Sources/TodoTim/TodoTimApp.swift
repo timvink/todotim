@@ -113,7 +113,8 @@ final class AppServices {
             guard let self else { return }
             self.writer?.save(self.store.db)
         }
-        sync.flushDatabase = { [weak self] in self?.writer?.flush() }
+        // Without a writer (unreadable database file) the state is never saved either.
+        sync.flushDatabase = { [weak self] in self?.writer?.flush() ?? false }
     }
 
     /// Commits pending edits and writes the database synchronously (on quit).

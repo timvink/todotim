@@ -299,6 +299,78 @@ final class CalDAVSyncTests: XCTestCase {
         XCTAssertEqual(again, 1, "converged")
     }
 
+    func testListIsNotDeletedWhileATaskStillHasToMoveOutOfIt() async throws {
+        let server = FakeCalDAVServer()
+        let a = Device()
+        let doomed = a.store.addProject(name: "Doomed"), keep = a.store.addProject(name: "Keep")
+        try await a.sync(server)
+        let path = "\(home)/\(doomed.id)/foreign.ics"
+        await server.store(path, "BEGIN:VCALENDAR\r\nBEGIN:VTODO\r\nUID:foreign\r\nSUMMARY:Rescue me\r\n"
+            + "BEGIN:VALARM\r\nTRIGGER:-PT5M\r\nEND:VALARM\r\nEND:VTODO\r\nEND:VCALENDAR\r\n")
+        try await a.sync(server)
+        a.store.moveTask("foreign", projectId: keep.id, sectionId: nil, parentId: nil)
+        a.store.deleteProject(doomed.id)
+        await server.setFailMoves(true)
+        let r = try await a.sync(server)
+        XCTAssertFalse(r.isComplete)
+        let still = await server.ics(path)
+        XCTAssertNotNil(still, "the list (and the object) survive the failed MOVE")
+        await server.setFailMoves(false)
+        try await a.sync(server)
+        let moved = await server.ics("\(home)/\(keep.id)/foreign.ics")
+        XCTAssertTrue(moved?.contains("TRIGGER:-PT5M") == true, "moved with its alarm")
+        let cals = await server.calendarsByPath
+        XCTAssertNil(cals["\(home)/\(doomed.id)"], "then the list is deleted")
+    }
+
+    func testMoveIntoAListThatCannotBeCreatedYetIsNotUndone() async throws {
+        let server = FakeCalDAVServer()
+        let a = Device()
+        let t = a.store.addTask(content: "t", projectId: TodoStore.inboxID)
+        try await a.sync(server)
+        let later = a.store.addProject(name: "Later")
+        a.store.moveTask(t.id, projectId: later.id, sectionId: nil, parentId: nil)
+        a.store.updateTask(t.id) { $0.content = "t (edited)" }
+        await server.setRateLimitedCreates(["\(home)/\(later.id)"])
+        try await a.sync(server)
+        try await a.sync(server)
+        XCTAssertEqual(a.store.task(t.id)?.projectId, later.id, "the move is kept while the list waits")
+        XCTAssertEqual(a.store.task(t.id)?.content, "t (edited)")
+        await server.setRateLimitedCreates([])
+        try await a.sync(server)
+        let moved = await server.ics("\(home)/\(later.id)/\(t.id).ics")
+        XCTAssertTrue(moved?.contains("SUMMARY:t (edited)") == true)
+        let old = await server.paths(in: inbox)
+        XCTAssertEqual(old, [])
+    }
+
+    func testUnreadableObjectIsNotTakenForADelete() async throws {
+        let server = FakeCalDAVServer()
+        let a = Device()
+        try await a.sync(server)
+        let path = "\(inbox)/x.ics"
+        let good = "BEGIN:VCALENDAR\r\nBEGIN:VTODO\r\nUID:x\r\nSUMMARY:Keep me\r\nLAST-MODIFIED:20200101T000000Z\r\nEND:VTODO\r\nEND:VCALENDAR\r\n"
+        await server.store(path, good)
+        try await a.sync(server)
+        XCTAssertEqual(a.store.task("x")?.content, "Keep me")
+        // Another client writes something TodoTim can't read (here: only an override).
+        await server.store(path, good.replacingOccurrences(of: "UID:x", with: "UID:x\r\nRECURRENCE-ID:20261101T000000Z"))
+        await server.resetCounts()
+        try await a.sync(server)
+        try await a.sync(server)
+        XCTAssertEqual(a.store.task("x")?.deleted, false, "not deleted locally")
+        var deletes = await server.count("DELETE"), puts = await server.count("PUT")
+        XCTAssertEqual(deletes + puts, 0, "and not written")
+        // Readable again (with its old LAST-MODIFIED): nothing is lost.
+        await server.store(path, good)
+        try await a.sync(server)
+        deletes = await server.count("DELETE"); puts = await server.count("PUT")
+        XCTAssertEqual(deletes + puts, 0)
+        XCTAssertEqual(a.store.task("x")?.content, "Keep me")
+        let still = await server.ics(path)
+        XCTAssertNotNil(still)
+    }
+
     func testEventCalendarsAndSharedCalendarsAreIgnored() async throws {
         let server = FakeCalDAVServer()
         await server.addCalendar("personal", components: ["VEVENT", "VTODO"])

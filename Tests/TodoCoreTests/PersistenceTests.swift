@@ -84,8 +84,11 @@ final class PersistenceTests: XCTestCase {
         let failed = expectation(description: "error")
         let writer = PersistenceWriter(url: blocker.appendingPathComponent("db.json"), delay: 0) { _ in failed.fulfill() }
         writer.save(sampleDB())
-        writer.flush()
+        XCTAssertFalse(writer.flush(), "flush reports that the database is not on disk")
         wait(for: [failed], timeout: 2)
+        let good = PersistenceWriter(url: dir.appendingPathComponent("ok.json"), delay: 0)
+        good.save(sampleDB())
+        XCTAssertTrue(good.flush())
     }
 
     // MARK: - Date codec

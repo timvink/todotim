@@ -82,14 +82,16 @@ Paths below are relative to the DAV root (`server_url`, for example
   TodoTim keeps the original UID and path. TodoTim creates a new task with `PUT
   calendars/<user>/<calendar>/<uid>.ics` and `If-None-Match: *`, where UID = the task id.
 - Objects are read from the **master** VTODO (the one without `RECURRENCE-ID`). An object without a UID,
-  without a VTODO, or that cannot be parsed is skipped and never written.
+  without a master (only overrides), or that cannot be parsed is skipped and never written. If a task's
+  object becomes unreadable, TodoTim keeps the task as it was and does not take it for deleted. It writes
+  nothing for that task until the object can be read again.
 
 | TodoTim | iCalendar | Notes |
 |---|---|---|
 | content | `SUMMARY` | TEXT-escaped |
 | description | `DESCRIPTION` | Removed when empty |
 | priority p1 / p2 / p3 / p4 | `PRIORITY` 1 / 5 / 9 / 0 | Read: 1–4 → p1, 5 → p2, 6–9 → p3, 0 or absent → p4 |
-| due date | `DUE;VALUE=DATE:yyyyMMdd` | TodoTim writes a DATE. A DATE-TIME from another client is read as its date in the local timezone (UTC and TZID converted, floating as written). When the date changes in TodoTim, or a repeat moves it, a DATE-TIME keeps its time of day and TZID and moves by the same number of days. `DTSTART`, if present, moves by the same number of days. |
+| due date | `DUE;VALUE=DATE:yyyyMMdd` | TodoTim writes a DATE. A DATE-TIME from another client is read as its date in the local timezone (UTC and TZID converted, floating as written). When the date changes in TodoTim, or a repeat moves it, a DATE-TIME keeps its time of day and TZID and moves by the same number of days. `DTSTART`, if present, moves by the same number of days. A due date added to a task with a DATE-TIME `DTSTART` is written as the floating DATE-TIME `yyyyMMddT235959`, because DUE must have DTSTART's value type and be later than it. `DTSTART` moves back to that day if it was later. Setting a due date removes `DURATION`, because the two exclude each other. |
 | completed | `STATUS:COMPLETED`, `COMPLETED:<UTC>`, `PERCENT-COMPLETE:100` | Reopen: `STATUS:NEEDS-ACTION`, and `COMPLETED` and `PERCENT-COMPLETE` are removed. Read: completed if `STATUS` is COMPLETED or CANCELLED, or if there is no STATUS but there is a COMPLETED. |
 | parent (subtask) | `RELATED-TO;RELTYPE=PARENT:<parent UID>` | A `RELATED-TO` without `RELTYPE` also means parent. Other relation types are kept. |
 | order | `X-APPLE-SORT-ORDER:<integer>` and `X-TODOTIM-ORDER:<double>` | Written together, with `X-APPLE-SORT-ORDER = floor(X-TODOTIM-ORDER)`. Read: `X-TODOTIM-ORDER` when `X-APPLE-SORT-ORDER` is absent or equals its floor; otherwise `X-APPLE-SORT-ORDER` (another client reordered the task and left our value stale); with neither, CREATED in seconds since 2001-01-01 (the epoch Apple-style sort orders use), so unordered tasks sort after ordered ones, oldest first. Ascending. |
@@ -111,7 +113,11 @@ Paths below are relative to the DAV root (`server_url`, for example
 - **Repeating tasks.** If a task has an `RRULE`, completing it in TodoTim moves `DUE` (and `DTSTART`) to the
   next occurrence instead of completing it. This works for `FREQ=DAILY|WEEKLY|MONTHLY|YEARLY` with
   `INTERVAL`, `COUNT` and `UNTIL` (`WKST` is ignored). The next date counts from the current due date (today
-  if there is none). `COUNT` goes down by one, because the series now starts one occurrence later. When the
+  if there is none). Monthly and yearly steps keep the day of the month and skip months or years where that
+  day doesn't exist: Jan 31 → Mar 31, and Feb 29 → the next leap year (RFC 5545). `COUNT` goes down by one,
+  because the series now starts one occurrence later. A DATE `UNTIL` is compared with the date. A DATE-TIME
+  `UNTIL` limits the occurrence's start time, which a date-only task doesn't know, so TodoTim advances only
+  while the next date is at least two days before it. When the
   last occurrence (`COUNT=1`, or past `UNTIL`) is completed, or the rule has any other part (`BYDAY`,
   `BYMONTHDAY`, …), the task is completed normally.
 
@@ -135,7 +141,8 @@ Paths below are relative to the DAV root (`server_url`, for example
    `PUT` with `If-Match` (or `If-None-Match: *` for new tasks), **`MOVE`** with `If-Match` and `Overwrite: F`
    to move a task to another list, `DELETE` with `If-Match`, then calendar DELETEs. A 412 skips that write.
    Another pass then fetches the newer version and merges again (at most 3 passes). A local tombstone stays
-   until the server delete succeeds.
+   until the server delete succeeds. A list is deleted only after every task that moves out of it has moved.
+   A sync with refused writes stays incomplete, and the next sync retries it.
 
 ## Limits (server data is untrusted)
 
