@@ -56,7 +56,9 @@ enum CalDAVSync {
             if !pass.conflicted { return result }
             previous = nil
         }
-        throw SyncError.tooManyConflicts
+        // Keep what was done; the next sync tries the rest again.
+        result.warnings.append(SyncError.tooManyConflicts.errorDescription!)
+        return result
     }
 }
 
@@ -380,7 +382,12 @@ private struct Pass {
                 }
             }
             if !props.isEmpty {
-                try await server.setProperties(path, props)
+                do {
+                    try await server.setProperties(path, props)
+                } catch let e as SyncError where e.isPerResource {
+                    warnings.append(SyncController.message(for: e))
+                    continue
+                }
                 writes += 1
                 for (k, v) in props {
                     switch k {
@@ -414,13 +421,18 @@ private struct Pass {
             }
             let parent = String(r.path[..<(r.path.lastIndex(of: "/") ?? r.path.startIndex)])
             let movePath = parent == target ? nil : "\(target)/\(r.path.split(separator: "/").last!)"
+            if let movePath, state.resources[movePath] != nil {
+                // Another object already has this name in the target list (a duplicate UID).
+                warnings.append("Could not move “\(t.content)”: “\(movePath)” already exists on the server")
+                continue
+            }
             let patched = VTodo.patch(r.ics, old: r.todo, to: t, parentUID: parentUID, section: section)
             if patched == nil && movePath == nil {
                 merged.tasks[t.id] = r.todo.task  // same content: adopt the server's (second-precision) copy
                 continue
             }
-            ops.append(.put(id: t.id, path: movePath ?? r.path, projectId: t.projectId, ics: patched ?? r.ics,
-                            etag: r.etag, moveFrom: movePath == nil ? nil : r.path))
+            ops.append(.put(id: t.id, path: movePath ?? r.path, projectId: t.projectId, ics: patched, etag: r.etag,
+                            moveFrom: movePath == nil ? nil : r.path))
         }
         let server = self.server
         let outcomes = try await SyncEngine.forEachConcurrently(ops, limit: SyncEngine.maxConcurrentRequests) { op in
@@ -438,9 +450,12 @@ private struct Pass {
                 case .delete(let path, _):
                     // The local tombstone stays until it expires (`SyncEngine.tombstoneLifetime`).
                     state.resources[path] = nil
-                case .put(let id, let path, let projectId, let ics, _, let moveFrom):
-                    if let moveFrom { state.resources[moveFrom] = nil }
-                    state.resources[path] = .init(etag: etag, ics: ics)
+                case .put(let id, let path, let projectId, let patched, let oldETag, let moveFrom):
+                    var record = moveFrom.flatMap { state.resources.removeValue(forKey: $0) }
+                    if let patched { record = .init(etag: etag, ics: patched) } else { record?.etag = etag ?? oldETag }
+                    guard let record else { continue }
+                    state.resources[path] = record
+                    let ics = record.ics
                     // The task as the server now holds it (whole-second times), so the next sync
                     // sees no local change.
                     if let t = VTodoCache.shared.read(path: path, ics: ics, projectId: projectId)?.task, t.id == id {
@@ -477,8 +492,9 @@ private struct Pass {
     }
 
     enum TaskOp: Sendable {
-        /// PUT `ics` at `path` (`etag` nil: create); with `moveFrom`, MOVE it there first.
-        case put(id: EntityID, path: String, projectId: EntityID, ics: String, etag: String?, moveFrom: String?)
+        /// PUT `ics` at `path` (`etag` nil: create); with `moveFrom`, MOVE it there first (then `ics`
+        /// nil means the content stays as it is).
+        case put(id: EntityID, path: String, projectId: EntityID, ics: String?, etag: String?, moveFrom: String?)
         case delete(path: String, etag: String?)
     }
 
@@ -502,6 +518,8 @@ private struct Pass {
                     try await server.move(moveFrom, to: path, ifMatch: etag)
                     requests += 1
                 }
+                guard let ics else { return .done(requests: requests, etag: nil) }
+                // MOVE keeps the ETag, so the same precondition holds for the PUT.
                 let newETag = try await server.put(path, ics: ics, ifMatch: etag)
                 return .done(requests: requests + 1, etag: newETag)
             }
