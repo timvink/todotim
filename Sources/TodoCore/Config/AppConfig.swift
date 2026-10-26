@@ -11,7 +11,7 @@ import Foundation
 ///     enabled = true
 ///     server_url = "https://cloud.example.com/remote.php/dav/"
 ///     username = "tim"
-///     # Prints the password; run once when the Keychain has none, then cached there.
+///     # Prints the password; run once per launch and kept in memory (the Keychain is not used).
 ///     password_command = "rbw get 'Nextcloud app password'"
 ///     # Optional: Nextcloud users that new lists are shared with (read-write).
 ///     share_with = ["tasks-agent"]

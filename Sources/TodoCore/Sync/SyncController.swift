@@ -87,10 +87,12 @@ public final class SyncController {
     @ObservationIgnored private var syncRequestedWhileSyncing = false
     @ObservationIgnored private var passwordCommand: String?
     @ObservationIgnored private var shareWith: [String] = []
-    /// The password command runs at most once per launch (or per `configure`), so a locked
-    /// vault does not prompt again every sync interval.
+    /// The password command runs at most once per launch (or per `configure` or `syncNow`), so a
+    /// locked vault does not prompt again every sync interval.
     @ObservationIgnored private var passwordCommandAttempted = false
-    /// Password whose Keychain save failed, for the account it belongs to.
+    /// Password kept in memory only: from `password_command` (which replaces the Keychain, whose
+    /// access prompt returns with every update of an ad-hoc signed app), or one whose Keychain save
+    /// failed. For the account it belongs to.
     @ObservationIgnored private var sessionPassword: (account: String, password: String)?
 
     /// Loads settings from `config` (when it has a `[sync]` table) or else from `defaults`, and
@@ -140,7 +142,7 @@ public final class SyncController {
         restartLoop()
     }
 
-    /// Current password from the Keychain (for the settings form).
+    /// Current password, from memory or the Keychain (for the settings form).
     public func storedPassword() -> String? { settings.credentialAccount.flatMap(password(for:)) }
 
     /// Checks the server URL, credentials and access to the calendars. Returns nil on success or
@@ -164,12 +166,18 @@ public final class SyncController {
         debounceTask = Task { [weak self] in
             try? await Task.sleep(for: delay)
             guard !Task.isCancelled else { return }
-            await self?.syncNow()
+            await self?.sync()
         }
     }
 
-    /// Immediate full sync (⌘R). If a sync is running, another one follows it.
+    /// Immediate full sync (⌘R). If a sync is running, another one follows it. Runs the password
+    /// command again if it has not produced a password yet (e.g. the vault was locked).
     public func syncNow() async {
+        if sessionPassword == nil { passwordCommandAttempted = false }
+        await sync()
+    }
+
+    private func sync() async {
         guard settings.enabled else { status = .disabled; return }
         if isSyncing { syncRequestedWhileSyncing = true; return }
         isSyncing = true
@@ -191,7 +199,7 @@ public final class SyncController {
         let interval = syncInterval
         periodicTask = Task { [weak self] in
             while !Task.isCancelled {
-                await self?.syncNow()
+                await self?.sync()
                 try? await Task.sleep(for: interval)
             }
         }
@@ -292,12 +300,17 @@ public final class SyncController {
         }
     }
 
+    /// With a password command the Keychain is not read at all.
     private func password(for account: String) -> String? {
         if let s = sessionPassword, s.account == account { return s.password }
-        return credentials.password(for: account)
+        return passwordCommand == nil ? credentials.password(for: account) : nil
     }
 
     private func storePassword(_ password: String, for account: String) {
+        if passwordCommand != nil {
+            sessionPassword = (account, password)
+            return
+        }
         do {
             try credentials.savePassword(password, for: account)
             sessionPassword = nil

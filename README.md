@@ -82,7 +82,7 @@ repository = "https://github.com/timvink/todotim"
 enabled = true
 server_url = "https://your.cloud/remote.php/dav/"
 username = "USERNAME"
-# Optional. Prints the password; runs once when the Keychain has none, then the Keychain keeps it.
+# Optional. Prints the password; runs once per launch, and TodoTim keeps it in memory instead of the Keychain.
 password_command = "rbw get 'Nextcloud app password'"
 # Optional. Nextcloud users each new list is shared with (read-write), e.g. an assistant's account.
 share_with = ["tasks-agent"]
@@ -96,7 +96,7 @@ password in Settings instead. TodoTim versions before CalDAV sync used `folder` 
 
 - **Credentials.** The app password is stored in the macOS Keychain (service `TodoTim WebDAV`, a name kept from
   earlier versions), under an account named after both user and server, for example `tim@cloud.example.com`.
-  A password saved for one server is never sent to another. TodoTim never logs it or shows `password_command` output.
+  With `password_command`, the password is kept in memory only and the Keychain is not read. A password saved for one server is never sent to another. TodoTim never logs it or shows `password_command` output.
 - **HTTPS only.** TodoTim refuses `http://` server URLs (except `localhost`), and does not follow redirects
   that leave the configured server URL.
 - **Config file trust.** `~/.todotim.toml` (and `TODOTIM_CONFIG`) can run a command and decides where the

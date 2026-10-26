@@ -211,7 +211,7 @@ final class SyncControllerConfigTests: XCTestCase {
     private let suite = "TodoTimSyncControllerConfigTests"
 
     #if os(macOS)  // password_command needs a login shell
-    func testConfigFileSettingsWinAndPasswordCommandFillsKeychain() async throws {
+    func testConfigFileSettingsWinAndPasswordCommandBypassesKeychain() async throws {
         let defaults = UserDefaults(suiteName: suite)!
         defaults.removePersistentDomain(forName: suite)
         defer { defaults.removePersistentDomain(forName: suite) }
@@ -227,8 +227,11 @@ final class SyncControllerConfigTests: XCTestCase {
         XCTAssertEqual(c.settings, managed)
         XCTAssertEqual(c.managedConfigPath, "/tmp/test.toml")
 
+        // A Keychain password is ignored: the command's password is kept in memory only.
+        try creds.savePassword("stale", for: "tim@cloud.example.com")
         await c.syncNow()
-        XCTAssertEqual(creds.password(for: "tim@cloud.example.com"), "from-command")
+        XCTAssertEqual(c.storedPassword(), "from-command")
+        XCTAssertEqual(creds.password(for: "tim@cloud.example.com"), "stale")
         guard case .idle = c.status else { return XCTFail("status \(c.status)") }
 
         // The Settings window cannot override managed settings.
