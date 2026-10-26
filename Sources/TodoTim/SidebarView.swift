@@ -1,3 +1,4 @@
+import Collaboration
 import SwiftUI
 import TodoCore
 
@@ -13,6 +14,9 @@ struct SidebarView: View {
         // No `List(selection:)`: its highlight uses the system accent color (blue for most
         // users), so rows draw Todoist's tinted selection themselves (`SidebarRow`).
         List {
+            AccountMenu()
+                .listRowInsets(EdgeInsets(top: 0, leading: 4, bottom: 6, trailing: 4))
+
             Button { model.showQuickAdd = true } label: {
                 HStack(spacing: 8) {
                     Image(systemName: "plus.circle.fill")
@@ -52,7 +56,7 @@ struct SidebarView: View {
                 }
             } header: {
                 HStack {
-                    Text("My Projects")
+                    Text("My Projects").font(Self.sectionFont)
                     Spacer()
                     Button { model.showAddProject = true } label: {
                         Image(systemName: "plus")
@@ -64,7 +68,7 @@ struct SidebarView: View {
             }
 
             if !store.labels.isEmpty {
-                SwiftUI.Section("Labels") {
+                SwiftUI.Section {
                     ForEach(store.labels) { l in
                         SidebarRow(item: .label(l.name)) {
                             Image(systemName: "tag")
@@ -91,6 +95,8 @@ struct SidebarView: View {
                             }
                         }
                     }
+                } header: {
+                    Text("Labels").font(Self.sectionFont)
                 }
             }
         }
@@ -123,6 +129,9 @@ struct SidebarView: View {
         }
     }
 
+    /// Todoist's sidebar headings are about the size of the rows, not the small system caps.
+    static let sectionFont = Font.system(size: 13, weight: .semibold)
+
     @ViewBuilder private func projectLabel(_ p: Project, icon: String) -> some View {
         Image(systemName: icon)
             .foregroundStyle(p.isInbox ? Color(hex: 0x246FE0) : Palette.color(p.color))
@@ -144,6 +153,54 @@ struct SidebarView: View {
         }
         Divider()
         Button("Delete Project…", role: .destructive) { deletingProject = p }
+    }
+}
+
+/// Todoist's account button at the top of the sidebar: avatar, name and a chevron opening a menu.
+/// The name and picture are the macOS user's; the menu names the sync account when there is one.
+private struct AccountMenu: View {
+    @Environment(AppModel.self) private var model
+    @State private var hovering = false
+    private static let name = NSFullUserName().isEmpty ? NSUserName() : NSFullUserName()
+    private static let picture: NSImage? = CBIdentity(name: NSUserName(), authority: .default())?.image
+
+    var body: some View {
+        Menu {
+            let s = model.sync.settings
+            if s.enabled, let account = s.credentialAccount {
+                Text("Syncing as \(account)")
+                Button("Sync Now") { model.syncNow() }
+                Divider()
+            }
+            SettingsLink { Text("Settings…") }
+            Button("Import from Todoist…") { model.showImportTodoist = true }
+        } label: {
+            HStack(spacing: 8) {
+                avatar.frame(width: 24, height: 24).clipShape(Circle())
+                Text(Self.name).font(.system(size: 13, weight: .semibold)).lineLimit(1)
+                Image(systemName: "chevron.down").font(.system(size: 9, weight: .semibold)).foregroundStyle(.secondary)
+            }
+            .foregroundStyle(.primary)
+            .padding(.horizontal, 4).padding(.vertical, 4)
+            .background(RoundedRectangle(cornerRadius: 6).fill(Color.primary.opacity(hovering ? 0.06 : 0)))
+            .contentShape(Rectangle())
+        }
+        .menuStyle(.button)
+        .buttonStyle(.plain)
+        .menuIndicator(.hidden)
+        .fixedSize()
+        .pointerStyle(.link)
+        .onHover { hovering = $0 }
+    }
+
+    @ViewBuilder private var avatar: some View {
+        if let image = Self.picture {
+            Image(nsImage: image).resizable().scaledToFill()
+        } else {
+            let initials = Self.name.split(separator: " ").prefix(2).compactMap(\.first).map(String.init).joined()
+            Circle().fill(Theme.accent)
+                .overlay(Text(initials.uppercased()).font(.system(size: 10, weight: .semibold)).foregroundStyle(.white))
+        }
     }
 }
 

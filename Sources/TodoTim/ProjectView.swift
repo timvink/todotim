@@ -33,7 +33,7 @@ struct TaskListView: View {
         // but not the rows.
         let drag = model.drag
         let dragging = drag.draggingID
-        let shown = Self.withPlaceholder(items, target: dragging == nil ? nil : drag.target)
+        let shown = Self.withPlaceholder(items, target: dragging == nil || drag.inPanel ? nil : drag.target)
         ScrollViewReader { proxy in
             ScrollView {
                 LazyVStack(alignment: .leading, spacing: 0) {

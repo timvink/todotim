@@ -223,7 +223,7 @@ private struct RowDropModifier: ViewModifier {
 }
 
 /// The lifted card that follows the pointer while dragging a task.
-private struct DragPreview: View {
+struct DragPreview: View {
     let task: TodoTask
     var body: some View {
         HStack(spacing: 10) {

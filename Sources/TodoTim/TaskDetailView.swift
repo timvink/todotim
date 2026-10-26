@@ -291,29 +291,13 @@ private struct TaskDetailContent: View {
                 .padding(.bottom, 6)
                 Divider()
             }
+            let drag = model.drag
+            let target = drag.inPanel ? drag.target : nil
             ForEach(subs) { s in
-                VStack(spacing: 0) {
-                    HStack(alignment: .top, spacing: 10) {
-                        CheckCircle(priority: s.priority, completed: s.isCompleted) { model.toggleComplete(s.id) }
-                        VStack(alignment: .leading, spacing: 2) {
-                            Text(RichText.render(s.content))
-                                .font(.system(size: 13))
-                                .strikethrough(s.isCompleted)
-                                .foregroundStyle(s.isCompleted ? .secondary : .primary)
-                                .richTextLinks(tint: s.isCompleted ? .secondary : .primary)
-                            let progress = store.subtaskProgress(of: s.id)
-                            TaskMetaRow(task: s, labelColors: model.labelColorKeys(s.labels),
-                                        subtaskTotal: progress.total, subtaskDone: progress.done)
-                        }
-                        Spacer()
-                    }
-                    .padding(.vertical, 7)
-                    .contentShape(Rectangle())
-                    .pointerStyle(.link)
-                    .onTapGesture { model.detailTaskID = s.id }
-                    .contextMenu { TaskMenuItems(task: s) }
-                    Divider()
-                }
+                if target == .before(s.id) { slot(drag.rowHeight) }
+                SubtaskRow(task: s)
+                    .opacity(drag.inPanel && drag.draggingID == s.id ? 0.35 : 1)
+                if target == .after(s.id) { slot(drag.rowHeight) }
             }
             if addingSubtask {
                 HStack(spacing: 8) {
@@ -335,6 +319,10 @@ private struct TaskDetailContent: View {
         }
     }
 
+    private func slot(_ height: CGFloat) -> some View {
+        DropPlaceholderView(depth: 0, height: height, inset: -4).transition(.opacity)
+    }
+
     private func addSubtask() {
         let raw = newSubtask.trimmingCharacters(in: .whitespaces)
         guard !raw.isEmpty else { return }
@@ -347,6 +335,72 @@ private struct TaskDetailContent: View {
 
     private func labelColor(_ name: String) -> Color {
         store.labels.first { $0.name == name }.map { Palette.color($0.color) } ?? .secondary
+    }
+}
+
+/// A sub-task in the task panel. Open sub-tasks show Todoist's drag handle on hover and can be
+/// dragged among their siblings.
+private struct SubtaskRow: View {
+    @Environment(AppModel.self) private var model
+    @Environment(TodoStore.self) private var store
+    let task: TodoTask
+    @State private var hovering = false
+    @State private var height = HeightBox()
+
+    var body: some View {
+        let s = task
+        HStack(alignment: .top, spacing: 0) {
+            GripDots()
+                .opacity(hovering && !s.isCompleted ? 1 : 0)
+                .frame(width: Theme.grip, height: 32)
+            VStack(spacing: 0) {
+                HStack(alignment: .top, spacing: 10) {
+                    CheckCircle(priority: s.priority, completed: s.isCompleted) { model.toggleComplete(s.id) }
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text(RichText.render(s.content))
+                            .font(.system(size: 13))
+                            .strikethrough(s.isCompleted)
+                            .foregroundStyle(s.isCompleted ? .secondary : .primary)
+                            .richTextLinks(tint: s.isCompleted ? .secondary : .primary)
+                        let progress = store.subtaskProgress(of: s.id)
+                        TaskMetaRow(task: s, labelColors: model.labelColorKeys(s.labels),
+                                    subtaskTotal: progress.total, subtaskDone: progress.done)
+                    }
+                    Spacer()
+                }
+                .padding(.vertical, 7)
+                Divider()
+            }
+        }
+        .contentShape(Rectangle())
+        .pointerStyle(.link)
+        .onHover { hovering = $0 }
+        .onTapGesture { model.detailTaskID = s.id }
+        .contextMenu { TaskMenuItems(task: s) }
+        .onGeometryChange(for: CGFloat.self, of: { $0.size.height }) { [height] h in height.value = h }
+        .modifier(SubtaskDragModifier(model: model, task: s, height: height))
+        .onDrop(of: [.text], delegate: SubtaskDropDelegate(model: model, task: s, height: height))
+        .padding(.leading, -Theme.grip)
+    }
+}
+
+/// Completed sub-tasks are not draggable (open siblings are ordered among themselves).
+private struct SubtaskDragModifier: ViewModifier {
+    let model: AppModel
+    let task: TodoTask
+    let height: HeightBox
+
+    func body(content: Content) -> some View {
+        if task.isCompleted {
+            content
+        } else {
+            content.onDrag {
+                MainActor.assumeIsolated { model.beginDrag(task.id, rowHeight: height.value, inPanel: true) }
+                return NSItemProvider(object: task.id as NSString)
+            } preview: {
+                DragPreview(task: task)
+            }
+        }
     }
 }
 

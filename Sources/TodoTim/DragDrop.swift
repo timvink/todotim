@@ -26,12 +26,15 @@ final class DragState {
     @ObservationIgnored private(set) var excluded: Set<EntityID> = []
     /// Height of the dragged row, used for the placeholder slot.
     @ObservationIgnored private(set) var rowHeight: CGFloat = 38
+    /// The drag started in the task panel's sub-task list, which shows its own placeholder.
+    @ObservationIgnored private(set) var inPanel = false
     @ObservationIgnored private var timer: Timer?
     @ObservationIgnored private var releasedTicks = 0
 
     /// `trackMouse: false` is for the debug test hook, which drags without a mouse.
-    func begin(_ id: EntityID, excluded: Set<EntityID>, rowHeight: CGFloat, trackMouse: Bool = true) {
+    func begin(_ id: EntityID, excluded: Set<EntityID>, rowHeight: CGFloat, inPanel: Bool = false, trackMouse: Bool = true) {
         self.excluded = excluded
+        self.inPanel = inPanel
         self.rowHeight = max(30, rowHeight)
         target = nil
         draggingID = id
@@ -56,6 +59,7 @@ final class DragState {
             draggingID = nil
         }
         excluded = []
+        inPanel = false
     }
 
     /// Sets the target with a short animation so the rows slide to make room.
@@ -89,7 +93,7 @@ struct TaskRowDropDelegate: DropDelegate {
     let collapsed: Bool
     let height: HeightBox
 
-    func validateDrop(info: DropInfo) -> Bool { model.drag.draggingID != nil }
+    func validateDrop(info: DropInfo) -> Bool { model.drag.draggingID != nil && !model.drag.inPanel }
     func dropEntered(info: DropInfo) { update(info) }
     func dropUpdated(info: DropInfo) -> DropProposal? {
         update(info)
@@ -118,13 +122,44 @@ struct TaskRowDropDelegate: DropDelegate {
     }
 }
 
+/// Drop delegate of a sub-task row in the task panel: the top half places the dragged sub-task
+/// before the row, the bottom half after it. Completed sub-tasks are not anchors, since open
+/// siblings are ordered among themselves.
+struct SubtaskDropDelegate: DropDelegate {
+    let model: AppModel
+    let task: TodoTask
+    let height: HeightBox
+
+    func validateDrop(info: DropInfo) -> Bool { model.drag.draggingID != nil && model.drag.inPanel }
+    func dropEntered(info: DropInfo) { update(info) }
+    func dropUpdated(info: DropInfo) -> DropProposal? {
+        update(info)
+        return DropProposal(operation: .move)
+    }
+    func performDrop(info: DropInfo) -> Bool {
+        update(info)
+        return model.performDrop()
+    }
+
+    private func update(_ info: DropInfo) {
+        let drag = model.drag
+        guard drag.draggingID != nil else { return }
+        if drag.excluded.contains(task.id) || task.isCompleted {
+            drag.setTarget(nil)
+        } else {
+            drag.setTarget(info.location.y < height.value / 2 ? .before(task.id) : .after(task.id))
+        }
+    }
+}
+
 /// Drop delegate with a fixed target (section header, "Add task" row, placeholder).
 struct FixedDropDelegate: DropDelegate {
     let model: AppModel
     /// nil keeps the current target (used by the placeholder itself).
     let target: DropTarget?
 
-    func validateDrop(info: DropInfo) -> Bool { model.drag.draggingID != nil }
+    /// The placeholder (nil target) also serves the task panel; the fixed zones are the list's.
+    func validateDrop(info: DropInfo) -> Bool { model.drag.draggingID != nil && (target == nil || !model.drag.inPanel) }
     func dropEntered(info: DropInfo) { if let target { model.drag.setTarget(target) } }
     func dropUpdated(info: DropInfo) -> DropProposal? {
         if let target { model.drag.setTarget(target) }
@@ -138,6 +173,8 @@ struct DropPlaceholderView: View {
     @Environment(AppModel.self) private var model
     let depth: Int
     let height: CGFloat
+    /// Leading inset at depth 0; the task panel's rows have no chevron gutter.
+    var inset: CGFloat = Theme.gutter - 4
 
     var body: some View {
         RoundedRectangle(cornerRadius: 6)
@@ -145,7 +182,7 @@ struct DropPlaceholderView: View {
             .overlay(RoundedRectangle(cornerRadius: 6).strokeBorder(Theme.accent.opacity(0.45), lineWidth: 1))
             .frame(height: height - 6)
             .padding(.vertical, 3)
-            .padding(.leading, CGFloat(depth) * Theme.indent + Theme.gutter - 4)
+            .padding(.leading, CGFloat(depth) * Theme.indent + inset)
             .onDrop(of: [.text], delegate: FixedDropDelegate(model: model, target: nil))
     }
 }

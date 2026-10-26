@@ -14,7 +14,7 @@ import TodoCore
 ///     quickadd TEXT        open Quick Add (TEXT is typed into it when given)
 ///     shortcuts            open the shortcuts list
 ///     popover date|labels|move
-///     drag I               start dragging visible task I
+///     drag I [panel]       start dragging visible task I (in the task panel's sub-task list)
 ///     target before|after|child I    set the drop target to visible task I
 ///     target start|end S   section S (index; -1 = no section)
 ///     drop                 perform the drop
@@ -84,7 +84,7 @@ enum UITestHook {
         case "popover":
             model.popover = ["date": .date, "labels": .labels, "move": .move][arg]
         case "drag":
-            if let id = visible(Int(arg) ?? 0) { model.beginDrag(id, rowHeight: 50, trackMouse: false) }
+            if let id = visible(Int(arg) ?? 0) { model.beginDrag(id, rowHeight: 50, inPanel: arg2 == "panel", trackMouse: false) }
         case "target":
             let n = Int(arg2) ?? 0
             switch arg {
