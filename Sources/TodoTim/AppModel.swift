@@ -378,6 +378,8 @@ final class AppModel {
         case .firstChild(let parent):
             guard let p = store.task(parent), !drag.excluded.contains(parent) else { return false }
             store.moveTask(id, projectId: p.projectId, sectionId: p.sectionId, parentId: parent, at: 0)
+            // Show where the task went.
+            if p.collapsed { store.updateTask(parent) { $0.collapsed = false } }
         case .sectionStart(let pid, let sid):
             store.moveTask(id, projectId: pid, sectionId: sid, parentId: nil, at: 0)
         case .sectionEnd(let pid, let sid):

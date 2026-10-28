@@ -9,7 +9,7 @@ permissions: {}
 jobs:
   # Runs repository code (tests, build) with read-only access. Its only output is a workflow artifact.
   build:
-    runs-on: macos-26
+    runs-on: xcode-27
     permissions:
       contents: read
     steps:

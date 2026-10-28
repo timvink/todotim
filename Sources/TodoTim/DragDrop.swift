@@ -85,8 +85,10 @@ final class HeightBox {
     var value: CGFloat = 38
 }
 
-/// Drop delegate of a task row: the top half places the dragged task before the row, the bottom
-/// half after it (or as the first subtask when the row is an expanded parent).
+/// Drop delegate of a task row. The top band places the dragged task before the row, the middle
+/// band makes it the row's first subtask, and the bottom band places it after the row: as a
+/// sibling, or as the first subtask when the row is an expanded parent or the pointer is at least
+/// one indent right of the row's checkbox (Todoist's drag-right-to-indent).
 struct TaskRowDropDelegate: DropDelegate {
     let model: AppModel
     let item: RowItem
@@ -112,13 +114,19 @@ struct TaskRowDropDelegate: DropDelegate {
             drag.setTarget(nil)
             return
         }
-        if info.location.y < height.value / 2 {
-            drag.setTarget(.before(item.id))
-        } else if item.hasChildren && !collapsed {
-            drag.setTarget(.firstChild(item.id))
-        } else {
-            drag.setTarget(.after(item.id))
+        drag.setTarget(Self.target(for: item, collapsed: collapsed, at: info.location, height: height.value))
+    }
+
+    /// `location` is in the row's coordinates, whose origin is the drag-handle column.
+    static func target(for item: RowItem, collapsed: Bool, at location: CGPoint, height: CGFloat) -> DropTarget {
+        let y = location.y / max(height, 1)
+        if y < 0.3 { return .before(item.id) }
+        if y < 0.7 { return .firstChild(item.id) }
+        let checkbox = Theme.grip + Theme.gutter + CGFloat(item.depth) * Theme.indent
+        if (item.hasChildren && !collapsed) || location.x >= checkbox + Theme.indent {
+            return .firstChild(item.id)
         }
+        return .after(item.id)
     }
 }
 
