@@ -312,6 +312,8 @@ final class AppModel {
         }
         let affected = ([id] + store.descendantIDs(of: id)).filter { store.task($0)?.isCompleted == false }
         if selectedTaskID == id, !showsCompleted(t.projectId) { selectedTaskID = neighbor(of: id) }
+        // Completing the task in the detail sheet closes it and returns to the list.
+        if detailTaskID == id { detailTaskID = nil }
         store.toggleComplete(id)
         let restore: () -> Void = { [weak self] in
             guard let self else { return }
