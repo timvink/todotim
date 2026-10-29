@@ -151,6 +151,8 @@ enum ShortcutCatalog {
             Item(keys: "⌘2 … ⌘9", action: "Go to project 1 … 8"),
             Item(keys: "↓  or  J", action: "Select next task"),
             Item(keys: "↑  or  K", action: "Select previous task"),
+            Item(keys: "G  then  G", action: "Select first task in section"),
+            Item(keys: "⇧G", action: "Select last task in section"),
             Item(keys: "Esc", action: "Clear selection / close editor"),
         ]),
         ("Add", [

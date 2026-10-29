@@ -203,6 +203,29 @@ final class AppModel {
         selectedTaskID = ids[max(0, min(ids.count - 1, i + delta))]
     }
 
+    /// Vim `gg` / `G`: selects the first or last task of the selected task's section (the run of
+    /// task rows between section or group headers). Without a selection, the first or last task.
+    func moveSelectionToSectionEdge(last: Bool) {
+        let d = cachedDisplay()
+        guard !d.taskIDs.isEmpty else { return }
+        guard let cur = selectedTaskID, let at = d.items.firstIndex(where: { $0.id == cur }) else {
+            selectedTaskID = last ? d.taskIDs.last : d.taskIDs.first
+            return
+        }
+        func isBoundary(_ item: DisplayItem) -> Bool {
+            switch item {
+            case .sectionHeader, .groupHeader, .projectHeader, .labelHeader: true
+            default: false
+            }
+        }
+        var edge = cur
+        for item in last ? Array(d.items[at...]) : d.items[...at].reversed() {
+            if isBoundary(item) { break }
+            if case .task(let r) = item { edge = r.id }
+        }
+        selectedTaskID = edge
+    }
+
     /// Moves the detail sheet to the previous/next task in the list.
     func moveDetail(_ delta: Int) {
         guard let cur = detailTaskID else { return }

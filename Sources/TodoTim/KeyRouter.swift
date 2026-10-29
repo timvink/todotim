@@ -2,7 +2,7 @@ import AppKit
 import SwiftUI
 import TodoCore
 
-/// Handles Todoist's single-key shortcuts (q, a, j/k, 1–4, g i, …).
+/// Handles Todoist's single-key shortcuts (q, a, j/k, gg/G, 1–4, g i, …).
 ///
 /// SwiftUI's `.onKeyPress` only fires for the focused view, and list rows are not
 /// focusable, so a local NSEvent monitor is used instead. Keys pass through untouched
@@ -33,7 +33,7 @@ final class KeyRouter {
 
     /// Plain keys that are also menu key equivalents. While a modal panel is open they are
     /// swallowed so they do not act on the list behind it.
-    private static let menuKeys: Set<String> = ["q", "a", "A", "s", "t", "l", "v", "j", "k", "e", "/", "?", "g",
+    private static let menuKeys: Set<String> = ["q", "a", "A", "s", "t", "l", "v", "j", "k", "e", "/", "?", "g", "G",
                                                 "1", "2", "3", "4"]
 
     /// Returns true when the event was consumed.
@@ -79,6 +79,7 @@ final class KeyRouter {
                 switch chars {
                 case "i": model.goToInbox(); return true
                 case "s", "/": model.focusSearch(); return true
+                case "g": model.moveSelectionToSectionEdge(last: false); return true
                 default: break
                 }
             }
@@ -98,6 +99,7 @@ final class KeyRouter {
         switch chars {
         case "j": model.moveSelection(1)
         case "k": model.moveSelection(-1)
+        case "G": model.moveSelectionToSectionEdge(last: true)
         case "q": model.showQuickAdd = true
         case "a": model.addTaskInCurrentSection(atTop: false)
         case "A": model.addTaskInCurrentSection(atTop: true)
