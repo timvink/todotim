@@ -90,8 +90,8 @@ private struct ModalLayer: View {
             ZStack(alignment: .top) {
                 if detail {
                     Backdrop { model.detailTaskID = nil }
-                    TaskDetailView(size: CGSize(width: min(720, size.width - 40),
-                                                height: max(320, min(size.height - 96, 960))))
+                    TaskDetailView(size: CGSize(width: min(680, size.width - 40),
+                                                height: max(320, min(size.height - 96, 720))))
                         .modalPanel()
                         .frame(maxWidth: .infinity, maxHeight: .infinity)
                 }
@@ -121,7 +121,7 @@ private struct ModalLayer: View {
 private struct Backdrop: View {
     let close: () -> Void
     var body: some View {
-        Color.black.opacity(0.4)
+        Color.black.opacity(0.28)
             .contentShape(Rectangle())
             .onTapGesture(perform: close)
             .transition(.opacity)
@@ -134,8 +134,8 @@ extension View {
         self
             .background(Color(nsColor: .textBackgroundColor))
             .clipShape(RoundedRectangle(cornerRadius: 12))
-            .overlay(RoundedRectangle(cornerRadius: 12).strokeBorder(Color.primary.opacity(0.12)))
-            .shadow(color: .black.opacity(0.3), radius: 24, y: 8)
+            .overlay(RoundedRectangle(cornerRadius: 12).strokeBorder(Color.primary.opacity(0.08)))
+            .shadow(color: .black.opacity(0.22), radius: 32, y: 12)
             .transition(.opacity.combined(with: .scale(scale: 0.98)))
     }
 }

@@ -104,7 +104,8 @@ private struct TaskDetailContent: View {
             .help("More actions")
             headerButton("xmark", help: "Close (Esc)") { model.detailTaskID = nil }
         }
-        .padding(.leading, 14).padding(.trailing, 10).padding(.vertical, 8)
+        // The project button's icon lines up with the content column below.
+        .padding(.leading, 22).padding(.trailing, 10).padding(.vertical, 8)
     }
 
     private var sectionName: String? {
@@ -155,7 +156,7 @@ private struct TaskDetailContent: View {
                 .padding(.bottom, 10)
             }
             HStack(alignment: .top, spacing: 12) {
-                CheckCircle(priority: task.priority, completed: task.isCompleted, size: 22) { model.toggleComplete(task.id) }
+                CheckCircle(priority: task.priority, completed: task.isCompleted, size: 22) { model.setCompleted(task.id, !task.isCompleted) }
                     .padding(.top, 3)
                 DetailTextFields(taskID: task.id, content: task.content, description: task.description,
                                  isCompleted: task.isCompleted, focus: $focus)
@@ -220,9 +221,12 @@ private struct TaskDetailContent: View {
                 HStack(spacing: 10) {
                     Image(systemName: task.priority == .p4 ? "flag" : "flag.fill").frame(width: 20)
                         .foregroundStyle(task.priority == .p4 ? Color.secondary : task.priority.color)
-                    Text(task.priority.title)
+                    // Normal priority reads as an empty field, like "Date".
+                    Text(task.priority == .p4 ? "Priority" : task.priority.title)
+                        .foregroundStyle(task.priority == .p4 ? .secondary : .primary)
                     Spacer()
                 }
+                .frame(minHeight: 22)
                 .font(.system(size: 13))
                 .padding(.horizontal, 6).padding(.vertical, 9)
                 .contentShape(Rectangle())
@@ -270,7 +274,8 @@ private struct TaskDetailContent: View {
             HStack(spacing: 10) {
                 label()
             }
-            .frame(maxWidth: .infinity, alignment: .leading)
+            // One height for every row, whether it holds text, a clear button or label chips.
+            .frame(maxWidth: .infinity, minHeight: 22, alignment: .leading)
             .font(.system(size: 13))
             .padding(.horizontal, 6).padding(.vertical, 9)
             .contentShape(Rectangle())
@@ -289,16 +294,16 @@ private struct TaskDetailContent: View {
                     Text("\(done)/\(subs.count)").font(.system(size: 12)).foregroundStyle(.secondary)
                 }
                 .padding(.bottom, 6)
-                Divider()
+                Hairline()
             }
             let drag = model.drag
-            let target = drag.inPanel ? drag.target : nil
+            let gap = subtaskGap(subs.map(\.id), target: drag.inPanel ? drag.target : nil)
             ForEach(subs) { s in
-                if target == .before(s.id) { slot(drag.rowHeight) }
+                slot(open: gap == .some(s.id), drag.rowHeight)
                 SubtaskRow(task: s)
-                    .opacity(drag.inPanel && drag.draggingID == s.id ? 0.35 : 1)
-                if target == .after(s.id) { slot(drag.rowHeight) }
+                    .opacity(drag.inPanel && drag.draggingID == s.id ? 0.45 : 1)
             }
+            slot(open: gap == .some(nil), drag.rowHeight)
             if addingSubtask {
                 HStack(spacing: 8) {
                     TextField("Sub-task name", text: $newSubtask)
@@ -314,13 +319,24 @@ private struct TaskDetailContent: View {
                 .onAppear { focus = .subtask }
             } else {
                 AddTaskRow(title: "Add sub-task") { addingSubtask = true }
-                    .padding(.leading, -Theme.gutter)
+                    .padding(.leading, -(Theme.gutter + Theme.rowInset))
             }
         }
     }
 
-    private func slot(_ height: CGFloat) -> some View {
-        DropPlaceholderView(depth: 0, height: height, inset: -4).transition(.opacity)
+    private func slot(open: Bool, _ height: CGFloat) -> some View {
+        DropSlot(open: open, depth: 0, height: height, inset: -4)
+    }
+
+    /// The sub-task the drop slot opens before (`.some(nil)`: after the last one); nil when closed.
+    private func subtaskGap(_ ids: [EntityID], target: DropTarget?) -> EntityID?? {
+        switch target {
+        case .before(let id) where ids.contains(id): return .some(id)
+        case .after(let id):
+            guard let i = ids.firstIndex(of: id) else { return nil }
+            return .some(i + 1 < ids.count ? ids[i + 1] : nil)
+        default: return nil
+        }
     }
 
     private func addSubtask() {
@@ -355,7 +371,7 @@ private struct SubtaskRow: View {
                 .frame(width: Theme.grip, height: 32)
             VStack(spacing: 0) {
                 HStack(alignment: .top, spacing: 10) {
-                    CheckCircle(priority: s.priority, completed: s.isCompleted) { model.toggleComplete(s.id) }
+                    CheckCircle(priority: s.priority, completed: s.isCompleted) { model.setCompleted(s.id, !s.isCompleted) }
                     VStack(alignment: .leading, spacing: 2) {
                         Text(RichText.render(s.content))
                             .font(.system(size: 13))
@@ -369,7 +385,7 @@ private struct SubtaskRow: View {
                     Spacer()
                 }
                 .padding(.vertical, 7)
-                Divider()
+                Hairline()
             }
         }
         .contentShape(Rectangle())

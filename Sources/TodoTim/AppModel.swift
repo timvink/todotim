@@ -313,7 +313,14 @@ final class AppModel {
     }
 
     func toggleCollapsed(_ id: EntityID) {
-        store.updateTask(id) { $0.collapsed.toggle() }
+        withAnimation(Theme.motion) { store.updateTask(id) { $0.collapsed.toggle() } }
+    }
+
+    /// Completes or reopens a task unless it already is in that state: the checkbox completes
+    /// after a short animation, by which time a key or a parent may have done it already.
+    func setCompleted(_ id: EntityID, _ completed: Bool) {
+        guard let t = store.task(id), t.isCompleted != completed else { return }
+        toggleComplete(id)
     }
 
     /// Completes (or reopens) a task. Completing shows an undo toast.
@@ -337,11 +344,13 @@ final class AppModel {
         if selectedTaskID == id, !showsCompleted(t.projectId) { selectedTaskID = neighbor(of: id) }
         // Completing the task in the detail sheet closes it and returns to the list.
         if detailTaskID == id { detailTaskID = nil }
-        store.toggleComplete(id)
+        withAnimation(Theme.motion) { store.toggleComplete(id) }
         let restore: () -> Void = { [weak self] in
             guard let self else { return }
-            self.store.performBatch {
-                for tid in affected { self.store.updateTask(tid) { $0.isCompleted = false; $0.completedAt = nil } }
+            withAnimation(Theme.motion) {
+                self.store.performBatch {
+                    for tid in affected { self.store.updateTask(tid) { $0.isCompleted = false; $0.completedAt = nil } }
+                }
             }
         }
         registerUndo("Complete Task", restore)

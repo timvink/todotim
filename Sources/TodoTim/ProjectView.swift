@@ -33,19 +33,19 @@ struct TaskListView: View {
         // but not the rows.
         let drag = model.drag
         let dragging = drag.draggingID
-        let shown = Self.withPlaceholder(items, target: dragging == nil || drag.inPanel ? nil : drag.target)
+        let gap = Self.gap(in: items, target: dragging == nil || drag.inPanel ? nil : drag.target)
         ScrollViewReader { proxy in
             ScrollView {
                 LazyVStack(alignment: .leading, spacing: 0) {
-                    ForEach(shown) { item in
-                        if case .dropPlaceholder(let depth) = item {
-                            DropPlaceholderView(depth: depth, height: drag.rowHeight)
-                                .transition(.opacity)
-                        } else {
+                    ForEach(items) { item in
+                        VStack(alignment: .leading, spacing: 0) {
+                            let open = gap != nil && gap?.beforeID == item.id
+                            DropSlot(open: open, depth: gap?.depth ?? 0, height: drag.rowHeight)
                             DisplayItemView(item: item)
-                                .opacity(dragging != nil && item.id == dragging ? 0.35 : 1)
+                                .opacity(dragging != nil && item.id == dragging ? 0.45 : 1)
                         }
                     }
+                    DropSlot(open: gap != nil && gap?.beforeID == nil, depth: gap?.depth ?? 0, height: drag.rowHeight)
                 }
                 .scrollTargetLayout()
                 .frame(maxWidth: Theme.contentMaxWidth, alignment: .leading)
@@ -75,14 +75,22 @@ struct TaskListView: View {
                 .overlay(alignment: .top) { if titleScrolledAway { Divider() } }
         }
         .toolbar {
-            ToolbarItem(placement: .principal) {
-                Text(title)
-                    .font(.system(size: 14, weight: .semibold))
-                    .opacity(titleScrolledAway && !title.isEmpty ? 1 : 0)
-                    .animation(.easeOut(duration: 0.15), value: titleScrolledAway)
+            // No glass capsule behind it: while the title is hidden it would leave an empty circle.
+            if #available(macOS 26, *) {
+                ToolbarItem(placement: .principal) { toolbarTitle }
+                    .sharedBackgroundVisibility(.hidden)
+            } else {
+                ToolbarItem(placement: .principal) { toolbarTitle }
             }
         }
         .onAppear { Perf.firstListAppeared() }
+    }
+
+    private var toolbarTitle: some View {
+        Text(title)
+            .font(.system(size: 13, weight: .semibold))
+            .opacity(titleScrolledAway && !title.isEmpty ? 1 : 0)
+            .animation(.easeOut(duration: 0.15), value: titleScrolledAway)
     }
 }
 
@@ -145,8 +153,6 @@ private struct DisplayItemView: View {
             GroupHeaderView(projectId: pid, count: count)
         case .message(let text):
             Text(text).foregroundStyle(.secondary).padding(.leading, Theme.gutter)
-        case .dropPlaceholder:
-            EmptyView()  // rendered by TaskListView
         }
     }
 }
@@ -163,7 +169,7 @@ private struct ProjectHeaderView: View {
             Spacer()
             moreMenu
         }
-        .padding(.leading, Theme.gutter)
+        .padding(.leading, Theme.gutter + Theme.rowInset)
         .padding(.top, 8).padding(.bottom, 18)
         .onDrop(of: [.text], delegate: FixedDropDelegate(model: model, target: .sectionStart(projectId: projectId, sectionId: nil)))
     }
@@ -208,7 +214,7 @@ struct AddTaskRow: View {
                     .foregroundStyle(hovering ? Theme.accent : .secondary)
                 Spacer()
             }
-            .padding(.leading, Theme.gutter)
+            .padding(.leading, Theme.gutter + Theme.rowInset)
             .padding(.vertical, 8)
             .contentShape(Rectangle())
         }
@@ -260,6 +266,7 @@ struct SectionHeaderView: View {
                 } else {
                     Text(section.name)
                         .font(.system(size: 14, weight: .bold))
+                        .padding(.leading, Theme.rowInset)
                     if count > 0 {
                         Text("\(count)")
                             .font(.system(size: 13))

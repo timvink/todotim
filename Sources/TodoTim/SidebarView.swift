@@ -15,26 +15,22 @@ struct SidebarView: View {
         // users), so rows draw Todoist's tinted selection themselves (`SidebarRow`).
         List {
             AccountMenu()
-                .listRowInsets(EdgeInsets(top: 0, leading: 4, bottom: 6, trailing: 4))
+                .sidebarRowInsets(top: 2, bottom: 6)
 
-            Button { model.showQuickAdd = true } label: {
-                HStack(spacing: 8) {
-                    Image(systemName: "plus.circle.fill")
-                        .font(.system(size: 18))
-                        .foregroundStyle(Theme.accent)
-                    Text("Add task")
-                        .font(.system(size: 13, weight: .semibold))
-                        .foregroundStyle(Theme.accent)
-                    Spacer()
-                }
-                .contentShape(Rectangle())
+            SidebarButtonRow(action: { model.showQuickAdd = true }) {
+                Image(systemName: "plus.circle.fill")
+                    .font(.system(size: 16))
+                    .foregroundStyle(Theme.accent)
+                    .frame(width: Sidebar.iconWidth)
+                Text("Add task")
+                    .font(.system(size: 13, weight: .semibold))
+                    .foregroundStyle(Theme.accent)
+                Spacer()
             }
-            .buttonStyle(.plain)
-            .pointerStyle(.link)
-            .padding(.vertical, 4)
+            .help("Add task (Q)")
 
             SidebarRow(item: .search) {
-                Image(systemName: "magnifyingglass").foregroundStyle(.secondary).frame(width: 18)
+                Image(systemName: "magnifyingglass").foregroundStyle(.secondary).frame(width: Sidebar.iconWidth)
                 Text("Search")
                 Spacer()
             }
@@ -42,65 +38,60 @@ struct SidebarView: View {
                 projectLabel(store.inbox, icon: "tray")
             }
 
-            SwiftUI.Section {
-                ForEach(store.projects) { p in
-                    SidebarRow(item: .project(p.id), dropProjectId: p.id) {
-                        projectLabel(p, icon: "number")
-                    }
-                    .contextMenu { projectMenu(p) }
+            SidebarHeader(title: "My Projects") {
+                Button { model.showAddProject = true } label: {
+                    Image(systemName: "plus").font(.system(size: 11, weight: .semibold))
+                        .frame(width: 20, height: 20)
+                        .contentShape(Rectangle())
                 }
-                .onMove { from, to in
-                    guard let i = from.first else { return }
-                    let id = store.projects[i].id
-                    store.moveProject(id, to: to > i ? to - 1 : to)
+                .buttonStyle(.plain)
+                .pointerStyle(.link)
+                .help("Add project")
+            }
+            ForEach(store.projects) { p in
+                SidebarRow(item: .project(p.id), dropProjectId: p.id) {
+                    projectLabel(p, icon: "number")
                 }
-            } header: {
-                HStack {
-                    Text("My Projects").font(Self.sectionFont)
-                    Spacer()
-                    Button { model.showAddProject = true } label: {
-                        Image(systemName: "plus")
-                    }
-                    .buttonStyle(.plain)
-                    .pointerStyle(.link)
-                    .help("Add project")
-                }
+                .contextMenu { projectMenu(p) }
+            }
+            .onMove { from, to in
+                guard let i = from.first else { return }
+                let id = store.projects[i].id
+                store.moveProject(id, to: to > i ? to - 1 : to)
             }
 
             if !store.labels.isEmpty {
-                SwiftUI.Section {
-                    ForEach(store.labels) { l in
-                        SidebarRow(item: .label(l.name)) {
-                            Image(systemName: "tag")
-                                .foregroundStyle(Palette.color(l.color))
-                                .frame(width: 18)
-                            Text(l.name)
-                            Spacer()
-                            let n = store.openTaskCount(label: l.name)
-                            if n > 0 { Text("\(n)").foregroundStyle(.secondary).font(.system(size: 12)) }
-                        }
-                        .contextMenu {
-                            Button("Rename…") { labelName = l.name; renamingLabel = l }
-                            Menu("Color") {
-                                ForEach(Palette.entries) { e in
-                                    Button { store.updateLabel(l.id) { $0.color = e.key } } label: {
-                                        SwiftUI.Label { Text(e.name) } icon: { Image(nsImage: Palette.swatch(e.key)) }
-                                    }
+                SidebarHeader(title: "Labels") { EmptyView() }
+                ForEach(store.labels) { l in
+                    SidebarRow(item: .label(l.name)) {
+                        Image(systemName: "tag")
+                            .foregroundStyle(Palette.color(l.color))
+                            .frame(width: Sidebar.iconWidth)
+                        Text(l.name).lineLimit(1)
+                        Spacer()
+                        SidebarCount(n: store.openTaskCount(label: l.name))
+                    }
+                    .contextMenu {
+                        Button("Rename…") { labelName = l.name; renamingLabel = l }
+                        Menu("Color") {
+                            ForEach(Palette.entries) { e in
+                                Button { store.updateLabel(l.id) { $0.color = e.key } } label: {
+                                    SwiftUI.Label { Text(e.name) } icon: { Image(nsImage: Palette.swatch(e.key)) }
                                 }
                             }
-                            Divider()
-                            Button("Delete Label", role: .destructive) {
-                                if model.sidebar == .label(l.name) { model.goToInbox() }
-                                store.deleteLabel(l.id)
-                            }
+                        }
+                        Divider()
+                        Button("Delete Label", role: .destructive) {
+                            if model.sidebar == .label(l.name) { model.goToInbox() }
+                            store.deleteLabel(l.id)
                         }
                     }
-                } header: {
-                    Text("Labels").font(Self.sectionFont)
                 }
             }
         }
         .listStyle(.sidebar)
+        // Rows set their own height; the default minimum would space them unevenly.
+        .environment(\.defaultMinListRowHeight, 10)
         .safeAreaInset(edge: .bottom) { SyncStatusView() }
         .sheet(item: $editingProject) { p in
             ProjectFormView(project: p).environment(model).environment(store)
@@ -129,17 +120,13 @@ struct SidebarView: View {
         }
     }
 
-    /// Todoist's sidebar headings are about the size of the rows, not the small system caps.
-    static let sectionFont = Font.system(size: 13, weight: .semibold)
-
     @ViewBuilder private func projectLabel(_ p: Project, icon: String) -> some View {
         Image(systemName: icon)
             .foregroundStyle(p.isInbox ? Color(hex: 0x246FE0) : Palette.color(p.color))
-            .frame(width: 18)
+            .frame(width: Sidebar.iconWidth)
         Text(p.name).lineLimit(1)
         Spacer()
-        let n = store.openTaskCount(projectId: p.id)
-        if n > 0 { Text("\(n)").foregroundStyle(.secondary).font(.system(size: 12)) }
+        SidebarCount(n: store.openTaskCount(projectId: p.id))
     }
 
     @ViewBuilder private func projectMenu(_ p: Project) -> some View {
@@ -175,14 +162,15 @@ private struct AccountMenu: View {
             SettingsLink { Text("Settings…") }
             Button("Import from Todoist…") { model.showImportTodoist = true }
         } label: {
-            HStack(spacing: 8) {
-                avatar.frame(width: 24, height: 24).clipShape(Circle())
+            HStack(spacing: Sidebar.spacing) {
+                avatar.frame(width: Sidebar.iconWidth, height: Sidebar.iconWidth).clipShape(Circle())
                 Text(Self.name).font(.system(size: 13, weight: .semibold)).lineLimit(1)
                 Image(systemName: "chevron.down").font(.system(size: 9, weight: .semibold)).foregroundStyle(.secondary)
             }
             .foregroundStyle(.primary)
-            .padding(.horizontal, 4).padding(.vertical, 4)
-            .background(RoundedRectangle(cornerRadius: 6).fill(Color.primary.opacity(hovering ? 0.06 : 0)))
+            .padding(.horizontal, Sidebar.padding).padding(.vertical, 5)
+            .background(RoundedRectangle(cornerRadius: Sidebar.radius, style: .continuous)
+                .fill(Color.primary.opacity(hovering ? 0.06 : 0)))
             .contentShape(Rectangle())
         }
         .menuStyle(.button)
@@ -199,13 +187,115 @@ private struct AccountMenu: View {
         } else {
             let initials = Self.name.split(separator: " ").prefix(2).compactMap(\.first).map(String.init).joined()
             Circle().fill(Theme.accent)
-                .overlay(Text(initials.uppercased()).font(.system(size: 10, weight: .semibold)).foregroundStyle(.white))
+                .overlay(Text(initials.uppercased()).font(.system(size: 9, weight: .semibold)).foregroundStyle(.white))
         }
     }
 }
 
-/// Sidebar row with Todoist's selection (tinted background, red title), a hover background and,
-/// for projects, a drop target for dragged tasks that highlights while targeted.
+/// Shared sidebar metrics: every row puts its icon in the same column, so icons, the avatar and the
+/// section headings line up.
+enum Sidebar {
+    static let iconWidth: CGFloat = 20
+    static let spacing: CGFloat = 9
+    /// Inner horizontal padding of a row (its highlight extends this far past the content).
+    static let padding: CGFloat = 8
+    static let radius: CGFloat = 7
+    static let rowInsets = EdgeInsets(top: 1, leading: 10, bottom: 1, trailing: 10)
+    /// Horizontal inset the sidebar list adds outside the row insets.
+    static let listInset: CGFloat = 16
+}
+
+extension View {
+    func sidebarRowInsets(top: CGFloat = 1, bottom: CGFloat = 1) -> some View {
+        listRowInsets(EdgeInsets(top: top, leading: Sidebar.rowInsets.leading, bottom: bottom, trailing: Sidebar.rowInsets.trailing))
+            .listRowSeparator(.hidden)
+    }
+}
+
+/// Open-task count at the trailing edge of a sidebar row; nothing when zero.
+private struct SidebarCount: View {
+    let n: Int
+    var body: some View {
+        if n > 0 {
+            Text("\(n)").font(.system(size: 12)).monospacedDigit().foregroundStyle(.secondary)
+        }
+    }
+}
+
+/// Section heading ("My Projects", "Labels"), aligned with the rows' icons; the accessory (an add
+/// button) sits where the counts are and shows on hover.
+private struct SidebarHeader<Accessory: View>: View {
+    let title: String
+    @ViewBuilder let accessory: Accessory
+    @State private var hovering = false
+
+    var body: some View {
+        HStack(spacing: 0) {
+            Text(title)
+                .font(.system(size: 12, weight: .semibold))
+                .foregroundStyle(.secondary)
+            Spacer()
+            accessory
+                .foregroundStyle(.secondary)
+                .opacity(hovering ? 1 : 0)
+        }
+        .frame(height: 20)
+        .padding(.leading, Sidebar.padding)
+        .padding(.trailing, Sidebar.padding - 4)
+        .padding(.top, 14)
+        .contentShape(Rectangle())
+        .onHover { hovering = $0 }
+        .sidebarRowInsets(top: 0, bottom: 0)
+        .selectionDisabled()
+        .moveDisabled(true)
+    }
+}
+
+/// The hover and selection chrome shared by sidebar rows.
+private struct SidebarRowBackground: View {
+    var selected = false
+    var hovering = false
+    var dropTargeted = false
+
+    var body: some View {
+        RoundedRectangle(cornerRadius: Sidebar.radius, style: .continuous)
+            .fill(dropTargeted ? Theme.accent.opacity(0.24)
+                : selected ? Theme.selection
+                : Color.primary.opacity(hovering ? 0.06 : 0))
+            .overlay {
+                if dropTargeted {
+                    RoundedRectangle(cornerRadius: Sidebar.radius, style: .continuous)
+                        .strokeBorder(Theme.accent.opacity(0.7), lineWidth: 1.5)
+                }
+            }
+            .animation(.easeOut(duration: 0.12), value: hovering)
+    }
+}
+
+/// A sidebar row that runs an action instead of selecting a view ("Add task").
+private struct SidebarButtonRow<Content: View>: View {
+    let action: () -> Void
+    @ViewBuilder let content: Content
+    @State private var hovering = false
+
+    var body: some View {
+        Button(action: action) {
+            HStack(spacing: Sidebar.spacing) { content }
+                .padding(.horizontal, Sidebar.padding)
+                .padding(.vertical, 6)
+                .background(SidebarRowBackground(hovering: hovering))
+                .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .pointerStyle(.link)
+        .onHover { hovering = $0 }
+        .sidebarRowInsets()
+        .moveDisabled(true)
+    }
+}
+
+/// Sidebar row with a tinted selection (red title), a hover background and, for projects, a drop
+/// target for dragged tasks that highlights while targeted.
 private struct SidebarRow<Content: View>: View {
     @Environment(AppModel.self) private var model
     let item: SidebarItem
@@ -216,24 +306,17 @@ private struct SidebarRow<Content: View>: View {
 
     var body: some View {
         let selected = model.sidebar == item
-        HStack(spacing: 8) { content }
+        HStack(spacing: Sidebar.spacing) { content }
+            .font(.system(size: 13))
             .foregroundStyle(selected ? Theme.accent : Color.primary)
-            .padding(.horizontal, 6)
-            .padding(.vertical, 5)
-            .background(
-                RoundedRectangle(cornerRadius: 6).fill(
-                    dropTargeted ? Theme.accent.opacity(0.28)
-                        : selected ? Theme.selection
-                        : Color.primary.opacity(hovering ? 0.06 : 0))
-            )
-            .overlay {
-                if dropTargeted { RoundedRectangle(cornerRadius: 6).strokeBorder(Theme.accent.opacity(0.7), lineWidth: 1.5) }
-            }
+            .padding(.horizontal, Sidebar.padding)
+            .padding(.vertical, 6)
+            .background(SidebarRowBackground(selected: selected, hovering: hovering, dropTargeted: dropTargeted))
             .contentShape(Rectangle())
             .pointerStyle(.link)
             .onHover { hovering = $0 }
             .onTapGesture { model.sidebar = item }
-            .listRowInsets(EdgeInsets(top: 1, leading: 4, bottom: 1, trailing: 4))
+            .sidebarRowInsets()
             .modifier(SidebarDropModifier(projectId: dropProjectId, targeted: $dropTargeted))
     }
 }
@@ -342,7 +425,9 @@ struct SyncStatusView: View {
                 .foregroundStyle(.secondary)
                 .help("Settings (⌘,)")
         }
-        .padding(.horizontal, 14).padding(.vertical, 10)
+        // Lines up with the rows' icons and counts (the list adds its own inset).
+        .padding(.horizontal, Sidebar.listInset + Sidebar.rowInsets.leading + Sidebar.padding)
+        .padding(.vertical, 10)
         .help(helpText)
     }
 

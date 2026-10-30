@@ -59,7 +59,7 @@ final class DragState {
         timer = nil
         released = nil
         guard draggingID != nil || target != nil else { return }
-        withAnimation(.easeOut(duration: 0.12)) {
+        withAnimation(Self.slotAnimation) {
             target = nil
             draggingID = nil
         }
@@ -67,10 +67,13 @@ final class DragState {
         inPanel = false
     }
 
-    /// Sets the target with a short animation so the rows slide to make room.
+    /// The motion of the drop slot: quick, without overshoot, so rows glide out of the way.
+    static var slotAnimation: Animation? { Theme.reduceMotion ? nil : .snappy(duration: 0.2, extraBounce: 0) }
+
+    /// Sets the target with an animation so the rows slide to make room.
     func setTarget(_ new: DropTarget?) {
         guard new != target else { return }
-        withAnimation(.easeInOut(duration: 0.14)) { target = new }
+        withAnimation(Self.slotAnimation) { target = new }
     }
 
     /// Restores a drag the mouse poll ended less than a second ago, so a late drop still lands.
@@ -209,7 +212,7 @@ struct FixedDropDelegate: DropDelegate {
     func performDrop(info: DropInfo) -> Bool { model.performDrop(target) }
 }
 
-/// Todoist's drop slot: a row-height rounded rectangle where the task will land.
+/// The drop slot's fill: a row-height rounded rectangle where the task will land.
 struct DropPlaceholderView: View {
     @Environment(AppModel.self) private var model
     let depth: Int
@@ -218,9 +221,10 @@ struct DropPlaceholderView: View {
     var inset: CGFloat = Theme.gutter - 4
 
     var body: some View {
-        RoundedRectangle(cornerRadius: 6)
-            .fill(Theme.accent.opacity(0.10))
-            .overlay(RoundedRectangle(cornerRadius: 6).strokeBorder(Theme.accent.opacity(0.45), lineWidth: 1))
+        RoundedRectangle(cornerRadius: 8, style: .continuous)
+            .fill(Theme.accent.opacity(0.07))
+            .overlay(RoundedRectangle(cornerRadius: 8, style: .continuous)
+                .strokeBorder(Theme.accent.opacity(0.32), lineWidth: 1))
             .frame(height: height - 6)
             .padding(.vertical, 3)
             .padding(.leading, CGFloat(depth) * Theme.indent + inset)
@@ -228,11 +232,17 @@ struct DropPlaceholderView: View {
     }
 }
 
+/// Where the drop slot opens: before the item with `beforeID` (nil = after the last item),
+/// at `depth`.
+struct DropGap: Equatable {
+    var beforeID: String?
+    var depth: Int
+}
+
 extension TaskListView {
-    /// `items` with the drop placeholder inserted at the current target. O(rows), only while
-    /// a drag is over the list.
-    static func withPlaceholder(_ items: [DisplayItem], target: DropTarget?) -> [DisplayItem] {
-        guard let target else { return items }
+    /// The slot for the current target among `items`. O(rows), only while a drag is over the list.
+    static func gap(in items: [DisplayItem], target: DropTarget?) -> DropGap? {
+        guard let target else { return nil }
         func index(of id: String) -> Int? { items.firstIndex { $0.id == id } }
         func depth(at i: Int) -> Int { if case .task(let r) = items[i] { return r.depth } else { return 0 } }
         var at: Int?
@@ -255,9 +265,29 @@ extension TaskListView {
         case .sectionEnd(_, let sid):
             at = index(of: "__add/" + (sid ?? ""))
         }
-        guard let at else { return items }
-        var out = items
-        out.insert(.dropPlaceholder(depth: d), at: at)
-        return out
+        guard let at else { return nil }
+        return DropGap(beforeID: at < items.count ? items[at].id : nil, depth: d)
+    }
+}
+
+/// The space a drop would fill, kept in the layout at zero height when closed so that opening,
+/// closing and moving it animate as rows sliding apart.
+struct DropSlot: View {
+    let open: Bool
+    let depth: Int
+    let height: CGFloat
+    var inset: CGFloat = Theme.gutter - 4
+
+    var body: some View {
+        // The placeholder (and its drop delegate) only exists while open; the frame animates.
+        Color.clear
+            .frame(height: open ? height : 0)
+            .overlay {
+                if open {
+                    DropPlaceholderView(depth: depth, height: height, inset: inset)
+                        .transition(.opacity)
+                }
+            }
+            .clipped()
     }
 }

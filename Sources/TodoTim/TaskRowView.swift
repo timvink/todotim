@@ -1,32 +1,48 @@
 import SwiftUI
 import TodoCore
 
-/// Round Todoist checkbox: priority-colored ring with a tinted fill; shows a check on hover.
+/// Round checkbox: priority-colored ring with a tinted fill; shows a check on hover. Completing
+/// fills it with a small pop first, so the row leaves after the check has registered.
 struct CheckCircle: View {
     let priority: Priority
     let completed: Bool
     var size: CGFloat = 18
     let action: () -> Void
     @State private var hovering = false
+    /// Between the click and the completion: drawn as completed.
+    @State private var checking = false
 
     var body: some View {
         let color = priority == .p4 ? Color.secondary : priority.color
-        Button(action: action) {
+        let filled = completed || checking
+        Button(action: tap) {
             ZStack {
-                Circle().fill(completed ? color : color.opacity(priority == .p4 ? 0 : 0.14))
+                Circle().fill(filled ? color : color.opacity(priority == .p4 ? 0 : 0.14))
                 Circle().strokeBorder(color, lineWidth: priority == .p4 ? 1 : 1.6)
                 Image(systemName: "checkmark")
                     .font(.system(size: size * 0.5, weight: .bold))
-                    .foregroundStyle(completed ? Color.white : color)
-                    .opacity(completed || hovering ? 1 : 0)
+                    .foregroundStyle(filled ? Color.white : color)
+                    .opacity(filled || hovering ? 1 : 0)
+                    .scaleEffect(checking ? 1.1 : 1)
             }
             .frame(width: size, height: size)
+            .scaleEffect(checking ? 1.12 : 1)
             .contentShape(Circle())
         }
         .buttonStyle(.plain)
         .pointerStyle(.link)
         .onHover { hovering = $0 }
         .help(completed ? "Reopen task" : "Complete task")
+    }
+
+    private func tap() {
+        guard !completed else { return action() }
+        guard !checking else { return }
+        withAnimation(Theme.reduceMotion ? nil : .spring(duration: 0.2, bounce: 0.4)) { checking = true }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.18) {
+            action()
+            checking = false
+        }
     }
 }
 
@@ -90,7 +106,7 @@ struct TaskRowView: View, Equatable {
             chevron(t)
             VStack(alignment: .leading, spacing: 0) {
                 HStack(alignment: .top, spacing: 10) {
-                    CheckCircle(priority: t.priority, completed: t.isCompleted) { model.toggleComplete(t.id) }
+                    CheckCircle(priority: t.priority, completed: t.isCompleted) { model.setCompleted(t.id, !t.isCompleted) }
                         .padding(.top, 1)
                     VStack(alignment: .leading, spacing: 3) {
                         Text(RichText.render(t.content))
@@ -127,8 +143,8 @@ struct TaskRowView: View, Equatable {
                     }
                 }
                 .padding(.vertical, 8)
-                .padding(.horizontal, 4)
-                Divider()
+                .padding(.horizontal, Theme.rowInset)
+                Hairline()
             }
         }
         .padding(.leading, CGFloat(item.depth) * Theme.indent)

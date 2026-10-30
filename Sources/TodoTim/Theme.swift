@@ -45,12 +45,27 @@ enum Theme {
     static let today = Color(hex: 0x058527)
     static let tomorrow = Color(hex: 0xAD6200)
     static let thisWeek = Color(hex: 0x692EC2)
-    static let contentMaxWidth: CGFloat = 820
+    /// Reading width of the task column.
+    static let contentMaxWidth: CGFloat = 740
     /// Width of the chevron gutter left of the checkbox.
     static let gutter: CGFloat = 26
     /// Width of the drag-handle column left of the chevron gutter, shown on row hover.
     static let grip: CGFloat = 16
     static let indent: CGFloat = 28
+    /// Horizontal inset of a task row's content, so the checkbox starts at `gutter + rowInset`.
+    static let rowInset: CGFloat = 4
+    /// Rows appearing, leaving and moving (complete, collapse, reorder): quick, no overshoot.
+    /// None with Reduce Motion.
+    static var motion: Animation? { reduceMotion ? nil : .snappy(duration: 0.24, extraBounce: 0) }
+
+    static var reduceMotion: Bool { NSWorkspace.shared.accessibilityDisplayShouldReduceMotion }
+}
+
+/// The faint rule between task rows; section headers keep the stronger `Divider`.
+struct Hairline: View {
+    var body: some View {
+        Rectangle().fill(Color.primary.opacity(0.07)).frame(height: 1)
+    }
 }
 
 extension Priority {
