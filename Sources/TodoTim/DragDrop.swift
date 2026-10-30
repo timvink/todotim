@@ -30,6 +30,9 @@ final class DragState {
     @ObservationIgnored private(set) var inPanel = false
     @ObservationIgnored private var timer: Timer?
     @ObservationIgnored private var releasedTicks = 0
+    /// The drag the mouse poll ended, kept briefly: when the main thread is busy, SwiftUI can
+    /// deliver the drop after the poll has seen the button go up.
+    @ObservationIgnored private var released: (id: EntityID, target: DropTarget?, excluded: Set<EntityID>, inPanel: Bool, at: Date)?
 
     /// `trackMouse: false` is for the debug test hook, which drags without a mouse.
     func begin(_ id: EntityID, excluded: Set<EntityID>, rowHeight: CGFloat, inPanel: Bool = false, trackMouse: Bool = true) {
@@ -41,6 +44,7 @@ final class DragState {
         // SwiftUI reports no event when a drag is cancelled (dropped outside any target), so
         // poll the mouse button while a drag is active and clean up shortly after release.
         releasedTicks = 0
+        released = nil
         timer?.invalidate()
         guard trackMouse else { return }
         let t = Timer(timeInterval: 0.12, repeats: true) { [weak self] _ in
@@ -53,6 +57,7 @@ final class DragState {
     func end() {
         timer?.invalidate()
         timer = nil
+        released = nil
         guard draggingID != nil || target != nil else { return }
         withAnimation(.easeOut(duration: 0.12)) {
             target = nil
@@ -68,11 +73,28 @@ final class DragState {
         withAnimation(.easeInOut(duration: 0.14)) { target = new }
     }
 
+    /// Restores a drag the mouse poll ended less than a second ago, so a late drop still lands.
+    /// Called by the drop delegates before they look at the drag.
+    func resumeIfJustReleased() {
+        guard draggingID == nil, let r = released, Date().timeIntervalSince(r.at) < 1 else { return }
+        released = nil
+        excluded = r.excluded
+        inPanel = r.inPanel
+        target = r.target
+        draggingID = r.id
+    }
+
     private func poll() {
         if NSEvent.pressedMouseButtons & 1 == 0 {
             releasedTicks += 1
             // A drop is delivered on mouse-up; give `performDrop` time to run first.
-            if releasedTicks >= 3 { end() }
+            if releasedTicks >= 3, let id = draggingID {
+                let r = (id: id, target: target, excluded: excluded, inPanel: inPanel, at: Date())
+                end()
+                released = r
+            } else if releasedTicks >= 3 {
+                end()
+            }
         } else {
             releasedTicks = 0
         }
@@ -95,13 +117,17 @@ struct TaskRowDropDelegate: DropDelegate {
     let collapsed: Bool
     let height: HeightBox
 
-    func validateDrop(info: DropInfo) -> Bool { model.drag.draggingID != nil && !model.drag.inPanel }
+    func validateDrop(info: DropInfo) -> Bool {
+        model.drag.resumeIfJustReleased()
+        return model.drag.draggingID != nil && !model.drag.inPanel
+    }
     func dropEntered(info: DropInfo) { update(info) }
     func dropUpdated(info: DropInfo) -> DropProposal? {
         update(info)
         return DropProposal(operation: .move)
     }
     func performDrop(info: DropInfo) -> Bool {
+        model.drag.resumeIfJustReleased()
         update(info)
         return model.performDrop()
     }
@@ -138,13 +164,17 @@ struct SubtaskDropDelegate: DropDelegate {
     let task: TodoTask
     let height: HeightBox
 
-    func validateDrop(info: DropInfo) -> Bool { model.drag.draggingID != nil && model.drag.inPanel }
+    func validateDrop(info: DropInfo) -> Bool {
+        model.drag.resumeIfJustReleased()
+        return model.drag.draggingID != nil && model.drag.inPanel
+    }
     func dropEntered(info: DropInfo) { update(info) }
     func dropUpdated(info: DropInfo) -> DropProposal? {
         update(info)
         return DropProposal(operation: .move)
     }
     func performDrop(info: DropInfo) -> Bool {
+        model.drag.resumeIfJustReleased()
         update(info)
         return model.performDrop()
     }
@@ -167,7 +197,10 @@ struct FixedDropDelegate: DropDelegate {
     let target: DropTarget?
 
     /// The placeholder (nil target) also serves the task panel; the fixed zones are the list's.
-    func validateDrop(info: DropInfo) -> Bool { model.drag.draggingID != nil && (target == nil || !model.drag.inPanel) }
+    func validateDrop(info: DropInfo) -> Bool {
+        model.drag.resumeIfJustReleased()
+        return model.drag.draggingID != nil && (target == nil || !model.drag.inPanel)
+    }
     func dropEntered(info: DropInfo) { if let target { model.drag.setTarget(target) } }
     func dropUpdated(info: DropInfo) -> DropProposal? {
         if let target { model.drag.setTarget(target) }

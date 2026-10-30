@@ -389,6 +389,7 @@ final class AppModel {
     /// there is nothing to move.
     @discardableResult
     func performDrop(_ target: DropTarget? = nil) -> Bool {
+        drag.resumeIfJustReleased()
         defer { drag.end() }
         guard let id = drag.draggingID, let target = target ?? drag.target, store.task(id) != nil else { return false }
         switch target {
