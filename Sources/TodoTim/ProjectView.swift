@@ -72,7 +72,10 @@ struct TaskListView<Header: View>: View {
         }
         // The title bar takes the band beside the window buttons instead of a toolbar.
         .ignoresSafeArea(.container, edges: .top)
-        .onAppear { Perf.firstListAppeared() }
+        .onAppear {
+            model.visibleRows = visible
+            Perf.firstListAppeared()
+        }
     }
 }
 
@@ -206,6 +209,11 @@ private struct SelectionScroller: View {
 
     var body: some View {
         Color.clear
+            .onAppear {
+                // A list opened with a selection (back from search) starts at it, once laid out.
+                guard let id = model.selectedTaskID else { return }
+                DispatchQueue.main.async { proxy.scrollTo(id, anchor: .center) }
+            }
             .onChange(of: model.selectedTaskID) { _, id in
                 guard let id, !visible.ids.contains(id) else { return }
                 let now = CACurrentMediaTime()

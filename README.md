@@ -1,6 +1,6 @@
 # TodoTim
 
-A fast, calm, native macOS to-do app, driven from the keyboard and dressed in
+A fast, calm, native macOS to-do app, driven from the keyboard with vim motions and dressed in
 [Catppuccin](https://catppuccin.com). Your tasks stay on your own CalDAV server, as standard task lists that other
 task apps can share.
 
@@ -12,12 +12,14 @@ the calendar and board views.
 
 ## Features
 
+- Vim motions: `j` `k` to move through tasks, `gg` `G` to jump to the top or bottom of a section, `h` `l` to hide
+  and show sub-tasks, `/` to search and `Esc` to step back out. Todoist's single-key shortcuts do the rest
+  (press `?` in the app for all of them)
 - Catppuccin colours: Mocha in Dark Mode, Latte in Light Mode
 - Projects with colours, sections, tasks and nested sub-tasks
 - Priorities (p1–p4), due dates, labels and descriptions
 - Import from Todoist (File › Import from Todoist…, with your API token)
 - Quick Add with natural language: `Renew passport next friday p1 @errands #Home /Admin`
-- Keyboard shortcuts for almost everything (press `?` in the app)
 - Search, label views, completed-task view, and undo for complete and delete
 - Local-first: works offline, and syncs over CalDAV in the background
 - Native SwiftUI app with no third-party dependencies
@@ -73,7 +75,8 @@ server URL, the Nextcloud layout.
 The first sync uploads your existing projects and tasks. Running it again creates no duplicates.
 
 TodoTim syncs a few seconds after each change, every minute, and when you press `⌘R`. An idle sync is a single
-request. Your password is stored in the macOS Keychain, per server: after you change the server URL, enter the
+request. The sidebar shows "Synced" with a green cloud when the server has every change, and "Sync pending" while
+a change waits to be sent. Your password is stored in the macOS Keychain, per server: after you change the server URL, enter the
 password again. Local data lives in `~/Library/Application Support/TodoTim/` (`db.json`, plus
 `caldav-state.json`, which records where your calendars are and what the last sync saw).
 
@@ -130,22 +133,34 @@ Report vulnerabilities privately as described in [SECURITY.md](SECURITY.md).
 
 ## Keyboard shortcuts
 
+TodoTim moves like vim:
+
+| Key | Action |
+|---|---|
+| `j` / `k`, `↓` / `↑` | Next / previous task. With nothing selected, the top / bottom of the current section |
+| `gg` / `G` | First / last task of the section |
+| `h` / `l` | Hide / show sub-tasks. On a sub-task, `h` hides its list and selects the parent |
+| `/` | Search. `Esc` leaves the search field, and a second `Esc` returns to the list you came from |
+| `g` then `i` | Go to Inbox |
+| `Esc` | Close the editor or popover, then clear the selection |
+
+The other shortcuts follow Todoist and macOS:
+
 | Key | Action |
 |---|---|
 | `q`, `⌘N` | Quick Add |
 | `a` / `⇧A` | Add task at the bottom / top of the current section |
 | `s` | Add section |
-| `↑` `↓`, `j` `k` | Move selection |
 | `Enter` | Open selected task |
 | `e`, `⌘↩` | Complete or reopen task |
 | `1`–`4` | Set priority |
-| `t` / `l` / `v` | Set date / labels / move to project |
+| `t` / `@` / `v` | Set date / labels / move to project |
 | `⌘]` / `⌘[` | Indent / outdent (make subtask) |
 | `⌘↑` / `⌘↓` | Move task up / down |
 | `⌘⌫` | Delete task |
 | `⌘Z` | Undo complete or delete |
-| `/`, `⌘F` | Search |
-| `g` then `i`, `⌘1` | Go to Inbox |
+| `⌘F` | Search |
+| `⌘1` | Go to Inbox |
 | `⌘2`…`⌘9` | Go to project 1–8 |
 | `⇧⌘C` | Show or hide completed tasks |
 | `⌘R` | Sync now |

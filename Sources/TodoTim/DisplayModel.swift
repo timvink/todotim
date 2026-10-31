@@ -64,6 +64,30 @@ struct DisplayModel {
     /// Task ids in on-screen order, and each id's position, for j/k navigation.
     var taskIDs: [EntityID]
     var position: [EntityID: Int]
+    /// The shown tasks of each section (in label and search views, of each project) in order, as
+    /// ranges of `taskIDs`. Sections without shown tasks have none.
+    var runs: [TaskRun]
+
+    /// The run that holds `taskIDs[index]`.
+    func run(containing index: Int) -> TaskRun? { runs.first { $0.range.contains(index) } }
+
+    /// The run of `area`; in label and search views, the run of its project.
+    func run(for area: TaskArea) -> TaskRun? {
+        if case .project = key.sidebar { return runs.first { $0.area == area } }
+        return runs.first { $0.area.projectId == area.projectId }
+    }
+}
+
+/// A project's tasks outside sections (`sectionId` nil), or one of its sections.
+struct TaskArea: Equatable {
+    var projectId: EntityID
+    var sectionId: EntityID?
+}
+
+/// The tasks of one area as shown, sub-tasks included: `DisplayModel.taskIDs[range]`.
+struct TaskRun {
+    var area: TaskArea
+    var range: Range<Int>
 }
 
 /// Builds a `DisplayModel` from the store's indexed queries: O(rows), each task's children
@@ -74,6 +98,7 @@ struct DisplayBuilder {
     let store: TodoStore
     private var items: [DisplayItem] = []
     private var taskIDs: [EntityID] = []
+    private var runs: [TaskRun] = []
 
     init(model: AppModel, store: TodoStore) {
         self.model = model
@@ -91,7 +116,7 @@ struct DisplayBuilder {
         var position: [EntityID: Int] = [:]
         position.reserveCapacity(taskIDs.count)
         for (i, id) in taskIDs.enumerated() { position[id] = i }
-        return DisplayModel(key: key, items: items, taskIDs: taskIDs, position: position)
+        return DisplayModel(key: key, items: items, taskIDs: taskIDs, position: position, runs: runs)
     }
 
     // MARK: Project
@@ -114,9 +139,11 @@ struct DisplayBuilder {
     private mutating func appendArea(_ pid: EntityID, _ sid: EntityID?, showCompleted: Bool, editor: EditorTarget?) {
         let editorHere = editor.map { $0.parentId == nil && $0.projectId == pid && $0.sectionId == sid } ?? false
         if editorHere, editor?.atTop == true { items.append(.editor(depth: 0)) }
+        let start = taskIDs.count
         for id in store.taskIDs(projectId: pid, sectionId: sid, includeCompleted: showCompleted) {
             appendTree(id, depth: 0, lastAtDepth: [], showCompleted: showCompleted, editor: editor)
         }
+        appendRun(TaskArea(projectId: pid, sectionId: sid), from: start)
         if editorHere, editor?.atTop == false { items.append(.editor(depth: 0)) }
         if !(editorHere && editor?.atTop == false) { items.append(.addTask(projectId: pid, sectionId: sid)) }
     }
@@ -165,13 +192,19 @@ struct DisplayBuilder {
         for p in model.allProjects {
             guard let ids = byProject[p.id] else { continue }
             items.append(.groupHeader(projectId: p.id, count: ids.count))
+            let start = taskIDs.count
             for id in ids {
                 let progress = store.subtaskProgress(of: id)
                 items.append(.task(RowItem(id: id, depth: 0, subtaskDone: progress.done, subtaskTotal: progress.total,
                                            hasChildren: false, showProject: true)))
                 taskIDs.append(id)
             }
+            appendRun(TaskArea(projectId: p.id), from: start)
         }
+    }
+
+    private mutating func appendRun(_ area: TaskArea, from start: Int) {
+        if taskIDs.count > start { runs.append(TaskRun(area: area, range: start..<taskIDs.count)) }
     }
 }
 

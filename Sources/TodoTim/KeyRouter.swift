@@ -2,7 +2,8 @@ import AppKit
 import SwiftUI
 import TodoCore
 
-/// Handles Todoist's single-key shortcuts (q, a, j/k, gg/G, 1–4, g i, …).
+/// Handles Todoist's single-key shortcuts (q, a, e, 1–4, …) and the vim motions (j/k, h/l,
+/// gg/G, g i, Esc).
 ///
 /// SwiftUI's `.onKeyPress` only fires for the focused view, and list rows are not
 /// focusable, so a local NSEvent monitor is used instead. Keys pass through untouched
@@ -33,8 +34,8 @@ final class KeyRouter {
 
     /// Plain keys that are also menu key equivalents. While a modal panel is open they are
     /// swallowed so they do not act on the list behind it.
-    private static let menuKeys: Set<String> = ["q", "a", "A", "s", "t", "l", "v", "j", "k", "e", "/", "?", "g", "G",
-                                                "1", "2", "3", "4"]
+    private static let menuKeys: Set<String> = ["q", "a", "A", "s", "t", "@", "v", "j", "k", "h", "l", "e", "/", "?",
+                                                "g", "G", "1", "2", "3", "4"]
 
     /// Returns true when the event was consumed.
     private func handle(_ event: NSEvent) -> Bool {
@@ -65,7 +66,7 @@ final class KeyRouter {
             case (_, "1"), (_, "2"), (_, "3"), (_, "4"):
                 model.setPriority(Priority(rawValue: Int(chars)!)!)
             case (_, "t"): model.popover = .date
-            case (_, "l"): model.popover = .labels
+            case (_, "@"): model.popover = .labels
             case (_, "v"): model.popover = .move
             default: return Self.menuKeys.contains(chars)
             }
@@ -92,13 +93,15 @@ final class KeyRouter {
             guard model.selectedTaskID != nil else { return false }
             model.openSelected(); return true
         case Key.escape:
-            model.clearSelection(); return true
+            model.escape(); return true
         default: break
         }
 
         switch chars {
         case "j": model.moveSelection(1)
         case "k": model.moveSelection(-1)
+        case "h": model.collapseSelected()
+        case "l": model.expandSelected()
         case "G": model.moveSelectionToSectionEdge(last: true)
         case "q": model.showQuickAdd = true
         case "a": model.addTaskInCurrentSection(atTop: false)
@@ -108,7 +111,7 @@ final class KeyRouter {
             guard let id = model.selectedTaskID else { return false }
             model.setPriority(Priority(rawValue: Int(chars)!)!, for: id)
         case "t": model.showPopover(.date)
-        case "l": model.showPopover(.labels)
+        case "@": model.showPopover(.labels)
         case "v": model.showPopover(.move)
         case "s": model.addSectionAtEnd()
         case "/": model.focusSearch()

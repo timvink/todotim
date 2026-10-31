@@ -192,6 +192,8 @@ enum Theme {
     static let inbox = Ctp.lavender.color
     static let link = Ctp.blue.color
     static let danger = Ctp.red.color
+    /// The sidebar's cloud when the server has every change.
+    static let synced = Ctp.green.color
 
     // MARK: Metrics
 

@@ -26,6 +26,9 @@ struct SectionEditorTarget: Equatable {
 
 enum TaskPopover: Equatable { case date, labels, move }
 
+/// A task, or the section the inline editor opened in (see `AppModel.anchor`).
+enum NavigationAnchor { case task(EntityID), area(TaskArea) }
+
 struct ToastInfo: Identifiable {
     let id = UUID()
     var message: String
@@ -42,6 +45,8 @@ final class AppModel {
     var sidebar: SidebarItem? = .project(TodoStore.inboxID) {
         didSet {
             guard sidebar != oldValue else { return }
+            if sidebar == .search { beforeSearch = oldValue.map { ($0, selectedTaskID) } }
+            anchor = nil
             selectedTaskID = nil
             editor = nil
             sectionEditor = nil
@@ -57,6 +62,7 @@ final class AppModel {
     var selectedTaskID: EntityID? {
         didSet {
             guard selectedTaskID != oldValue else { return }
+            if let id = selectedTaskID { anchor = .task(id) }
             if popover != nil { popover = nil }
             if hasSelection != (selectedTaskID != nil) { hasSelection = selectedTaskID != nil }
         }
@@ -97,6 +103,7 @@ final class AppModel {
     var editor: EditorTarget? {
         didSet {
             guard let e = editor else { return }
+            anchor = .area(TaskArea(projectId: e.projectId, sectionId: e.sectionId))
             if let o = oldValue, o.projectId == e.projectId, o.sectionId == e.sectionId, o.parentId == e.parentId { return }
             editorDraft.reset(projectId: e.projectId, sectionId: e.sectionId)
         }
@@ -123,6 +130,15 @@ final class AppModel {
     @ObservationIgnored var detailFlush: (taskID: EntityID, flush: () -> Void)?
     /// Rows of the list currently on screen; see `display()`.
     @ObservationIgnored private var displayCache: DisplayModel?
+    /// Rows of the list that are on screen (set by the list view).
+    @ObservationIgnored weak var visibleRows: VisibleRows?
+    /// Where the keyboard was last in this list: the last selected task, or the section the
+    /// inline editor opened in. Without a selection, j/k, gg and G start from its section.
+    @ObservationIgnored private var anchor: NavigationAnchor?
+    /// The list that was open before search, and its selection; Esc in search goes back to it.
+    @ObservationIgnored private var beforeSearch: (sidebar: SidebarItem, selection: EntityID?)?
+    /// True from a sync the user asked for (⌘R) until it ends; the sidebar footer shows it.
+    var userSyncInProgress = false
 
     @ObservationIgnored private let defaults: UserDefaults
 
@@ -197,38 +213,71 @@ final class AppModel {
 
     // MARK: - Navigation
 
+    /// j/k, ↓/↑. Without a selection, j selects the first task of the current section and k the
+    /// last (`currentRun`).
     func moveSelection(_ delta: Int) {
         let d = cachedDisplay()
         let ids = d.taskIDs
-        guard !ids.isEmpty else { return }
         guard let cur = selectedTaskID, let i = d.position[cur] else {
-            selectedTaskID = delta > 0 ? ids.first : ids.last
+            guard let run = currentRun(in: d) else { return }
+            selectedTaskID = ids[delta > 0 ? run.range.lowerBound : run.range.upperBound - 1]
             return
         }
         selectedTaskID = ids[max(0, min(ids.count - 1, i + delta))]
     }
 
-    /// Vim `gg` / `G`: selects the first or last task of the selected task's section (the run of
-    /// task rows between section or group headers). Without a selection, the first or last task.
+    /// Vim `gg` / `G`: selects the first or last task of the selected task's section (in label
+    /// and search views, of its project); without a selection, of the current section.
     func moveSelectionToSectionEdge(last: Bool) {
         let d = cachedDisplay()
-        guard !d.taskIDs.isEmpty else { return }
-        guard let cur = selectedTaskID, let at = d.items.firstIndex(where: { $0.id == cur }) else {
-            selectedTaskID = last ? d.taskIDs.last : d.taskIDs.first
-            return
-        }
-        func isBoundary(_ item: DisplayItem) -> Bool {
-            switch item {
-            case .sectionHeader, .groupHeader: true
-            default: false
+        guard let run = selectedTaskID.flatMap({ d.position[$0] }).flatMap(d.run(containing:)) ?? currentRun(in: d)
+        else { return }
+        selectedTaskID = d.taskIDs[last ? run.range.upperBound - 1 : run.range.lowerBound]
+    }
+
+    /// The section the keyboard is in while no task is selected: the anchor's while any of it is
+    /// on screen, else the first section on screen, else the anchor's or the first.
+    private func currentRun(in d: DisplayModel) -> TaskRun? {
+        var anchored: TaskRun?
+        switch anchor {
+        case .task(let id)?:
+            if let i = d.position[id] {
+                anchored = d.run(containing: i)
+            } else if let t = store.task(id) {
+                anchored = d.run(for: TaskArea(projectId: t.projectId, sectionId: t.sectionId))
             }
+        case .area(let area)?: anchored = d.run(for: area)
+        case nil: break
         }
-        var edge = cur
-        for item in last ? Array(d.items[at...]) : d.items[...at].reversed() {
-            if isBoundary(item) { break }
-            if case .task(let r) = item { edge = r.id }
+        let onScreen = visibleRows?.ids ?? []
+        func isOnScreen(_ run: TaskRun) -> Bool { d.taskIDs[run.range].contains(where: onScreen.contains) }
+        if let anchored, isOnScreen(anchored) { return anchored }
+        return d.runs.first(where: isOnScreen) ?? anchored ?? d.runs.first
+    }
+
+    /// Vim `h`: collapses the selected task's sub-tasks when they are shown; else collapses the
+    /// sub-task list the task is in and selects its parent. Label and search views have none.
+    func collapseSelected() {
+        guard currentProjectID != nil, let id = selectedTaskID, let t = store.task(id) else { return }
+        if !t.collapsed, shownSubtaskCount(t) > 0 {
+            setCollapsed(id, true)
+        } else if let parent = t.parentId, store.task(parent) != nil {
+            selectedTaskID = parent
+            setCollapsed(parent, true)
         }
-        selectedTaskID = edge
+    }
+
+    /// Vim `l`: expands the selected task's sub-tasks.
+    func expandSelected() {
+        guard currentProjectID != nil, let id = selectedTaskID, let t = store.task(id), t.collapsed,
+              shownSubtaskCount(t) > 0 else { return }
+        setCollapsed(id, false)
+    }
+
+    /// Sub-tasks the list shows below the task when it is expanded.
+    private func shownSubtaskCount(_ t: TodoTask) -> Int {
+        let progress = store.subtaskProgress(of: t.id)
+        return showsCompleted(t.projectId) ? progress.total : progress.total - progress.done
     }
 
     /// Moves the detail sheet to the previous/next task in the list.
@@ -273,11 +322,26 @@ final class AppModel {
         searchFocusRequest += 1
     }
 
-    func clearSelection() {
+    /// Esc in the list: closes the popover or editor that is open, else leaves search for the
+    /// list that was open before it, else clears the selection.
+    func escape() {
         if popover != nil { popover = nil; return }
         if editor != nil { editor = nil; return }
         if sectionEditor != nil { sectionEditor = nil; return }
+        if sidebar == .search { leaveSearch(); return }
         selectedTaskID = nil
+    }
+
+    /// Returns to the list that was open before search, with the task that was selected there.
+    func leaveSearch() {
+        let back = beforeSearch
+        beforeSearch = nil
+        var target = back?.sidebar ?? .project(TodoStore.inboxID)
+        if case .project(let pid) = target, store.project(pid) == nil { target = .project(TodoStore.inboxID) }
+        sidebar = target
+        if let id = back?.selection, target == back?.sidebar, cachedDisplay().position[id] != nil {
+            selectedTaskID = id
+        }
     }
 
     // MARK: - Editing entry points
@@ -318,7 +382,18 @@ final class AppModel {
     }
 
     func toggleCollapsed(_ id: EntityID) {
-        withAnimation(Theme.motion) { store.updateTask(id) { $0.collapsed.toggle() } }
+        guard let t = store.task(id) else { return }
+        setCollapsed(id, !t.collapsed)
+    }
+
+    /// Collapses or expands a task's sub-tasks. Collapsing a selected sub-task's parent selects the
+    /// parent.
+    func setCollapsed(_ id: EntityID, _ collapsed: Bool) {
+        guard let t = store.task(id), t.collapsed != collapsed else { return }
+        if collapsed, let selected = selectedTaskID, store.descendantIDs(of: id).contains(selected) {
+            selectedTaskID = id
+        }
+        withAnimation(Theme.motion) { store.updateTask(id) { $0.collapsed = collapsed } }
     }
 
     /// Completes or reopens a task unless it already is in that state: the checkbox completes
@@ -482,6 +557,10 @@ final class AppModel {
     // MARK: - Sync
 
     func syncNow() {
-        Task { await sync.syncNow() }
+        userSyncInProgress = true
+        Task {
+            await sync.syncNow()
+            userSyncInProgress = false
+        }
     }
 }

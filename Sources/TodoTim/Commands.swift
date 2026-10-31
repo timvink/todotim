@@ -73,7 +73,7 @@ struct AppCommands: Commands {
                 .keyboardShortcut("t", modifiers: [])
                 .disabled(!model.hasSelection)
             Button("Labels…") { model.showPopover(.labels) }
-                .keyboardShortcut("l", modifiers: [])
+                .keyboardShortcut("@", modifiers: [])
                 .disabled(!model.hasSelection)
             Button("Move to Project…") { model.showPopover(.move) }
                 .keyboardShortcut("v", modifiers: [])
@@ -100,6 +100,12 @@ struct AppCommands: Commands {
                 .keyboardShortcut("j", modifiers: [])
             Button("Previous Task") { model.moveSelection(-1) }
                 .keyboardShortcut("k", modifiers: [])
+            Button("Hide Sub-tasks") { model.collapseSelected() }
+                .keyboardShortcut("h", modifiers: [])
+                .disabled(!model.hasSelection)
+            Button("Show Sub-tasks") { model.expandSelected() }
+                .keyboardShortcut("l", modifiers: [])
+                .disabled(!model.hasSelection)
             Divider()
             Button("Sync Now") { model.syncNow() }
                 .keyboardShortcut("r")
@@ -153,7 +159,9 @@ enum ShortcutCatalog {
             Item(keys: "↑  or  K", action: "Select previous task"),
             Item(keys: "G  then  G", action: "Select first task in section"),
             Item(keys: "⇧G", action: "Select last task in section"),
-            Item(keys: "Esc", action: "Clear selection / close editor"),
+            Item(keys: "H  /  L", action: "Hide / show sub-tasks"),
+            Item(keys: "Esc", action: "Close editor / clear selection"),
+            Item(keys: "Esc  (in search)", action: "Back to the list"),
         ]),
         ("Add", [
             Item(keys: "A", action: "Add task at bottom of section"),
@@ -166,7 +174,7 @@ enum ShortcutCatalog {
             Item(keys: "E  or  ⌘↩", action: "Complete task"),
             Item(keys: "1  2  3  4", action: "Set priority"),
             Item(keys: "T", action: "Set date"),
-            Item(keys: "L", action: "Labels"),
+            Item(keys: "@", action: "Labels"),
             Item(keys: "V", action: "Move to project"),
             Item(keys: "⌘]  /  ⌘[", action: "Indent / outdent"),
             Item(keys: "⌘↑  /  ⌘↓", action: "Move up / down"),
@@ -174,7 +182,7 @@ enum ShortcutCatalog {
         ]),
         ("Task view", [
             Item(keys: "↑ ↓  or  K J", action: "Previous / next task"),
-            Item(keys: "T  /  L  /  V", action: "Date / labels / move"),
+            Item(keys: "T  /  @  /  V", action: "Date / labels / move"),
             Item(keys: "Esc  or  click outside", action: "Close"),
         ]),
     ]

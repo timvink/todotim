@@ -194,6 +194,36 @@ final class SyncControllerTests: XCTestCase {
         try await waitUntil { await remote.ics("calendars/tim/todotim-inbox/\(localID).ics") != nil }
     }
 
+    /// The sidebar's "Sync pending": from a local edit until a sync has sent it.
+    func testChangesArePendingUntilASyncSendsThem() async throws {
+        let remote = FakeCalDAVServer()
+        let store = TodoStore()
+        let c = makeController(store, remote)
+        c.configure(settings, password: "pw")
+        try await waitUntil { c.lastSync != nil }
+        XCTAssertFalse(c.hasPendingChanges)
+
+        let first = store.addTask(content: "first", projectId: TodoStore.inboxID)
+        c.scheduleSync()
+        XCTAssertTrue(c.hasPendingChanges)
+        try await waitUntil { !c.hasPendingChanges }
+        let sent = await remote.ics("calendars/tim/todotim-inbox/\(first.id).ics")
+        XCTAssertNotNil(sent)
+
+        // An edit made while a sync is in flight is still pending when that sync ends.
+        c.debounceInterval = .seconds(3600)
+        let edited = TodoBox()
+        await remote.setBeforeList { @MainActor in
+            edited.id = store.addTask(content: "typed during sync", projectId: TodoStore.inboxID).id
+            c.scheduleSync()
+        }
+        await c.syncNow()
+        XCTAssertNotNil(edited.id)
+        XCTAssertTrue(c.hasPendingChanges)
+        await c.syncNow()
+        XCTAssertFalse(c.hasPendingChanges)
+    }
+
     func testStateIsSavedAfterTheDatabaseAndReloaded() async throws {
         let dir = FileManager.default.temporaryDirectory.appendingPathComponent("todotim-state-\(UUID().uuidString)")
         try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)

@@ -49,6 +49,10 @@ public final class SyncController {
     public private(set) var lastSync: Date?
     /// Problems from the last sync that did not stop it (e.g. a list that could not be shared).
     public private(set) var warning: String?
+    /// Whether local edits have not reached the server yet: set by `scheduleSync()` (which the
+    /// app calls after every local edit), cleared by a sync that wrote everything and saw no
+    /// newer edit. A failed sync leaves it set.
+    public private(set) var hasPendingChanges = false
     /// Path of the config file (`~/.todotim.toml`) that sets the sync settings, or nil when they
     /// come from the Settings window. Managed settings cannot be changed in the app.
     public private(set) var managedConfigPath: String?
@@ -178,6 +182,7 @@ public final class SyncController {
     /// first sync of the loop.
     public func scheduleSync() {
         guard settings.enabled, started else { return }
+        if !hasPendingChanges { hasPendingChanges = true }
         debounceTask?.cancel()
         let delay = debounceInterval
         debounceTask = Task { [weak self] in
@@ -283,8 +288,11 @@ public final class SyncController {
                 scheduleSync()
             }
             saveState(result.state)
-            // An idle sync is allowed next time only if everything was written.
-            lastSynced = latest == snapshot && result.isComplete ? store.db : nil
+            // An idle sync is allowed next time only if everything was written. Edits made during
+            // the sync, and writes that failed, are still pending.
+            let sentEverything = latest == snapshot && result.isComplete
+            lastSynced = sentEverything ? store.db : nil
+            if sentEverything, hasPendingChanges { hasPendingChanges = false }
             if !result.isIdle { warning = result.warnings.isEmpty ? nil : result.warnings.joined(separator: "\n") }
             lastSync = Date()
             status = .idle(lastSync: lastSync)

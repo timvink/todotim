@@ -459,28 +459,33 @@ struct ProjectFormView: View {
 }
 
 /// The sidebar's footer: sync state and the sync and settings buttons, on the rows' grid and at
-/// the rows' type size. The glyph turns while syncing and shows a green tick when a sync ends.
+/// the rows' type size. "Synced" with a green cloud once the server has every change, "Sync
+/// pending" with a cloud in the text color while local changes wait for a sync. Background syncs
+/// with nothing to send do not show; the first sync and one you ask for (⌘R) turn the glyph.
 struct SyncStatusView: View {
     @Environment(AppModel.self) private var model
     @Environment(SyncController.self) private var sync
     @Environment(\.openSettings) private var openSettings
-    @State private var justSynced = false
-    @State private var tickTask: Task<Void, Never>?
+
+    private enum Phase: Equatable { case off, failed, syncing, pending, synced, notSynced }
 
     var body: some View {
+        let phase = self.phase
         HStack(spacing: Sidebar.spacing) {
-            icon
+            icon(phase)
                 .font(Fonts.icon)
                 .frame(width: Sidebar.iconWidth)
-            Text(justSynced ? "Synced just now" : text)
+                .transition(.opacity)
+                .id(phase)
+            Text(text(phase))
                 .font(Fonts.body)
-                .foregroundStyle(isError ? Theme.danger : Theme.secondaryText)
+                .foregroundStyle(phase == .failed ? Theme.danger : Theme.secondaryText)
                 .lineLimit(1)
                 .truncationMode(.tail)
                 .contentTransition(.opacity)
             Spacer(minLength: 4)
             FooterButton(icon: "arrow.triangle.2.circlepath", help: "Sync now (⌘R)") { model.syncNow() }
-                .disabled(!isEnabled)
+                .disabled(phase == .off)
             FooterButton(icon: "gearshape", help: "Settings (⌘,)") { openSettings() }
                 .padding(.trailing, -6)
         }
@@ -488,56 +493,51 @@ struct SyncStatusView: View {
         .padding(.trailing, Sidebar.contentInset)
         .frame(height: 44)
         .background(Theme.sidebar)
-        .help(helpText)
-        .onChange(of: sync.status) { old, new in
-            guard old == .syncing, case .idle = new, !Theme.reduceMotion else { return }
-            withAnimation(.easeOut(duration: 0.2)) { justSynced = true }
-            tickTask?.cancel()
-            tickTask = Task {
-                try? await Task.sleep(for: .seconds(1.5))
-                guard !Task.isCancelled else { return }
-                withAnimation(.easeOut(duration: 0.3)) { justSynced = false }
-            }
-        }
+        .help(helpText(phase))
+        .animation(Theme.reduceMotion ? nil : .easeOut(duration: 0.2), value: phase)
     }
 
-    private var isEnabled: Bool {
-        if case .disabled = sync.status { return false }
-        return true
-    }
-
-    private var isError: Bool {
-        if case .error = sync.status { return true }
-        return false
-    }
-
-    @ViewBuilder private var icon: some View {
-        if justSynced {
-            Image(systemName: "checkmark").foregroundStyle(Theme.today).transition(.scale.combined(with: .opacity))
-        } else {
-            switch sync.status {
-            case .disabled: Image(systemName: "icloud.slash").foregroundStyle(Theme.disabledText)
-            case .idle: Image(systemName: "checkmark.icloud").foregroundStyle(Theme.tertiaryText)
-            case .syncing: SpinningSyncGlyph()
-            case .error: Image(systemName: "exclamationmark.icloud").foregroundStyle(Theme.danger)
-            }
-        }
-    }
-
-    private var text: String {
+    private var phase: Phase {
         switch sync.status {
-        case .disabled: return "Sync off"
-        case .idle(let last):
-            guard let last else { return "Not synced yet" }
-            return "Synced \(last.formatted(.relative(presentation: .named)))"
-        case .syncing: return "Syncing…"
-        case .error: return "Sync failed"
+        case .disabled: .off
+        case .error: .failed
+        case .syncing where sync.lastSync == nil || model.userSyncInProgress: .syncing
+        case .syncing, .idle: sync.hasPendingChanges ? .pending : sync.lastSync == nil ? .notSynced : .synced
         }
     }
 
-    private var helpText: String {
-        if case .error(let msg) = sync.status { return msg }
-        return text
+    @ViewBuilder private func icon(_ phase: Phase) -> some View {
+        switch phase {
+        case .off: Image(systemName: "icloud.slash").foregroundStyle(Theme.disabledText)
+        case .failed: Image(systemName: "exclamationmark.icloud").foregroundStyle(Theme.danger)
+        case .syncing: SpinningSyncGlyph()
+        case .pending: Image(systemName: "icloud").foregroundStyle(Theme.text)
+        case .synced: Image(systemName: "icloud").foregroundStyle(Theme.synced)
+        case .notSynced: Image(systemName: "icloud").foregroundStyle(Theme.tertiaryText)
+        }
+    }
+
+    private func text(_ phase: Phase) -> String {
+        switch phase {
+        case .off: "Sync off"
+        case .failed: "Sync failed"
+        case .syncing: "Syncing…"
+        case .pending: "Sync pending"
+        case .synced: "Synced"
+        case .notSynced: "Not synced yet"
+        }
+    }
+
+    private func helpText(_ phase: Phase) -> String {
+        if case .error(let message) = sync.status { return message }
+        switch phase {
+        case .pending: return "Changes not on the server yet"
+        case .synced:
+            guard let last = sync.lastSync else { return "Synced" }
+            let date: Date.FormatStyle.DateStyle = Calendar.current.isDateInToday(last) ? .omitted : .abbreviated
+            return "Last synced \(last.formatted(date: date, time: .shortened))"
+        default: return text(phase)
+        }
     }
 }
 
