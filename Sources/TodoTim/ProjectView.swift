@@ -2,7 +2,8 @@ import QuartzCore
 import SwiftUI
 import TodoCore
 
-/// Main pane for a project (or the Inbox): title, unsectioned tasks, then sections.
+/// Main pane for a project (or the Inbox): its title pinned at the top, unsectioned tasks, then
+/// sections.
 struct ProjectView: View {
     @Environment(AppModel.self) private var model
     @Environment(TodoStore.self) private var store
@@ -12,21 +13,23 @@ struct ProjectView: View {
         // Rebuilt only when structure, sections, parents' collapsed state or view inputs change;
         // never on selection changes (rows observe the selection themselves).
         let name = store.project(projectId)?.name ?? ""
-        TaskListView(items: model.display().items, title: name)
-            .navigationTitle(name)
+        TaskListView(items: model.display().items) {
+            ProjectTitle(projectId: projectId)
+        }
+        .navigationTitle(name)
     }
 }
 
 /// Renders a flattened `DisplayItem` list in one `LazyVStack`, so only rows near the viewport
-/// are built. Shared by project, label and search views.
-struct TaskListView: View {
+/// are built, under a title bar pinned in the band beside the window buttons. Shared by project,
+/// label and search views.
+struct TaskListView<Header: View>: View {
     @Environment(AppModel.self) private var model
     let items: [DisplayItem]
-    /// Shown centred in the toolbar once the list's own large title has scrolled away.
-    var title: String = ""
-    var topPadding: CGFloat = 12
+    var topPadding: CGFloat = 4
+    @ViewBuilder let header: Header
     @State private var visible = VisibleRows()
-    @State private var titleScrolledAway = false
+    @State private var scrolled = false
 
     var body: some View {
         // Reads the drag state here only, so a drag invalidates this body (an O(rows) pass)
@@ -34,63 +37,119 @@ struct TaskListView: View {
         let drag = model.drag
         let dragging = drag.draggingID
         let gap = Self.gap(in: items, target: dragging == nil || drag.inPanel ? nil : drag.target)
-        ScrollViewReader { proxy in
-            ScrollView {
-                LazyVStack(alignment: .leading, spacing: 0) {
-                    ForEach(items) { item in
-                        VStack(alignment: .leading, spacing: 0) {
-                            let open = gap != nil && gap?.beforeID == item.id
-                            DropSlot(open: open, depth: gap?.depth ?? 0, height: drag.rowHeight)
-                            DisplayItemView(item: item)
-                                .opacity(dragging != nil && item.id == dragging ? 0.45 : 1)
+        VStack(spacing: 0) {
+            ListTitleBar(scrolled: scrolled) { header }
+            ScrollViewReader { proxy in
+                ScrollView {
+                    LazyVStack(alignment: .leading, spacing: 0) {
+                        ForEach(items) { item in
+                            VStack(alignment: .leading, spacing: 0) {
+                                let open = gap != nil && gap?.beforeID == item.id
+                                DropSlot(open: open, depth: gap?.depth ?? 0, height: drag.rowHeight)
+                                DisplayItemView(item: item)
+                                    .opacity(dragging != nil && item.id == dragging ? 0.45 : 1)
+                            }
                         }
+                        DropSlot(open: gap != nil && gap?.beforeID == nil, depth: gap?.depth ?? 0, height: drag.rowHeight)
                     }
-                    DropSlot(open: gap != nil && gap?.beforeID == nil, depth: gap?.depth ?? 0, height: drag.rowHeight)
+                    .scrollTargetLayout()
+                    .frame(maxWidth: Theme.contentMaxWidth, alignment: .leading)
+                    .padding(.horizontal, Theme.contentPadding)
+                    .padding(.top, topPadding)
+                    .padding(.bottom, 80)
+                    .frame(maxWidth: .infinity)
                 }
-                .scrollTargetLayout()
-                .frame(maxWidth: Theme.contentMaxWidth, alignment: .leading)
-                .padding(.horizontal, 32)
-                .padding(.top, topPadding)
-                .padding(.bottom, 80)
-                .frame(maxWidth: .infinity)
-            }
-            .onScrollGeometryChange(for: Bool.self) { geo in
-                geo.contentOffset.y + geo.contentInsets.top > 60
-            } action: { _, scrolled in
-                titleScrolledAway = scrolled
-            }
-            .onScrollTargetVisibilityChange(idType: String.self, threshold: 0.9) { ids in
-                visible.ids = Set(ids)
-            }
-            .background { SelectionScroller(proxy: proxy, visible: visible) }
-        }
-        // Opaque strip under the (transparent) toolbar, like Todoist: rows scroll under it instead
-        // of under the window buttons. A zero-height view at the top of the safe area whose
-        // background extends up to the window edge covers exactly the toolbar area of this column.
-        .overlay(alignment: .top) {
-            Color.clear.frame(height: 0)
-                .background(alignment: .bottom) {
-                    Color(nsColor: .textBackgroundColor).ignoresSafeArea(edges: .top)
+                .onScrollGeometryChange(for: Bool.self) { geo in
+                    geo.contentOffset.y + geo.contentInsets.top > 1
+                } action: { _, isScrolled in
+                    scrolled = isScrolled
                 }
-                .overlay(alignment: .top) { if titleScrolledAway { Divider() } }
-        }
-        .toolbar {
-            // No glass capsule behind it: while the title is hidden it would leave an empty circle.
-            if #available(macOS 26, *) {
-                ToolbarItem(placement: .principal) { toolbarTitle }
-                    .sharedBackgroundVisibility(.hidden)
-            } else {
-                ToolbarItem(placement: .principal) { toolbarTitle }
+                .onScrollTargetVisibilityChange(idType: String.self, threshold: 0.9) { ids in
+                    visible.ids = Set(ids)
+                }
+                .background { SelectionScroller(proxy: proxy, visible: visible) }
             }
         }
+        // The title bar takes the band beside the window buttons instead of a toolbar.
+        .ignoresSafeArea(.container, edges: .top)
         .onAppear { Perf.firstListAppeared() }
     }
+}
 
-    private var toolbarTitle: some View {
-        Text(title)
-            .font(.system(size: 13, weight: .semibold))
-            .opacity(titleScrolledAway && !title.isEmpty ? 1 : 0)
-            .animation(.easeOut(duration: 0.15), value: titleScrolledAway)
+/// The band at the top of the list, level with the window buttons: the page title on the task
+/// column's grid, and a hairline once the list scrolls under it.
+struct ListTitleBar<Content: View>: View {
+    @Environment(AppModel.self) private var model
+    let scrolled: Bool
+    @ViewBuilder let content: Content
+
+    var body: some View {
+        let sidebarHidden = model.columnVisibility == .detailOnly
+        HStack(spacing: 0) {
+            if sidebarHidden {
+                Button { withAnimation(Theme.motion) { model.columnVisibility = .all } } label: {
+                    Image(systemName: "sidebar.left")
+                        .font(Fonts.icon)
+                        .foregroundStyle(Theme.tertiaryText)
+                        .frame(width: 28, height: 24)
+                        .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .help("Show sidebar (⌃⌘S)")
+                .padding(.leading, 78)
+            }
+            content
+                .padding(.leading, Theme.gutter + Theme.rowInset)
+                .frame(maxWidth: Theme.contentMaxWidth, alignment: .leading)
+                .padding(.horizontal, Theme.contentPadding)
+                .frame(maxWidth: .infinity)
+        }
+        .frame(height: Theme.titleBarHeight)
+        .overlay(alignment: .bottom) {
+            Hairline().opacity(scrolled ? 1 : 0).animation(Theme.hoverAnimation, value: scrolled)
+        }
+    }
+}
+
+/// A project's pinned title with its "…" menu; also a drop target for the top of the list.
+private struct ProjectTitle: View {
+    @Environment(AppModel.self) private var model
+    @Environment(TodoStore.self) private var store
+    let projectId: EntityID
+
+    var body: some View {
+        HStack(alignment: .center, spacing: 10) {
+            Text(store.project(projectId)?.name ?? "")
+                .font(Fonts.pageTitle)
+                .foregroundStyle(Theme.text)
+                .lineLimit(1)
+            Spacer(minLength: 12)
+            moreMenu
+        }
+        .contentShape(Rectangle())
+        .onDrop(of: [.text], delegate: FixedDropDelegate(model: model, target: .sectionStart(projectId: projectId, sectionId: nil)))
+    }
+
+    private var moreMenu: some View {
+        Menu {
+            Toggle("Show completed tasks", isOn: Binding(
+                get: { model.showsCompleted(projectId) },
+                set: { on in
+                    if on { model.showCompletedProjects.insert(projectId) }
+                    else { model.showCompletedProjects.remove(projectId) }
+                }))
+            Button("Add section") { model.sectionEditor = SectionEditorTarget(projectId: projectId, index: nil) }
+        } label: {
+            Image(systemName: "ellipsis")
+                .font(Fonts.icon)
+                .frame(width: 28, height: 24)
+        }
+        .menuStyle(.borderlessButton)
+        .menuIndicator(.hidden)
+        .tint(Theme.tertiaryText)
+        .fixedSize()
+        .pointerStyle(.link)
+        .help("More actions")
     }
 }
 
@@ -131,10 +190,8 @@ private struct DisplayItemView: View {
 
     var body: some View {
         switch item {
-        case .projectHeader(let pid):
-            ProjectHeaderView(projectId: pid)
-        case .labelHeader(let name):
-            LabelHeaderView(name: name)
+        case .emptyState(let pid):
+            EmptyStateView(projectId: pid)
         case .task(let r):
             TaskRowHost(item: r).equatable()
         case .editor(let depth):
@@ -152,50 +209,44 @@ private struct DisplayItemView: View {
         case .groupHeader(let pid, let count):
             GroupHeaderView(projectId: pid, count: count)
         case .message(let text):
-            Text(text).foregroundStyle(.secondary).padding(.leading, Theme.gutter)
+            Text(text)
+                .font(Fonts.body)
+                .foregroundStyle(Theme.tertiaryText)
+                .padding(.leading, Theme.gutter + Theme.rowInset)
+                .padding(.vertical, 8)
         }
     }
 }
 
-private struct ProjectHeaderView: View {
-    @Environment(AppModel.self) private var model
+/// A project without open tasks: a quiet line, or a small celebration when tasks were done today.
+private struct EmptyStateView: View {
     @Environment(TodoStore.self) private var store
     let projectId: EntityID
 
     var body: some View {
-        HStack(alignment: .firstTextBaseline) {
-            Text(store.project(projectId)?.name ?? "")
-                .font(.system(size: 26, weight: .bold))
-            Spacer()
-            moreMenu
-        }
-        .padding(.leading, Theme.gutter + Theme.rowInset)
-        .padding(.top, 8).padding(.bottom, 18)
-        .onDrop(of: [.text], delegate: FixedDropDelegate(model: model, target: .sectionStart(projectId: projectId, sectionId: nil)))
+        let done = doneToday
+        Text(done > 0 ? "All clear — \(done) done today" : "Nothing here yet — press Q to add a task")
+            .font(.system(size: 15, weight: .medium, design: .rounded))
+            .foregroundStyle(done > 0 ? Theme.today : Theme.tertiaryText)
+            .padding(.leading, Theme.gutter + Theme.rowInset)
+            .padding(.top, 10).padding(.bottom, 14)
     }
 
-    private var moreMenu: some View {
-        Menu {
-            Toggle("Show completed tasks", isOn: Binding(
-                get: { model.showsCompleted(projectId) },
-                set: { on in
-                    if on { model.showCompletedProjects.insert(projectId) }
-                    else { model.showCompletedProjects.remove(projectId) }
-                }))
-            Button("Add section") { model.sectionEditor = SectionEditorTarget(projectId: projectId, index: nil) }
-        } label: {
-            Image(systemName: "ellipsis").font(.system(size: 15))
+    /// Only computed while the project is empty.
+    private var doneToday: Int {
+        let start = Calendar.current.startOfDay(for: Date())
+        return store.db.tasks.values.reduce(0) { n, t in
+            n + (t.projectId == projectId && !t.deleted && t.isCompleted && (t.completedAt ?? .distantPast) >= start ? 1 : 0)
         }
-        .menuStyle(.borderlessButton)
-        .menuIndicator(.hidden)
-        .fixedSize()
-        .pointerStyle(.link)
-        .help("More actions")
     }
 }
 
 struct AddTaskRow: View {
     var title = "Add task"
+    /// Where the row's pill starts; the list's rows start after the chevron gutter.
+    var leading: CGFloat = Theme.gutter
+    /// Width of the column the plus is centered in (the checkbox column it lines up with).
+    var column: CGFloat = Theme.checkbox
     let action: () -> Void
     @State private var hovering = false
 
@@ -203,24 +254,27 @@ struct AddTaskRow: View {
         Button(action: action) {
             HStack(spacing: 10) {
                 ZStack {
-                    Circle().fill(hovering ? Theme.accent : .clear)
+                    Circle().fill(Theme.accent.opacity(hovering ? 1 : 0))
                     Image(systemName: "plus")
-                        .font(.system(size: 12, weight: hovering ? .bold : .regular))
-                        .foregroundStyle(hovering ? .white : Theme.accent)
+                        .font(.system(size: 10, weight: .bold))
+                        .foregroundStyle(hovering ? Theme.onAccent : Theme.accent)
                 }
-                .frame(width: 18, height: 18)
+                .frame(width: Theme.checkbox, height: Theme.checkbox)
+                .frame(width: column)
                 Text(title)
-                    .font(.system(size: 14))
-                    .foregroundStyle(hovering ? Theme.accent : .secondary)
+                    .font(Fonts.body)
+                    .foregroundStyle(hovering ? Theme.accent : Theme.tertiaryText)
                 Spacer()
             }
-            .padding(.leading, Theme.gutter + Theme.rowInset)
-            .padding(.vertical, 8)
+            .padding(.horizontal, Theme.rowInset)
+            .frame(height: 28)
+            .background(RoundedRectangle(cornerRadius: Theme.rowRadius, style: .continuous).fill(hovering ? Theme.hover : .clear))
+            .padding(.leading, leading)
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
         .pointerStyle(.link)
-        .onHover { hovering = $0 }
+        .onHover { h in withAnimation(Theme.hoverAnimation) { hovering = h } }
     }
 }
 
@@ -239,24 +293,28 @@ struct SectionHeaderView: View {
         VStack(alignment: .leading, spacing: 0) {
             HStack(spacing: 0) {
                 Button {
-                    if collapsed { model.collapsedSections.remove(section.id) } else { model.collapsedSections.insert(section.id) }
+                    withAnimation(Theme.motion) {
+                        if collapsed { model.collapsedSections.remove(section.id) } else { model.collapsedSections.insert(section.id) }
+                    }
                 } label: {
-                    Image(systemName: collapsed ? "chevron.right" : "chevron.down")
-                        .font(.system(size: 11, weight: .semibold))
-                        .foregroundStyle(.secondary)
-                        .frame(width: Theme.gutter, height: 22)
+                    Image(systemName: "chevron.right")
+                        .font(.system(size: 10, weight: .bold))
+                        .foregroundStyle(Theme.tertiaryText)
+                        .rotationEffect(.degrees(collapsed ? 0 : 90))
+                        .frame(width: Theme.gutter, height: 24)
                         .contentShape(Rectangle())
                 }
                 .buttonStyle(.plain)
                 .pointerStyle(.link)
-                .opacity(hovering || collapsed ? 1 : 0.6)
+                .help(collapsed ? "Show section" : "Hide section")
 
                 if model.renamingSectionID == section.id {
                     TextField("Section name", text: $name)
                         .textFieldStyle(.plain)
-                    .padding(.horizontal, 8).padding(.vertical, 6)
-                    .overlay(RoundedRectangle(cornerRadius: 6).strokeBorder(Color.primary.opacity(0.25)))
-                        .font(.system(size: 14, weight: .bold))
+                        .padding(.horizontal, 8).padding(.vertical, 5)
+                        .background(RoundedRectangle(cornerRadius: 6, style: .continuous).fill(Theme.field))
+                        .overlay(RoundedRectangle(cornerRadius: 6, style: .continuous).strokeBorder(Theme.accent.opacity(0.7)))
+                        .font(Fonts.bodySemibold)
                         .focused($nameFocused)
                         .onSubmit(commitRename)
                         .onExitCommand { model.renamingSectionID = nil }
@@ -265,12 +323,14 @@ struct SectionHeaderView: View {
                     Button("Cancel") { model.renamingSectionID = nil }.buttonStyle(SoftButtonStyle()).padding(.leading, 6)
                 } else {
                     Text(section.name)
-                        .font(.system(size: 14, weight: .bold))
+                        .font(Fonts.bodySemibold)
+                        .foregroundStyle(Theme.text)
                         .padding(.leading, Theme.rowInset)
                     if count > 0 {
                         Text("\(count)")
-                            .font(.system(size: 13))
-                            .foregroundStyle(.secondary)
+                            .font(Fonts.meta)
+                            .monospacedDigit()
+                            .foregroundStyle(Theme.tertiaryText)
                             .padding(.leading, 8)
                     }
                     Spacer()
@@ -278,20 +338,24 @@ struct SectionHeaderView: View {
                         menuItems
                     } label: {
                         Image(systemName: "ellipsis")
+                            .font(Fonts.body)
+                            .frame(width: 24, height: 22)
                     }
                     .menuStyle(.borderlessButton)
                     .menuIndicator(.hidden)
+                    .tint(Theme.tertiaryText)
                     .fixedSize()
                     .pointerStyle(.link)
                     .opacity(hovering ? 1 : 0)
+                    .padding(.trailing, 4)
                 }
             }
-            .padding(.vertical, 6)
-            Divider().padding(.leading, Theme.gutter)
+            .padding(.vertical, 4)
+            Hairline().padding(.leading, Theme.gutter)
         }
-        .padding(.top, 8)
+        .padding(.top, 14)
         .contentShape(Rectangle())
-        .onHover { hovering = $0 }
+        .onHover { h in withAnimation(Theme.hoverAnimation) { hovering = h } }
         .contextMenu { menuItems }
         .onDrop(of: [.text], delegate: FixedDropDelegate(
             model: model, target: .sectionStart(projectId: section.projectId, sectionId: section.id)))
@@ -340,8 +404,9 @@ struct AddSectionGap: View {
                 TextField("Name this section", text: $name)
                     .textFieldStyle(.plain)
                     .padding(.horizontal, 8).padding(.vertical, 6)
-                    .overlay(RoundedRectangle(cornerRadius: 6).strokeBorder(Color.primary.opacity(0.25)))
-                    .font(.system(size: 14, weight: .semibold))
+                    .background(RoundedRectangle(cornerRadius: 6, style: .continuous).fill(Theme.field))
+                    .overlay(RoundedRectangle(cornerRadius: 6, style: .continuous).strokeBorder(Theme.accent.opacity(0.7)))
+                    .font(Fonts.bodySemibold)
                     .focused($focused)
                     .onSubmit(add)
                     .onExitCommand { model.sectionEditor = nil }
@@ -361,11 +426,11 @@ struct AddSectionGap: View {
                 model.sectionEditor = SectionEditorTarget(projectId: projectId, index: index)
             } label: {
                 HStack(spacing: 10) {
-                    Rectangle().fill(Theme.accent).frame(height: 1)
+                    Rectangle().fill(Theme.accent.opacity(0.5)).frame(height: 1)
                     Text("Add section")
-                        .font(.system(size: 13, weight: .semibold))
+                        .font(Fonts.meta)
                         .foregroundStyle(Theme.accent)
-                    Rectangle().fill(Theme.accent).frame(height: 1)
+                    Rectangle().fill(Theme.accent.opacity(0.5)).frame(height: 1)
                 }
                 .opacity(hovering ? 1 : 0)
                 .padding(.leading, Theme.gutter)

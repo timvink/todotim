@@ -217,14 +217,15 @@ struct DropPlaceholderView: View {
     @Environment(AppModel.self) private var model
     let depth: Int
     let height: CGFloat
-    /// Leading inset at depth 0; the task panel's rows have no chevron gutter.
-    var inset: CGFloat = Theme.gutter - 4
+    /// Leading inset at depth 0 (where a row's pill starts); the task panel's rows have no
+    /// chevron gutter.
+    var inset: CGFloat = Theme.gutter
 
     var body: some View {
-        RoundedRectangle(cornerRadius: 8, style: .continuous)
-            .fill(Theme.accent.opacity(0.07))
-            .overlay(RoundedRectangle(cornerRadius: 8, style: .continuous)
-                .strokeBorder(Theme.accent.opacity(0.32), lineWidth: 1))
+        RoundedRectangle(cornerRadius: Theme.rowRadius, style: .continuous)
+            .fill(Theme.hover)
+            .overlay(RoundedRectangle(cornerRadius: Theme.rowRadius, style: .continuous)
+                .strokeBorder(Theme.accent.opacity(0.45), lineWidth: 1))
             .frame(height: height - 6)
             .padding(.vertical, 3)
             .padding(.leading, CGFloat(depth) * Theme.indent + inset)
@@ -261,7 +262,12 @@ extension TaskListView {
         case .firstChild(let id):
             if let i = index(of: id) { at = i + 1; d = depth(at: i) + 1 }
         case .sectionStart(_, let sid):
-            if let i = index(of: sid.map { "__section/" + $0 } ?? "__header") { at = i + 1 }
+            if let sid {
+                if let i = index(of: "__section/" + sid) { at = i + 1 }
+            } else {
+                // The project's own tasks start at the top (its title is pinned above the list).
+                at = items.first?.id == "__empty" ? 1 : 0
+            }
         case .sectionEnd(_, let sid):
             at = index(of: "__add/" + (sid ?? ""))
         }
@@ -276,7 +282,7 @@ struct DropSlot: View {
     let open: Bool
     let depth: Int
     let height: CGFloat
-    var inset: CGFloat = Theme.gutter - 4
+    var inset: CGFloat = Theme.gutter
 
     var body: some View {
         // The placeholder (and its drop delegate) only exists while open; the frame animates.

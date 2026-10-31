@@ -1,49 +1,52 @@
 import SwiftUI
 import TodoCore
 
-/// Search (`/` or ⌘F): field plus open tasks grouped by project.
+/// Search (`/` or ⌘F): the query is typed where the page title would be; open tasks grouped by
+/// project below.
 struct SearchView: View {
+    @Environment(AppModel.self) private var model
+
+    var body: some View {
+        TaskListView(items: model.display().items, topPadding: 8) {
+            SearchField()
+        }
+        .navigationTitle("Search")
+    }
+}
+
+/// Separate view so that only the field (not the results) depends on its focus.
+private struct SearchField: View {
     @Environment(AppModel.self) private var model
     @FocusState private var focused: Bool
 
     var body: some View {
         @Bindable var model = model
-        VStack(spacing: 0) {
-            HStack(spacing: 8) {
-                Image(systemName: "magnifyingglass").foregroundStyle(.secondary)
-                TextField("Search tasks", text: $model.searchQuery)
-                    .textFieldStyle(.plain)
-                    .font(.system(size: 18))
-                    .focused($focused)
-                    .onExitCommand { focused = false }
-                    .onSubmit {
-                        focused = false
-                        model.selectedTaskID = model.visibleTaskIDs().first
-                    }
-                if !model.searchQuery.isEmpty {
-                    Button { model.searchQuery = "" } label: { Image(systemName: "xmark.circle.fill") }
-                        .buttonStyle(.plain).foregroundStyle(.secondary)
+        HStack(spacing: 10) {
+            Image(systemName: "magnifyingglass")
+                .font(.system(size: 16, weight: .medium))
+                .foregroundStyle(focused ? Theme.accent : Theme.tertiaryText)
+            TextField("Search", text: $model.searchQuery,
+                      prompt: Text("Search").foregroundStyle(Theme.tertiaryText))
+                .textFieldStyle(.plain)
+                .font(Fonts.pageTitle)
+                .foregroundStyle(Theme.text)
+                .focused($focused)
+                .onExitCommand { focused = false }
+                .onSubmit {
+                    focused = false
+                    model.selectedTaskID = model.visibleTaskIDs().first
                 }
+            if !model.searchQuery.isEmpty {
+                Button { model.searchQuery = "" } label: {
+                    Image(systemName: "xmark.circle.fill").font(Fonts.icon)
+                }
+                .buttonStyle(.plain)
+                .foregroundStyle(Theme.tertiaryText)
+                .help("Clear")
             }
-            .padding(10)
-            .background(RoundedRectangle(cornerRadius: 8).fill(Color.primary.opacity(0.05)))
-            .padding(.leading, Theme.gutter)
-            .frame(maxWidth: Theme.contentMaxWidth, alignment: .leading)
-            .padding(.horizontal, 32).padding(.top, 20)
-            .frame(maxWidth: .infinity)
-            SearchResults()
         }
-        .navigationTitle("Search")
         .onAppear { focused = true }
         .onChange(of: model.searchFocusRequest) { focused = true }
-    }
-}
-
-/// Separate view so that only the results (not the field) depend on the store.
-private struct SearchResults: View {
-    @Environment(AppModel.self) private var model
-    var body: some View {
-        TaskListView(items: model.display().items, topPadding: 20)
     }
 }
 
@@ -53,28 +56,27 @@ struct LabelView: View {
     let name: String
 
     var body: some View {
-        TaskListView(items: model.display().items, title: name)
-            .navigationTitle(name)
+        TaskListView(items: model.display().items) {
+            LabelTitle(name: name)
+        }
+        .navigationTitle(name)
     }
 }
 
-struct LabelHeaderView: View {
+private struct LabelTitle: View {
     @Environment(TodoStore.self) private var store
     let name: String
 
     var body: some View {
-        let color = store.labels.first { $0.name == name }.map { Palette.color($0.color) } ?? .secondary
-        HStack(spacing: 8) {
-            Image(systemName: "tag").foregroundStyle(color)
-            Text(name)
+        let color = store.labels.first { $0.name == name }.map { Palette.color($0.color) } ?? Theme.tertiaryText
+        HStack(spacing: 10) {
+            Image(systemName: "tag").font(.system(size: 17, weight: .medium)).foregroundStyle(color)
+            Text(name).font(Fonts.pageTitle).foregroundStyle(Theme.text).lineLimit(1)
         }
-        .font(.system(size: 26, weight: .bold))
-        .padding(.leading, Theme.gutter)
-        .padding(.top, 8).padding(.bottom, 18)
     }
 }
 
-/// "# Project  12" heading above a project's results in label and search views.
+/// A project's heading above its results in label and search views.
 struct GroupHeaderView: View {
     @Environment(TodoStore.self) private var store
     let projectId: EntityID
@@ -83,17 +85,17 @@ struct GroupHeaderView: View {
     var body: some View {
         if let p = store.project(projectId) {
             VStack(alignment: .leading, spacing: 0) {
-                HStack(spacing: 6) {
-                    Image(systemName: p.isInbox ? "tray" : "number")
-                        .foregroundStyle(p.isInbox ? Color(hex: 0x246FE0) : Palette.color(p.color))
-                    Text(p.name).font(.system(size: 14, weight: .bold))
-                    Text("\(count)").font(.system(size: 13)).foregroundStyle(.secondary)
+                HStack(spacing: 8) {
+                    ProjectIcon(p, size: 10)
+                        .frame(width: Theme.checkbox)
+                    Text(p.name).font(Fonts.bodySemibold).foregroundStyle(Theme.text)
+                    Text("\(count)").font(Fonts.meta).monospacedDigit().foregroundStyle(Theme.tertiaryText)
                 }
-                .padding(.leading, Theme.gutter)
-                .padding(.vertical, 6)
-                Divider().padding(.leading, Theme.gutter)
+                .padding(.leading, Theme.gutter + Theme.rowInset)
+                .padding(.vertical, 4)
+                Hairline().padding(.leading, Theme.gutter)
             }
-            .padding(.top, 18)
+            .padding(.top, 14)
         }
     }
 }

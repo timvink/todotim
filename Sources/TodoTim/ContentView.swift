@@ -8,14 +8,14 @@ struct ContentView: View {
 
     var body: some View {
         @Bindable var model = model
-        NavigationSplitView {
+        NavigationSplitView(columnVisibility: $model.columnVisibility) {
             SidebarView()
-                .navigationSplitViewColumnWidth(min: 220, ideal: 270, max: 380)
+                .navigationSplitViewColumnWidth(min: 220, ideal: 250, max: 360)
                 .toolbar(removing: .sidebarToggle)
         } detail: {
             detail
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
-                .background(Color(nsColor: .textBackgroundColor))
+                .background(Theme.background)
                 .overlay(alignment: .bottomLeading) { ToastView().padding(20) }
         }
         .tint(Theme.accent)
@@ -71,12 +71,13 @@ struct ContentView: View {
     }
 
     private var emptyState: some View {
-        Text("Select a project").foregroundStyle(.secondary)
+        Text("Select a project").font(Fonts.body).foregroundStyle(Theme.tertiaryText)
     }
 }
 
-/// Dimmed backdrop and centred panel for the in-window modals. Clicking the backdrop closes the
-/// panel; Esc is handled by `KeyRouter`. Only this small body depends on which modal is open.
+/// Dimmed backdrop and panel for the in-window modals. Clicking the backdrop closes the panel;
+/// Esc is handled by `KeyRouter`. Only this small body depends on which modal is open. Panels are
+/// anchored near the top, so they grow downwards instead of jumping when their content changes.
 private struct ModalLayer: View {
     @Environment(AppModel.self) private var model
     @Environment(TodoStore.self) private var store
@@ -90,38 +91,39 @@ private struct ModalLayer: View {
             ZStack(alignment: .top) {
                 if detail {
                     Backdrop { model.detailTaskID = nil }
-                    TaskDetailView(size: CGSize(width: min(680, size.width - 40),
-                                                height: max(320, min(size.height - 96, 720))))
+                    // Below the list's pinned title, so the panel never covers where you are.
+                    TaskDetailView(size: CGSize(width: min(600, size.width - 48),
+                                                height: max(240, min(size.height - Theme.titleBarHeight - 40, 680))))
                         .modalPanel()
-                        .frame(maxWidth: .infinity, maxHeight: .infinity)
+                        .padding(.top, Theme.titleBarHeight)
                 }
                 if quickAdd {
                     Backdrop { model.showQuickAdd = false }
                     QuickAddView()
-                        .frame(width: min(620, size.width - 40))
-                        .modalPanel()
-                        .padding(.top, max(60, size.height * 0.16))
+                        .frame(width: min(560, size.width - 48))
+                        .modalPanel(lift: 8)
+                        .padding(.top, max(56, size.height * 0.14))
                 }
                 if shortcuts {
                     Backdrop { model.showShortcuts = false }
                     ShortcutsHelpView()
-                        .frame(width: min(680, size.width - 40), height: max(300, min(560, size.height - 96)))
+                        .frame(width: min(640, size.width - 48), height: max(300, min(560, size.height - 96)))
                         .modalPanel()
-                        .frame(maxWidth: .infinity, maxHeight: .infinity)
+                        .padding(.top, Theme.titleBarHeight)
                 }
             }
-            .frame(width: size.width, height: size.height)
+            .frame(width: size.width, height: size.height, alignment: .top)
         }
-        .animation(.easeOut(duration: 0.12), value: detail)
-        .animation(.easeOut(duration: 0.12), value: quickAdd)
-        .animation(.easeOut(duration: 0.12), value: shortcuts)
+        .animation(detail ? Theme.panelIn : Theme.panelOut, value: detail)
+        .animation(quickAdd ? Theme.panelIn : Theme.panelOut, value: quickAdd)
+        .animation(shortcuts ? Theme.panelIn : Theme.panelOut, value: shortcuts)
     }
 }
 
 private struct Backdrop: View {
     let close: () -> Void
     var body: some View {
-        Color.black.opacity(0.28)
+        Theme.scrim
             .contentShape(Rectangle())
             .onTapGesture(perform: close)
             .transition(.opacity)
@@ -129,14 +131,17 @@ private struct Backdrop: View {
 }
 
 extension View {
-    /// Rounded, shadowed panel used by the in-window modals.
-    func modalPanel() -> some View {
+    /// Rounded, shadowed panel used by the in-window modals. It opens with a slight zoom (and
+    /// `lift`, rising into place) and closes with a fade.
+    func modalPanel(lift: CGFloat = 0) -> some View {
         self
-            .background(Color(nsColor: .textBackgroundColor))
-            .clipShape(RoundedRectangle(cornerRadius: 12))
-            .overlay(RoundedRectangle(cornerRadius: 12).strokeBorder(Color.primary.opacity(0.08)))
-            .shadow(color: .black.opacity(0.22), radius: 32, y: 12)
-            .transition(.opacity.combined(with: .scale(scale: 0.98)))
+            .background(Theme.panel)
+            .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+            .overlay(RoundedRectangle(cornerRadius: 12, style: .continuous).strokeBorder(Theme.panelBorder))
+            .shadow(color: Theme.shadow, radius: 28, y: 10)
+            .transition(.asymmetric(
+                insertion: .opacity.combined(with: .scale(scale: 0.97, anchor: .top)).combined(with: .offset(y: -lift)),
+                removal: .opacity))
     }
 }
 
@@ -145,30 +150,39 @@ struct ToastView: View {
     @Environment(AppModel.self) private var model
 
     var body: some View {
-        if let toast = model.toast {
-            HStack(spacing: 14) {
-                Text(toast.message).font(.system(size: 13))
-                if let undo = toast.undo {
-                    Button("Undo") {
-                        undo()
-                        model.toast = nil
-                    }
-                    .buttonStyle(.plain)
-                    .font(.system(size: 13, weight: .semibold))
-                    .foregroundStyle(Theme.accent)
-                }
-                Button { model.toast = nil } label: {
-                    Image(systemName: "xmark").font(.system(size: 10, weight: .bold))
+        ZStack(alignment: .bottomLeading) {
+            if let toast = model.toast {
+                content(toast)
+                    .id(toast.id)
+                    .transition(.offset(y: 8).combined(with: .opacity))
+            }
+        }
+        .animation(Theme.reduceMotion ? .easeOut(duration: 0.08) : .snappy(duration: 0.2), value: model.toast?.id)
+    }
+
+    private func content(_ toast: ToastInfo) -> some View {
+        HStack(spacing: 14) {
+            Text(toast.message).font(Fonts.body).foregroundStyle(Theme.text)
+            if let undo = toast.undo {
+                Button("Undo") {
+                    undo()
+                    model.toast = nil
                 }
                 .buttonStyle(.plain)
-                .foregroundStyle(.secondary)
+                .font(Fonts.bodySemibold)
+                .foregroundStyle(Theme.accent)
+                .pointerStyle(.link)
             }
-            .padding(.horizontal, 14).padding(.vertical, 10)
-            .background(RoundedRectangle(cornerRadius: 8).fill(Color(nsColor: .windowBackgroundColor)))
-            .overlay(RoundedRectangle(cornerRadius: 8).strokeBorder(Color.primary.opacity(0.12)))
-            .shadow(color: .black.opacity(0.2), radius: 8, y: 2)
-            .transition(.move(edge: .bottom).combined(with: .opacity))
-            .id(toast.id)
+            Button { model.toast = nil } label: {
+                Image(systemName: "xmark").font(.system(size: 11, weight: .bold))
+            }
+            .buttonStyle(.plain)
+            .foregroundStyle(Theme.tertiaryText)
+            .help("Dismiss")
         }
+        .padding(.horizontal, 14).padding(.vertical, 10)
+        .background(RoundedRectangle(cornerRadius: 10, style: .continuous).fill(Ctp.surface0.color))
+        .overlay(RoundedRectangle(cornerRadius: 10, style: .continuous).strokeBorder(Theme.panelBorder))
+        .shadow(color: Theme.shadow, radius: 14, y: 4)
     }
 }

@@ -367,8 +367,12 @@ struct ProjectIcon: View {
     var size: CGFloat = 12
 
     init(_ project: Project, fill: Double = 0, size: CGFloat = 12) {
-        colorKey = project.color
-        isInbox = project.isInbox
+        self.init(colorKey: project.color, isInbox: project.isInbox, fill: fill, size: size)
+    }
+
+    init(colorKey: String, isInbox: Bool, fill: Double = 0, size: CGFloat = 12) {
+        self.colorKey = colorKey
+        self.isInbox = isInbox
         self.fill = fill
         self.size = size
     }

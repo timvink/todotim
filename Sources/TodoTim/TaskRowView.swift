@@ -1,32 +1,47 @@
 import SwiftUI
 import TodoCore
 
-/// Round checkbox: priority-colored ring with a tinted fill; shows a check on hover. Completing
-/// fills it with a small pop first, so the row leaves after the check has registered.
+/// Round checkbox: a ring in the priority color; shows a check on hover. Completing fills it with
+/// a small pop and a ring that bursts outward, so the row leaves after the check has registered.
 struct CheckCircle: View {
     let priority: Priority
     let completed: Bool
-    var size: CGFloat = 18
+    var size: CGFloat = Theme.checkbox
     let action: () -> Void
     @State private var hovering = false
     /// Between the click and the completion: drawn as completed.
     @State private var checking = false
+    @State private var bursts = 0
 
     var body: some View {
-        let color = priority == .p4 ? Color.secondary : priority.color
+        let color = priority.color
         let filled = completed || checking
         Button(action: tap) {
             ZStack {
-                Circle().fill(filled ? color : color.opacity(priority == .p4 ? 0 : 0.14))
-                Circle().strokeBorder(color, lineWidth: priority == .p4 ? 1 : 1.6)
+                Circle().fill(filled ? color : color.opacity(priority == .p4 ? 0 : 0.12))
+                Circle().strokeBorder(color, lineWidth: 1.5)
                 Image(systemName: "checkmark")
-                    .font(.system(size: size * 0.5, weight: .bold))
-                    .foregroundStyle(filled ? Color.white : color)
+                    .font(.system(size: size * 0.55, weight: .bold))
+                    .foregroundStyle(filled ? Theme.onAccent : color)
                     .opacity(filled || hovering ? 1 : 0)
-                    .scaleEffect(checking ? 1.1 : 1)
             }
             .frame(width: size, height: size)
-            .scaleEffect(checking ? 1.12 : 1)
+            .scaleEffect(checking ? 1.15 : 1)
+            .background {
+                Circle().stroke(color, lineWidth: 1.5)
+                    .keyframeAnimator(initialValue: Burst(), trigger: bursts) { ring, v in
+                        ring.scaleEffect(v.scale).opacity(v.opacity)
+                    } keyframes: { _ in
+                        KeyframeTrack(\.scale) {
+                            LinearKeyframe(1, duration: 0.001)
+                            CubicKeyframe(1.6, duration: 0.28)
+                        }
+                        KeyframeTrack(\.opacity) {
+                            LinearKeyframe(0.6, duration: 0.001)
+                            LinearKeyframe(0, duration: 0.28)
+                        }
+                    }
+            }
             .contentShape(Circle())
         }
         .buttonStyle(.plain)
@@ -35,10 +50,16 @@ struct CheckCircle: View {
         .help(completed ? "Reopen task" : "Complete task")
     }
 
+    private struct Burst {
+        var scale: CGFloat = 1
+        var opacity: Double = 0
+    }
+
     private func tap() {
         guard !completed else { return action() }
         guard !checking else { return }
-        withAnimation(Theme.reduceMotion ? nil : .spring(duration: 0.2, bounce: 0.4)) { checking = true }
+        if !Theme.reduceMotion { bursts += 1 }
+        withAnimation(Theme.reduceMotion ? nil : .spring(duration: 0.2, bounce: 0.45)) { checking = true }
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.18) {
             action()
             checking = false
@@ -97,65 +118,69 @@ struct TaskRowView: View, Equatable {
 
     var body: some View {
         let t = task
+        let pillStart = Theme.grip + CGFloat(item.depth) * Theme.indent + Theme.gutter
         HStack(alignment: .top, spacing: 0) {
-            // Todoist-style drag handle, shown on hover. It sits in a column left of the
-            // row's normal frame (see the negative padding below), so the layout is unchanged.
+            // The drag handle, shown on hover. It sits in a column left of the row's normal frame
+            // (see the negative padding below), so the layout is unchanged.
             GripDots()
                 .opacity(hovering ? 1 : 0)
-                .frame(width: Theme.grip, height: 34)
+                .frame(width: Theme.grip, height: Self.lineHeight)
             chevron(t)
-            VStack(alignment: .leading, spacing: 0) {
-                HStack(alignment: .top, spacing: 10) {
-                    CheckCircle(priority: t.priority, completed: t.isCompleted) { model.setCompleted(t.id, !t.isCompleted) }
-                        .padding(.top, 1)
-                    VStack(alignment: .leading, spacing: 3) {
-                        Text(RichText.render(t.content))
-                            .font(.system(size: 14))
-                            .strikethrough(t.isCompleted)
-                            .foregroundStyle(t.isCompleted ? .secondary : .primary)
-                            .richTextLinks(tint: t.isCompleted ? .secondary : .primary)
-                            .fixedSize(horizontal: false, vertical: true)
-                        if let line = t.description.split(separator: "\n", omittingEmptySubsequences: true).first {
-                            Text(RichText.render(String(line)))
-                                .font(.system(size: 12))
-                                .foregroundStyle(.secondary)
-                                .richTextLinks(tint: .secondary)
-                                .lineLimit(1)
-                        }
-                        TaskMetaRow(task: t, labelColors: labelColors,
-                                    subtaskTotal: item.subtaskTotal, subtaskDone: item.subtaskDone)
+            HStack(alignment: .top, spacing: 10) {
+                CheckCircle(priority: t.priority, completed: t.isCompleted) { model.setCompleted(t.id, !t.isCompleted) }
+                    .frame(height: Self.firstLine)
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(RichText.render(t.content))
+                        .font(Fonts.body)
+                        .strikethrough(t.isCompleted)
+                        .foregroundStyle(t.isCompleted ? Theme.tertiaryText : Theme.text)
+                        .richTextLinks(tint: t.isCompleted ? Theme.tertiaryText : Theme.text)
+                        .fixedSize(horizontal: false, vertical: true)
+                        .frame(minHeight: Self.firstLine)
+                    if let line = t.description.split(separator: "\n", omittingEmptySubsequences: true).first {
+                        Text(RichText.render(String(line)))
+                            .font(Fonts.small)
+                            .foregroundStyle(Theme.secondaryText)
+                            .richTextLinks(tint: Theme.secondaryText)
+                            .lineLimit(1)
                     }
-                    Spacer(minLength: 8)
-                    if let p = project {
-                        HStack(spacing: 4) {
-                            Text(p.name).font(.system(size: 12)).foregroundStyle(.secondary)
-                            Image(systemName: p.isInbox ? "tray" : "number")
-                                .font(.system(size: 11))
-                                .foregroundStyle(p.isInbox ? Color(hex: 0x246FE0) : Palette.color(p.color))
-                        }
-                        .padding(.top, 2)
-                    }
-                    // The action buttons (and their menu) are only built while hovering.
-                    if hovering {
-                        actions(t)
-                    } else {
-                        Color.clear.frame(width: 76, height: 22)
-                    }
+                    TaskMetaRow(task: t, labelColors: labelColors,
+                                subtaskTotal: item.subtaskTotal, subtaskDone: item.subtaskDone)
                 }
-                .padding(.vertical, 8)
-                .padding(.horizontal, Theme.rowInset)
-                Hairline()
+                Spacer(minLength: 8)
+                if let p = project {
+                    HStack(spacing: 5) {
+                        Text(p.name).font(Fonts.meta).foregroundStyle(Theme.secondaryText)
+                        ProjectIcon(colorKey: p.color, isInbox: p.isInbox, size: 9)
+                    }
+                    .frame(height: Self.firstLine)
+                }
+                // The action buttons (and their menu) are only built while hovering; their space is
+                // always reserved, so hovering never moves the text.
+                ZStack(alignment: .trailing) {
+                    Color.clear.frame(width: 76, height: Self.firstLine)
+                    if hovering { actions(t).transition(.opacity) }
+                }
             }
+            .padding(.vertical, Self.verticalPadding)
+            .padding(.horizontal, Theme.rowInset)
         }
         .padding(.leading, CGFloat(item.depth) * Theme.indent)
-        .background(
-            RoundedRectangle(cornerRadius: 6)
-                .fill(isSelected ? Theme.accent.opacity(0.10) : .clear)
-                .padding(.leading, Theme.grip + CGFloat(item.depth) * Theme.indent + Theme.gutter - 4)
-        )
+        .background(alignment: .leading) {
+            RoundedRectangle(cornerRadius: Theme.rowRadius, style: .continuous)
+                .fill(isSelected ? Theme.selection : hovering ? Theme.hover : .clear)
+                .padding(.leading, pillStart)
+        }
+        .background {
+            if item.depth > 0 || item.expanded {
+                ThreadLines(depth: item.depth, lastAtDepth: item.lastAtDepth, expanded: item.expanded,
+                            hasChevron: item.hasChildren, centerY: Self.verticalPadding + Self.firstLine / 2)
+                    .stroke(Ctp.surface1.color, lineWidth: 1)
+            }
+        }
         .contentShape(Rectangle())
         .pointerStyle(.link)
-        .onHover { hovering = $0 }
+        .onHover { h in withAnimation(Theme.hoverAnimation) { hovering = h } }
         .onTapGesture { model.openTask(t.id) }
         .contextMenu { TaskMenuItems(task: t) }
         .popover(isPresented: Binding(get: { popover != nil }, set: { if !$0 { model.popover = nil } }),
@@ -174,16 +199,23 @@ struct TaskRowView: View, Equatable {
         .padding(.leading, -Theme.grip)
     }
 
+    /// Height of the title's first line; the checkbox, chevron and project badge center on it.
+    static let firstLine: CGFloat = 18
+    static let verticalPadding: CGFloat = 5
+    static let lineHeight = firstLine + 2 * verticalPadding
+
     @ViewBuilder private func chevron(_ t: TodoTask) -> some View {
         if item.hasChildren {
             Button { model.toggleCollapsed(t.id) } label: {
-                Image(systemName: t.collapsed ? "chevron.right" : "chevron.down")
-                    .font(.system(size: 11, weight: .semibold))
-                    .foregroundStyle(.secondary)
-                    .frame(width: Theme.gutter, height: 34)
+                Image(systemName: "chevron.right")
+                    .font(.system(size: 10, weight: .bold))
+                    .foregroundStyle(Theme.tertiaryText)
+                    .rotationEffect(.degrees(t.collapsed ? 0 : 90))
+                    .frame(width: Theme.gutter, height: Self.lineHeight)
                     .contentShape(Rectangle())
             }
             .buttonStyle(.plain)
+            .help(t.collapsed ? "Show sub-tasks" : "Hide sub-tasks")
         } else {
             Color.clear.frame(width: Theme.gutter, height: 1)
         }
@@ -191,8 +223,8 @@ struct TaskRowView: View, Equatable {
 
     private func actions(_ t: TodoTask) -> some View {
         HStack(spacing: 2) {
-            iconButton("pencil", help: "Edit task") { model.openTask(t.id) }
-            iconButton("calendar", help: "Set due date (T)") {
+            RowIconButton(icon: "pencil", help: "Open task (↩)") { model.openTask(t.id) }
+            RowIconButton(icon: "calendar", help: "Set date (T)") {
                 model.selectedTaskID = t.id
                 model.popover = .date
             }
@@ -200,24 +232,83 @@ struct TaskRowView: View, Equatable {
                 TaskMenuItems(task: t)
             } label: {
                 Image(systemName: "ellipsis")
+                    .font(Fonts.body)
                     .frame(width: 24, height: 22)
             }
             .menuStyle(.borderlessButton)
             .menuIndicator(.hidden)
+            .tint(Theme.tertiaryText)
             .fixedSize()
+            .help("More")
         }
-        .foregroundStyle(.secondary)
+        .frame(height: Self.firstLine)
     }
+}
 
-    private func iconButton(_ name: String, help: String, action: @escaping () -> Void) -> some View {
+/// A 24 × 22 glyph button in a task row: quiet until hovered.
+private struct RowIconButton: View {
+    let icon: String
+    let help: String
+    let action: () -> Void
+    @State private var hovering = false
+
+    var body: some View {
         Button(action: action) {
-            Image(systemName: name)
-                .font(.system(size: 13))
+            Image(systemName: icon)
+                .font(Fonts.body)
+                .foregroundStyle(hovering ? Theme.text : Theme.tertiaryText)
                 .frame(width: 24, height: 22)
+                .background(RoundedRectangle(cornerRadius: 6, style: .continuous).fill(hovering ? Theme.hover : .clear))
                 .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
+        .onHover { hovering = $0 }
         .help(help)
+    }
+}
+
+/// The sub-task threads: a 1 pt line at each parent's checkbox runs down past its sub-tasks and
+/// stops level with the last one's checkbox. Drawn in the row's own coordinates (the grip column
+/// starts at x = 0).
+struct ThreadLines: Shape {
+    let depth: Int
+    let lastAtDepth: [Bool]
+    let expanded: Bool
+    /// The row shows a chevron, which sits on its parent's thread: the thread breaks around it.
+    let hasChevron: Bool
+    /// Center of the checkbox, from the row's top.
+    let centerY: CGFloat
+
+    static func x(_ depth: Int) -> CGFloat {
+        Theme.grip + CGFloat(depth) * Theme.indent + Theme.gutter + Theme.rowInset + Theme.checkbox / 2
+    }
+
+    func path(in rect: CGRect) -> Path {
+        var p = Path()
+        func line(_ x: CGFloat, _ from: CGFloat, _ to: CGFloat) {
+            guard to > from else { return }
+            p.move(to: CGPoint(x: x, y: rect.minY + from))
+            p.addLine(to: CGPoint(x: x, y: rect.minY + to))
+        }
+        let h = rect.height
+        for k in 0..<min(depth, lastAtDepth.count) {
+            let last = lastAtDepth[k]
+            let x = Self.x(k)
+            if k == depth - 1 {
+                // The parent's thread reaches this row's checkbox, and continues if siblings follow.
+                let end = last ? centerY : h
+                if hasChevron {
+                    line(x, 0, centerY - 8)
+                    if !last { line(x, centerY + 8, h) }
+                } else {
+                    line(x, 0, end)
+                }
+            } else if !last {
+                line(x, 0, h)
+            }
+        }
+        if expanded { line(Self.x(depth), centerY + Theme.checkbox / 2 + 3, h) }
+        return p
     }
 }
 
@@ -244,13 +335,13 @@ struct DragPreview: View {
     var body: some View {
         HStack(spacing: 10) {
             CheckCircle(priority: task.priority, completed: task.isCompleted) {}
-            Text(RichText.render(task.content)).font(.system(size: 14)).lineLimit(1)
+            Text(RichText.render(task.content)).font(Fonts.body).foregroundStyle(Theme.text).lineLimit(1)
         }
-        .padding(.horizontal, 12).padding(.vertical, 9)
-        .frame(minWidth: 240, maxWidth: 420, alignment: .leading)
-        .background(RoundedRectangle(cornerRadius: 8).fill(Color(nsColor: .textBackgroundColor)))
-        .overlay(RoundedRectangle(cornerRadius: 8).strokeBorder(Color.primary.opacity(0.12)))
-        .shadow(color: .black.opacity(0.25), radius: 8, y: 3)
+        .padding(.horizontal, 12).padding(.vertical, 8)
+        .frame(minWidth: 220, maxWidth: 420, alignment: .leading)
+        .background(RoundedRectangle(cornerRadius: Theme.rowRadius, style: .continuous).fill(Ctp.surface0.color))
+        .overlay(RoundedRectangle(cornerRadius: Theme.rowRadius, style: .continuous).strokeBorder(Ctp.surface1.color))
+        .shadow(color: Theme.shadow, radius: 10, y: 4)
     }
 }
 
@@ -265,34 +356,35 @@ struct TaskMetaRow: View {
     var body: some View {
         let hasMeta = subtaskTotal > 0 || task.due != nil || !task.labels.isEmpty
         if hasMeta {
-            HStack(spacing: 10) {
+            HStack(spacing: 8) {
                 if subtaskTotal > 0 {
+                    // Green once every sub-task is done.
                     HStack(spacing: 3) {
-                        SubtaskIcon().frame(width: 12, height: 12)
-                        Text("\(subtaskDone)/\(subtaskTotal)")
+                        SubtaskIcon().frame(width: 11, height: 11)
+                        Text("\(subtaskDone)/\(subtaskTotal)").monospacedDigit()
                     }
-                    .foregroundStyle(.secondary)
+                    .foregroundStyle(subtaskDone == subtaskTotal ? Theme.today : Theme.secondaryText)
                 }
                 if let due = task.due {
                     HStack(spacing: 3) {
-                        Image(systemName: "calendar").font(.system(size: 10))
+                        Image(systemName: "calendar").font(Fonts.smallIcon)
                         Text(due.displayString())
                         if let rule = task.recurrence {
-                            Image(systemName: "repeat").font(.system(size: 10)).help(Recurrence.summary(rule))
+                            Image(systemName: "repeat").font(Fonts.smallIcon).help(Recurrence.summary(rule))
                         }
                     }
-                    .foregroundStyle(task.isCompleted ? .secondary : due.chipColor)
+                    .foregroundStyle(task.isCompleted ? Theme.tertiaryText : due.chipColor)
                 }
                 ForEach(Array(task.labels.enumerated()), id: \.element) { i, name in
-                    let color = i < labelColors.count && !labelColors[i].isEmpty ? Palette.color(labelColors[i]) : .secondary
-                    HStack(spacing: 2) {
-                        Image(systemName: "tag").font(.system(size: 10))
-                        Text(name)
+                    let color = i < labelColors.count && !labelColors[i].isEmpty ? Palette.color(labelColors[i]) : Theme.tertiaryText
+                    HStack(spacing: 4) {
+                        LabelDot(color: color)
+                        Text(name).foregroundStyle(Theme.secondaryText)
                     }
-                    .foregroundStyle(color)
                 }
             }
-            .font(.system(size: 12))
+            .font(Fonts.meta)
+            .lineLimit(1)
         }
     }
 }
@@ -342,7 +434,7 @@ struct TaskMenuItems: View {
     }
 }
 
-/// Six-dot drag handle (2 × 3), like Todoist's.
+/// Six-dot drag handle (2 × 3).
 struct GripDots: View {
     var body: some View {
         Canvas { ctx, size in
@@ -352,7 +444,7 @@ struct GripDots: View {
             for col in 0..<2 {
                 for row in 0..<3 {
                     let r = CGRect(x: x0 + CGFloat(col) * (d + gap), y: y0 + CGFloat(row) * (d + gap), width: d, height: d)
-                    ctx.fill(Path(ellipseIn: r), with: .color(.secondary))
+                    ctx.fill(Path(ellipseIn: r), with: .color(Theme.tertiaryText))
                 }
             }
         }
@@ -361,8 +453,7 @@ struct GripDots: View {
     }
 }
 
-/// Todoist's subtask glyph: a dot at the top left joined by a curved line to a dot at the
-/// bottom right.
+/// The sub-task glyph: a dot at the top left joined by a curved line to a dot at the bottom right.
 struct SubtaskIcon: View {
     var body: some View {
         Canvas { ctx, size in

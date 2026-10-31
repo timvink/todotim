@@ -23,13 +23,18 @@ struct RowItem: Equatable, Identifiable {
     var hasChildren: Bool
     /// Show "Project ›" at the right (label and search views).
     var showProject = false
+    /// True when the task's sub-tasks are shown below it.
+    var expanded = false
+    /// Element `k` tells whether this row's ancestor at depth `k + 1` (the row itself for the
+    /// last element) is the last visible child of its parent. Draws the sub-task thread lines.
+    var lastAtDepth: [Bool] = []
 }
 
 /// Everything a task list shows, flattened into one array so it can be rendered by a single
 /// `LazyVStack` (offscreen rows are never built).
 enum DisplayItem: Equatable, Identifiable {
-    case projectHeader(EntityID)
-    case labelHeader(String)
+    /// Shown when a project has no open tasks (its title is pinned above the list).
+    case emptyState(projectId: EntityID)
     case task(RowItem)
     case editor(depth: Int)
     case addTask(projectId: EntityID, sectionId: EntityID?)
@@ -41,8 +46,7 @@ enum DisplayItem: Equatable, Identifiable {
     /// Task rows use the bare task id so `ScrollViewProxy.scrollTo(taskID)` finds them.
     var id: String {
         switch self {
-        case .projectHeader: "__header"
-        case .labelHeader: "__header"
+        case .emptyState: "__empty"
         case .task(let r): r.id
         case .editor: "__editor"
         case .addTask(_, let sid): "__add/" + (sid ?? "")
@@ -95,7 +99,7 @@ struct DisplayBuilder {
     private mutating func buildProject(_ pid: EntityID, _ key: DisplayKey) {
         guard store.project(pid) != nil else { return }
         let showCompleted = key.showCompleted.contains(pid)
-        items.append(.projectHeader(pid))
+        if store.openTaskCount(projectId: pid) == 0 { items.append(.emptyState(projectId: pid)) }
         appendArea(pid, nil, showCompleted: showCompleted, editor: key.editor)
         for (i, s) in store.sections(in: pid).enumerated() {
             items.append(.sectionGap(projectId: pid, index: i))
@@ -111,22 +115,26 @@ struct DisplayBuilder {
         let editorHere = editor.map { $0.parentId == nil && $0.projectId == pid && $0.sectionId == sid } ?? false
         if editorHere, editor?.atTop == true { items.append(.editor(depth: 0)) }
         for id in store.taskIDs(projectId: pid, sectionId: sid, includeCompleted: showCompleted) {
-            appendTree(id, depth: 0, showCompleted: showCompleted, editor: editor)
+            appendTree(id, depth: 0, lastAtDepth: [], showCompleted: showCompleted, editor: editor)
         }
         if editorHere, editor?.atTop == false { items.append(.editor(depth: 0)) }
         if !(editorHere && editor?.atTop == false) { items.append(.addTask(projectId: pid, sectionId: sid)) }
     }
 
-    private mutating func appendTree(_ id: EntityID, depth: Int, showCompleted: Bool, editor: EditorTarget?) {
+    private mutating func appendTree(_ id: EntityID, depth: Int, lastAtDepth: [Bool], showCompleted: Bool,
+                                     editor: EditorTarget?) {
         let progress = store.subtaskProgress(of: id)
         let shown = showCompleted ? progress.total : progress.total - progress.done
-        items.append(.task(RowItem(id: id, depth: depth, subtaskDone: progress.done, subtaskTotal: progress.total,
-                                   hasChildren: shown > 0)))
-        taskIDs.append(id)
         // Only parents are read here, so the list is not invalidated by edits to leaf tasks.
-        if shown > 0, store.task(id)?.collapsed == false {
-            for c in store.subtaskIDs(of: id, includeCompleted: showCompleted) {
-                appendTree(c, depth: depth + 1, showCompleted: showCompleted, editor: editor)
+        let expanded = shown > 0 && store.task(id)?.collapsed == false
+        items.append(.task(RowItem(id: id, depth: depth, subtaskDone: progress.done, subtaskTotal: progress.total,
+                                   hasChildren: shown > 0, expanded: expanded, lastAtDepth: lastAtDepth)))
+        taskIDs.append(id)
+        if expanded {
+            let children = store.subtaskIDs(of: id, includeCompleted: showCompleted)
+            for (i, c) in children.enumerated() {
+                appendTree(c, depth: depth + 1, lastAtDepth: lastAtDepth + [i == children.count - 1],
+                           showCompleted: showCompleted, editor: editor)
             }
         }
         if editor?.parentId == id { items.append(.editor(depth: depth + 1)) }
@@ -135,7 +143,6 @@ struct DisplayBuilder {
     // MARK: Label and search
 
     private mutating func buildLabel(_ name: String) {
-        items.append(.labelHeader(name))
         appendGroups(store.tasks(withLabel: name), empty: "No open tasks with this label.")
     }
 

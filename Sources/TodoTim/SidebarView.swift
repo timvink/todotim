@@ -11,46 +11,54 @@ struct SidebarView: View {
     @State private var labelName = ""
 
     var body: some View {
-        // No `List(selection:)`: its highlight uses the system accent color (blue for most
-        // users), so rows draw Todoist's tinted selection themselves (`SidebarRow`).
+        // No `List(selection:)`: its highlight uses the system accent color, so rows draw their
+        // own neutral selection (`SidebarRow`).
         List {
             AccountMenu()
-                .sidebarRowInsets(top: 2, bottom: 6)
+                .sidebarRowInsets(top: 0, bottom: 6)
 
             SidebarButtonRow(action: { model.showQuickAdd = true }) {
-                Image(systemName: "plus.circle.fill")
-                    .font(.system(size: 16))
-                    .foregroundStyle(Theme.accent)
-                    .frame(width: Sidebar.iconWidth)
+                ZStack {
+                    Circle().fill(Theme.accent)
+                    Image(systemName: "plus")
+                        .font(.system(size: 10, weight: .bold))
+                        .foregroundStyle(Theme.onAccent)
+                }
+                .frame(width: 18, height: 18)
+                .frame(width: Sidebar.iconWidth)
                 Text("Add task")
-                    .font(.system(size: 13, weight: .semibold))
+                    .font(Fonts.bodySemibold)
                     .foregroundStyle(Theme.accent)
                 Spacer()
             }
             .help("Add task (Q)")
 
-            SidebarRow(item: .search) {
-                Image(systemName: "magnifyingglass").foregroundStyle(.secondary).frame(width: Sidebar.iconWidth)
+            SidebarRow(item: .search) { _ in
+                Image(systemName: "magnifyingglass")
+                    .font(Fonts.icon)
+                    .foregroundStyle(Theme.secondaryText)
+                    .frame(width: Sidebar.iconWidth)
                 Text("Search")
                 Spacer()
             }
-            SidebarRow(item: .project(store.inbox.id), dropProjectId: store.inbox.id) {
-                projectLabel(store.inbox, icon: "tray")
+            SidebarRow(item: .project(store.inbox.id), dropProjectId: store.inbox.id) { state in
+                projectLabel(store.inbox, state: state)
             }
 
-            SidebarHeader(title: "My Projects") {
+            SidebarHeader(title: "Projects") {
                 Button { model.showAddProject = true } label: {
-                    Image(systemName: "plus").font(.system(size: 11, weight: .semibold))
-                        .frame(width: 20, height: 20)
+                    Image(systemName: "plus")
+                        .font(.system(size: 12, weight: .semibold))
+                        .frame(width: 22, height: 20, alignment: .trailing)
                         .contentShape(Rectangle())
                 }
                 .buttonStyle(.plain)
                 .pointerStyle(.link)
-                .help("Add project")
+                .help("Add project (⇧⌘N)")
             }
             ForEach(store.projects) { p in
-                SidebarRow(item: .project(p.id), dropProjectId: p.id) {
-                    projectLabel(p, icon: "number")
+                SidebarRow(item: .project(p.id), dropProjectId: p.id) { state in
+                    projectLabel(p, state: state)
                 }
                 .contextMenu { projectMenu(p) }
             }
@@ -63,8 +71,9 @@ struct SidebarView: View {
             if !store.labels.isEmpty {
                 SidebarHeader(title: "Labels") { EmptyView() }
                 ForEach(store.labels) { l in
-                    SidebarRow(item: .label(l.name)) {
+                    SidebarRow(item: .label(l.name)) { _ in
                         Image(systemName: "tag")
+                            .font(Fonts.icon)
                             .foregroundStyle(Palette.color(l.color))
                             .frame(width: Sidebar.iconWidth)
                         Text(l.name).lineLimit(1)
@@ -73,13 +82,7 @@ struct SidebarView: View {
                     }
                     .contextMenu {
                         Button("Rename…") { labelName = l.name; renamingLabel = l }
-                        Menu("Color") {
-                            ForEach(Palette.entries) { e in
-                                Button { store.updateLabel(l.id) { $0.color = e.key } } label: {
-                                    SwiftUI.Label { Text(e.name) } icon: { Image(nsImage: Palette.swatch(e.key)) }
-                                }
-                            }
-                        }
+                        Menu("Color") { colorMenu(current: l.color) { key in store.updateLabel(l.id) { $0.color = key } } }
                         Divider()
                         Button("Delete Label", role: .destructive) {
                             if model.sidebar == .label(l.name) { model.goToInbox() }
@@ -90,9 +93,11 @@ struct SidebarView: View {
             }
         }
         .listStyle(.sidebar)
+        .scrollContentBackground(.hidden)
         // Rows set their own height; the default minimum would space them unevenly.
         .environment(\.defaultMinListRowHeight, 10)
-        .safeAreaInset(edge: .bottom) { SyncStatusView() }
+        .safeAreaInset(edge: .bottom, spacing: 0) { SyncStatusView() }
+        .background(Theme.sidebar)
         .sheet(item: $editingProject) { p in
             ProjectFormView(project: p).environment(model).environment(store)
         }
@@ -120,9 +125,8 @@ struct SidebarView: View {
         }
     }
 
-    @ViewBuilder private func projectLabel(_ p: Project, icon: String) -> some View {
-        Image(systemName: icon)
-            .foregroundStyle(p.isInbox ? Color(hex: 0x246FE0) : Palette.color(p.color))
+    @ViewBuilder private func projectLabel(_ p: Project, state: SidebarRowState) -> some View {
+        ProjectIcon(p, fill: state.selected ? 1 : state.dropTargeted ? 0.6 : state.hovering ? 0.3 : 0)
             .frame(width: Sidebar.iconWidth)
         Text(p.name).lineLimit(1)
         Spacer()
@@ -131,20 +135,22 @@ struct SidebarView: View {
 
     @ViewBuilder private func projectMenu(_ p: Project) -> some View {
         Button("Edit Project…") { editingProject = p }
-        Menu("Color") {
-            ForEach(Palette.entries) { e in
-                Button { store.updateProject(p.id) { $0.color = e.key } } label: {
-                    SwiftUI.Label { Text(e.name) } icon: { Image(nsImage: Palette.swatch(e.key)) }
-                }
-            }
-        }
+        Menu("Color") { colorMenu(current: p.color) { key in store.updateProject(p.id) { $0.color = key } } }
         Divider()
         Button("Delete Project…", role: .destructive) { deletingProject = p }
     }
+
+    @ViewBuilder private func colorMenu(current: String, pick: @escaping (String) -> Void) -> some View {
+        ForEach(Palette.pickerEntries) { e in
+            Button { pick(e.key) } label: {
+                SwiftUI.Label { Text(Palette.name(e.key)) } icon: { Image(nsImage: Palette.swatch(e.key)) }
+            }
+        }
+    }
 }
 
-/// Todoist's account button at the top of the sidebar: avatar, name and a chevron opening a menu.
-/// The name and picture are the macOS user's; the menu names the sync account when there is one.
+/// The account button at the top of the sidebar: avatar, name and a chevron opening a menu. The
+/// name and picture are the macOS user's; the menu names the sync account when there is one.
 private struct AccountMenu: View {
     @Environment(AppModel.self) private var model
     @State private var hovering = false
@@ -164,13 +170,12 @@ private struct AccountMenu: View {
         } label: {
             HStack(spacing: Sidebar.spacing) {
                 avatar.frame(width: Sidebar.iconWidth, height: Sidebar.iconWidth).clipShape(Circle())
-                Text(Self.name).font(.system(size: 13, weight: .semibold)).lineLimit(1)
-                Image(systemName: "chevron.down").font(.system(size: 9, weight: .semibold)).foregroundStyle(.secondary)
+                Text(Self.name).font(Fonts.bodySemibold).foregroundStyle(Theme.text).lineLimit(1)
+                Image(systemName: "chevron.down").font(.system(size: 10, weight: .semibold)).foregroundStyle(Theme.tertiaryText)
             }
-            .foregroundStyle(.primary)
             .padding(.horizontal, Sidebar.padding).padding(.vertical, 5)
             .background(RoundedRectangle(cornerRadius: Sidebar.radius, style: .continuous)
-                .fill(Color.primary.opacity(hovering ? 0.06 : 0)))
+                .fill(hovering ? Theme.hover : .clear))
             .contentShape(Rectangle())
         }
         .menuStyle(.button)
@@ -178,7 +183,7 @@ private struct AccountMenu: View {
         .menuIndicator(.hidden)
         .fixedSize()
         .pointerStyle(.link)
-        .onHover { hovering = $0 }
+        .onHover { h in withAnimation(Theme.hoverAnimation) { hovering = h } }
     }
 
     @ViewBuilder private var avatar: some View {
@@ -186,29 +191,32 @@ private struct AccountMenu: View {
             Image(nsImage: image).resizable().scaledToFill()
         } else {
             let initials = Self.name.split(separator: " ").prefix(2).compactMap(\.first).map(String.init).joined()
-            Circle().fill(Theme.accent)
-                .overlay(Text(initials.uppercased()).font(.system(size: 9, weight: .semibold)).foregroundStyle(.white))
+            Circle().fill(Ctp.surface1.color)
+                .overlay(Text(initials.uppercased()).font(.system(size: 9, weight: .semibold)).foregroundStyle(Theme.text))
         }
     }
 }
 
-/// Shared sidebar metrics: every row puts its icon in the same column, so icons, the avatar and the
-/// section headings line up.
+/// Shared sidebar metrics: every row puts its icon in the same column, so icons, the avatar, the
+/// Add task disc, the headings and the footer line up.
 enum Sidebar {
     static let iconWidth: CGFloat = 20
-    static let spacing: CGFloat = 9
+    static let spacing: CGFloat = 8
     /// Inner horizontal padding of a row (its highlight extends this far past the content).
     static let padding: CGFloat = 8
-    static let radius: CGFloat = 7
+    static let radius: CGFloat = 6
     static let rowInsets = EdgeInsets(top: 1, leading: 10, bottom: 1, trailing: 10)
     /// Horizontal inset the sidebar list adds outside the row insets.
     static let listInset: CGFloat = 16
+    /// From the sidebar's edge to a row's content (icons on the left, counts on the right).
+    static let contentInset = listInset + rowInsets.leading + padding
 }
 
 extension View {
     func sidebarRowInsets(top: CGFloat = 1, bottom: CGFloat = 1) -> some View {
         listRowInsets(EdgeInsets(top: top, leading: Sidebar.rowInsets.leading, bottom: bottom, trailing: Sidebar.rowInsets.trailing))
             .listRowSeparator(.hidden)
+            .listRowBackground(Color.clear)
     }
 }
 
@@ -217,13 +225,13 @@ private struct SidebarCount: View {
     let n: Int
     var body: some View {
         if n > 0 {
-            Text("\(n)").font(.system(size: 12)).monospacedDigit().foregroundStyle(.secondary)
+            Text("\(n)").font(Fonts.meta).monospacedDigit().foregroundStyle(Theme.tertiaryText)
         }
     }
 }
 
-/// Section heading ("My Projects", "Labels"), aligned with the rows' icons; the accessory (an add
-/// button) sits where the counts are and shows on hover.
+/// Section heading ("Projects", "Labels"): small caps aligned with the rows' icons; the accessory
+/// (an add button) ends where the counts end.
 private struct SidebarHeader<Accessory: View>: View {
     let title: String
     @ViewBuilder let accessory: Accessory
@@ -231,44 +239,44 @@ private struct SidebarHeader<Accessory: View>: View {
 
     var body: some View {
         HStack(spacing: 0) {
-            Text(title)
-                .font(.system(size: 12, weight: .semibold))
-                .foregroundStyle(.secondary)
+            Text(title.uppercased())
+                .font(Fonts.sidebarHeading)
+                .tracking(0.6)
+                .foregroundStyle(Theme.tertiaryText)
             Spacer()
             accessory
-                .foregroundStyle(.secondary)
-                .opacity(hovering ? 1 : 0)
+                .foregroundStyle(hovering ? Theme.text : Theme.tertiaryText)
         }
         .frame(height: 20)
-        .padding(.leading, Sidebar.padding)
-        .padding(.trailing, Sidebar.padding - 4)
-        .padding(.top, 14)
+        .padding(.horizontal, Sidebar.padding)
+        .padding(.top, 16).padding(.bottom, 2)
         .contentShape(Rectangle())
-        .onHover { hovering = $0 }
+        .onHover { h in withAnimation(Theme.hoverAnimation) { hovering = h } }
         .sidebarRowInsets(top: 0, bottom: 0)
         .selectionDisabled()
         .moveDisabled(true)
     }
 }
 
-/// The hover and selection chrome shared by sidebar rows.
-private struct SidebarRowBackground: View {
+struct SidebarRowState {
     var selected = false
     var hovering = false
     var dropTargeted = false
+}
+
+/// The hover, selection and drop-target pill shared by sidebar rows.
+private struct SidebarRowBackground: View {
+    var state = SidebarRowState()
 
     var body: some View {
         RoundedRectangle(cornerRadius: Sidebar.radius, style: .continuous)
-            .fill(dropTargeted ? Theme.accent.opacity(0.24)
-                : selected ? Theme.selection
-                : Color.primary.opacity(hovering ? 0.06 : 0))
+            .fill(state.selected || state.dropTargeted ? Theme.selection : state.hovering ? Theme.hover : .clear)
             .overlay {
-                if dropTargeted {
+                if state.dropTargeted {
                     RoundedRectangle(cornerRadius: Sidebar.radius, style: .continuous)
-                        .strokeBorder(Theme.accent.opacity(0.7), lineWidth: 1.5)
+                        .strokeBorder(Theme.accent, lineWidth: 1)
                 }
             }
-            .animation(.easeOut(duration: 0.12), value: hovering)
     }
 }
 
@@ -282,39 +290,39 @@ private struct SidebarButtonRow<Content: View>: View {
         Button(action: action) {
             HStack(spacing: Sidebar.spacing) { content }
                 .padding(.horizontal, Sidebar.padding)
-                .padding(.vertical, 6)
-                .background(SidebarRowBackground(hovering: hovering))
+                .frame(height: 28)
+                .background(SidebarRowBackground(state: SidebarRowState(hovering: hovering)))
                 .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
         .pointerStyle(.link)
-        .onHover { hovering = $0 }
+        .onHover { h in withAnimation(Theme.hoverAnimation) { hovering = h } }
         .sidebarRowInsets()
         .moveDisabled(true)
     }
 }
 
-/// Sidebar row with a tinted selection (red title), a hover background and, for projects, a drop
-/// target for dragged tasks that highlights while targeted.
+/// Sidebar row with a neutral selection pill (the text keeps its color), a hover pill and, for
+/// projects, a drop target for dragged tasks.
 private struct SidebarRow<Content: View>: View {
     @Environment(AppModel.self) private var model
     let item: SidebarItem
     var dropProjectId: EntityID?
-    @ViewBuilder let content: Content
+    @ViewBuilder let content: (SidebarRowState) -> Content
     @State private var hovering = false
     @State private var dropTargeted = false
 
     var body: some View {
-        let selected = model.sidebar == item
-        HStack(spacing: Sidebar.spacing) { content }
-            .font(.system(size: 13))
-            .foregroundStyle(selected ? Theme.accent : Color.primary)
+        let state = SidebarRowState(selected: model.sidebar == item, hovering: hovering, dropTargeted: dropTargeted)
+        HStack(spacing: Sidebar.spacing) { content(state) }
+            .font(Fonts.body)
+            .foregroundStyle(Theme.text)
             .padding(.horizontal, Sidebar.padding)
-            .padding(.vertical, 6)
-            .background(SidebarRowBackground(selected: selected, hovering: hovering, dropTargeted: dropTargeted))
+            .frame(height: 28)
+            .background(SidebarRowBackground(state: state))
             .contentShape(Rectangle())
             .pointerStyle(.link)
-            .onHover { hovering = $0 }
+            .onHover { h in withAnimation(Theme.hoverAnimation) { hovering = h } }
             .onTapGesture { model.sidebar = item }
             .sidebarRowInsets()
             .modifier(SidebarDropModifier(projectId: dropProjectId, targeted: $dropTargeted))
@@ -331,7 +339,7 @@ private struct SidebarDropModifier: ViewModifier {
             content.dropDestination(for: String.self) { ids, _ in
                 model.drop(ids, projectId: projectId, sectionId: nil)
             } isTargeted: { on in
-                targeted = on
+                withAnimation(Theme.hoverAnimation) { targeted = on }
                 // Leaving the list for the sidebar: remove the list placeholder.
                 if on { model.drag.setTarget(nil) }
             }
@@ -341,48 +349,69 @@ private struct SidebarDropModifier: ViewModifier {
     }
 }
 
-/// Add / edit project dialog (name + color), like Todoist's.
+/// Add / edit project dialog: a name and a color.
 struct ProjectFormView: View {
     @Environment(AppModel.self) private var model
     @Environment(TodoStore.self) private var store
     @Environment(\.dismiss) private var dismiss
     let project: Project?
     @State private var name = ""
-    @State private var color = "charcoal"
+    @State private var color = "blue"
+    @FocusState private var nameFocused: Bool
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 0) {
-            Text(project == nil ? "Add project" : "Edit project")
-                .font(.system(size: 16, weight: .bold))
-                .padding(16)
-            Divider()
-            Form {
-                TextField("Name", text: $name)
-                    .onSubmit(save)
-                Picker("Color", selection: $color) {
-                    ForEach(Palette.entries) { e in
-                        SwiftUI.Label { Text(e.name) } icon: { Image(nsImage: Palette.swatch(e.key)) }
-                            .tag(e.key)
+        VStack(alignment: .leading, spacing: 18) {
+            HStack(spacing: 10) {
+                ProjectIcon(colorKey: color, isInbox: false, fill: 1, size: 14)
+                Text(project == nil ? "New project" : "Edit project")
+                    .font(Fonts.panelTitle)
+                    .foregroundStyle(Theme.text)
+            }
+            TextField("Name", text: $name, prompt: Text("Project name").foregroundStyle(Theme.tertiaryText))
+                .textFieldStyle(.plain)
+                .font(Fonts.body)
+                .foregroundStyle(Theme.text)
+                .focused($nameFocused)
+                .padding(.horizontal, 10).padding(.vertical, 8)
+                .background(RoundedRectangle(cornerRadius: 7, style: .continuous).fill(Theme.field))
+                .overlay(RoundedRectangle(cornerRadius: 7, style: .continuous)
+                    .strokeBorder(nameFocused ? Theme.accent : Ctp.surface1.color))
+                .onSubmit(save)
+            VStack(alignment: .leading, spacing: 8) {
+                Text("Color").font(Fonts.meta).foregroundStyle(Theme.secondaryText)
+                HStack(spacing: 8) {
+                    ForEach(Palette.pickerEntries) { e in
+                        let selected = Palette.ctp(e.key) == Palette.ctp(color)
+                        Button { color = e.key } label: {
+                            Circle().fill(Palette.color(e.key))
+                                .frame(width: 18, height: 18)
+                                .padding(3)
+                                .overlay(Circle().strokeBorder(selected ? Theme.text : .clear, lineWidth: 2))
+                                .contentShape(Circle())
+                        }
+                        .buttonStyle(.plain)
+                        .pointerStyle(.link)
+                        .help(Palette.name(e.key))
                     }
                 }
             }
-            .formStyle(.grouped)
-            Divider()
             HStack {
                 Spacer()
                 Button("Cancel") { dismiss() }
                     .buttonStyle(SoftButtonStyle())
                     .keyboardShortcut(.cancelAction)
-                Button(project == nil ? "Add" : "Save", action: save)
+                Button(project == nil ? "Add project" : "Save", action: save)
                     .buttonStyle(AccentButtonStyle())
                     .disabled(name.trimmingCharacters(in: .whitespaces).isEmpty)
             }
-            .padding(12)
         }
+        .padding(20)
         .frame(width: 420)
+        .background(Theme.panel)
         .onAppear {
             name = project?.name ?? ""
-            color = project.map { ProjectColor.entry($0.color).key } ?? "charcoal"
+            color = project.map { ProjectColor.entry($0.color).key } ?? "blue"
+            nameFocused = true
         }
     }
 
@@ -399,36 +428,47 @@ struct ProjectFormView: View {
     }
 }
 
+/// The sidebar's footer: sync state and the sync and settings buttons, on the rows' grid and at
+/// the rows' type size. The glyph turns while syncing and shows a green tick when a sync ends.
 struct SyncStatusView: View {
     @Environment(AppModel.self) private var model
     @Environment(SyncController.self) private var sync
     @Environment(\.openSettings) private var openSettings
+    @State private var justSynced = false
+    @State private var tickTask: Task<Void, Never>?
 
     var body: some View {
-        HStack(spacing: 6) {
+        HStack(spacing: Sidebar.spacing) {
             icon
-            Text(text)
-                .font(.system(size: 11))
-                .foregroundStyle(.secondary)
+                .font(Fonts.icon)
+                .frame(width: Sidebar.iconWidth)
+            Text(justSynced ? "Synced just now" : text)
+                .font(Fonts.body)
+                .foregroundStyle(isError ? Theme.danger : Theme.secondaryText)
                 .lineLimit(1)
                 .truncationMode(.tail)
-            Spacer()
-            Button { model.syncNow() } label: {
-                Image(systemName: "arrow.triangle.2.circlepath")
-            }
-            .buttonStyle(.plain)
-            .foregroundStyle(.secondary)
-            .help("Sync now (⌘R)")
-            .disabled(!isEnabled)
-            Button { openSettings() } label: { Image(systemName: "gearshape") }
-                .buttonStyle(.plain)
-                .foregroundStyle(.secondary)
-                .help("Settings (⌘,)")
+                .contentTransition(.opacity)
+            Spacer(minLength: 4)
+            FooterButton(icon: "arrow.triangle.2.circlepath", help: "Sync now (⌘R)") { model.syncNow() }
+                .disabled(!isEnabled)
+            FooterButton(icon: "gearshape", help: "Settings (⌘,)") { openSettings() }
+                .padding(.trailing, -6)
         }
-        // Lines up with the rows' icons and counts (the list adds its own inset).
-        .padding(.horizontal, Sidebar.listInset + Sidebar.rowInsets.leading + Sidebar.padding)
-        .padding(.vertical, 10)
+        .padding(.leading, Sidebar.contentInset)
+        .padding(.trailing, Sidebar.contentInset)
+        .frame(height: 44)
+        .background(Theme.sidebar)
         .help(helpText)
+        .onChange(of: sync.status) { old, new in
+            guard old == .syncing, case .idle = new, !Theme.reduceMotion else { return }
+            withAnimation(.easeOut(duration: 0.2)) { justSynced = true }
+            tickTask?.cancel()
+            tickTask = Task {
+                try? await Task.sleep(for: .seconds(1.5))
+                guard !Task.isCancelled else { return }
+                withAnimation(.easeOut(duration: 0.3)) { justSynced = false }
+            }
+        }
     }
 
     private var isEnabled: Bool {
@@ -436,12 +476,21 @@ struct SyncStatusView: View {
         return true
     }
 
+    private var isError: Bool {
+        if case .error = sync.status { return true }
+        return false
+    }
+
     @ViewBuilder private var icon: some View {
-        switch sync.status {
-        case .disabled: Image(systemName: "icloud.slash").foregroundStyle(.secondary)
-        case .idle: Image(systemName: "checkmark.icloud").foregroundStyle(.secondary)
-        case .syncing: ProgressView().controlSize(.mini)
-        case .error: Image(systemName: "exclamationmark.icloud").foregroundStyle(Theme.overdue)
+        if justSynced {
+            Image(systemName: "checkmark").foregroundStyle(Theme.today).transition(.scale.combined(with: .opacity))
+        } else {
+            switch sync.status {
+            case .disabled: Image(systemName: "icloud.slash").foregroundStyle(Theme.disabledText)
+            case .idle: Image(systemName: "checkmark.icloud").foregroundStyle(Theme.tertiaryText)
+            case .syncing: SpinningSyncGlyph()
+            case .error: Image(systemName: "exclamationmark.icloud").foregroundStyle(Theme.danger)
+            }
         }
     }
 
@@ -452,12 +501,50 @@ struct SyncStatusView: View {
             guard let last else { return "Not synced yet" }
             return "Synced \(last.formatted(.relative(presentation: .named)))"
         case .syncing: return "Syncing…"
-        case .error(let msg): return "Sync error: \(msg)"
+        case .error: return "Sync failed"
         }
     }
 
     private var helpText: String {
         if case .error(let msg) = sync.status { return msg }
         return text
+    }
+}
+
+/// The sync glyph turning once every 1.2 s (still, in the accent color, with Reduce Motion).
+private struct SpinningSyncGlyph: View {
+    @State private var turning = false
+
+    var body: some View {
+        Image(systemName: "arrow.triangle.2.circlepath")
+            .foregroundStyle(Theme.accent)
+            .rotationEffect(.degrees(turning ? 360 : 0))
+            .onAppear {
+                guard !Theme.reduceMotion else { return }
+                withAnimation(.linear(duration: 1.2).repeatForever(autoreverses: false)) { turning = true }
+            }
+    }
+}
+
+/// A 24 × 24 glyph button in the sidebar footer.
+private struct FooterButton: View {
+    let icon: String
+    let help: String
+    let action: () -> Void
+    @Environment(\.isEnabled) private var isEnabled
+    @State private var hovering = false
+
+    var body: some View {
+        Button(action: action) {
+            Image(systemName: icon)
+                .font(Fonts.icon)
+                .foregroundStyle(!isEnabled ? Theme.disabledText : hovering ? Theme.text : Theme.secondaryText)
+                .frame(width: 24, height: 24)
+                .background(RoundedRectangle(cornerRadius: 6, style: .continuous).fill(hovering && isEnabled ? Theme.hover : .clear))
+                .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .onHover { hovering = $0 }
+        .help(help)
     }
 }

@@ -2,34 +2,41 @@ import AppKit
 import SwiftUI
 import TodoCore
 
-/// Todoist's task view, shown as a panel over the main window (see `ModalLayer`): project
-/// header with ⌃/⌄, "…" and close; one column with title, description, project, date, priority,
-/// labels and sub-tasks. ↑/↓/j/k move to the previous/next task.
+/// The task panel, shown over the main window (see `ModalLayer`): a header with the project,
+/// ⌃/⌄, "…" and close; then title, description, date, priority, labels and sub-tasks.
+/// ↑/↓/j/k move to the previous/next task.
 struct TaskDetailView: View {
     @Environment(AppModel.self) private var model
     @Environment(TodoStore.self) private var store
+    /// The largest size; the panel is as tall as its content, up to `size.height`.
     let size: CGSize
+    @State private var contentHeight: CGFloat = 0
 
     var body: some View {
-        // A fixed size behind a GeometryReader (which never asks its content for a size), so a
-        // keystroke never re-measures the whole panel.
+        // The size is set here, behind a GeometryReader (which never asks its content for a
+        // size), so a keystroke never re-measures the whole panel. Only a change in the content's
+        // height (a new line, a sub-task) resizes it.
         GeometryReader { _ in
             if let id = model.detailTaskID, let task = store.task(id) {
                 // Not `.id(id)`: moving to the next task updates the panel in place, which is much
                 // cheaper than rebuilding it. Per-task state is reset in `TaskDetailContent`.
-                TaskDetailContent(task: task)
+                TaskDetailContent(task: task) { h in
+                    if abs(h - contentHeight) > 0.5 { contentHeight = h }
+                }
             } else {
                 Color.clear.onAppear { model.detailTaskID = nil }
             }
         }
-        .frame(width: size.width, height: size.height)
+        .frame(width: size.width, height: min(size.height, max(240, contentHeight)))
     }
 }
 
-private struct TaskDetailContent: View {
+fileprivate struct TaskDetailContent: View {
     @Environment(AppModel.self) private var model
     @Environment(TodoStore.self) private var store
     let task: TodoTask
+    /// Reports the panel's natural height (header and content).
+    let onHeight: (CGFloat) -> Void
 
     @State private var newSubtask = ""
     @State private var addingSubtask = false
@@ -40,13 +47,16 @@ private struct TaskDetailContent: View {
     var body: some View {
         VStack(spacing: 0) {
             header
-            Divider()
+            Hairline()
             ScrollView {
                 content
-                    .padding(.horizontal, 28)
-                    .padding(.top, 20)
-                    .padding(.bottom, 32)
+                    .padding(.horizontal, Self.inset)
+                    .padding(.top, 18)
+                    .padding(.bottom, 24)
                     .frame(maxWidth: .infinity, alignment: .leading)
+                    .onGeometryChange(for: CGFloat.self, of: { $0.size.height }) { h in
+                        onHeight(h + Self.headerHeight + 1)
+                    }
             }
         }
         .onAppear {
@@ -68,21 +78,24 @@ private struct TaskDetailContent: View {
     // MARK: Header
 
     private var header: some View {
-        HStack(spacing: 4) {
+        HStack(spacing: 2) {
             if let p = store.project(task.projectId) {
                 Button {
                     moveFromHeader = true
                     model.popover = .move
                 } label: {
-                    HStack(spacing: 6) {
-                        projectIcon(p)
-                        Text(p.name).font(.system(size: 13))
+                    HStack(spacing: 7) {
+                        ProjectIcon(p, fill: 1, size: 9)
+                        Text(p.name)
                         if let s = sectionName {
-                            Text("/").foregroundStyle(.secondary)
-                            Text(s).font(.system(size: 13)).foregroundStyle(.secondary)
+                            Text("/").foregroundStyle(Theme.tertiaryText)
+                            Text(s)
                         }
                     }
-                    .padding(.horizontal, 6).padding(.vertical, 4)
+                    .font(.system(size: 12, weight: .medium))
+                    .foregroundStyle(Theme.secondaryText)
+                    .padding(.horizontal, 8)
+                    .frame(height: 26)
                     .contentShape(Rectangle())
                 }
                 .buttonStyle(HoverButtonStyle())
@@ -92,41 +105,49 @@ private struct TaskDetailContent: View {
             Spacer()
             headerButton("chevron.up", help: "Previous task (↑ / K)") { model.moveDetail(-1) }
             headerButton("chevron.down", help: "Next task (↓ / J)") { model.moveDetail(1) }
+            Spacer().frame(width: 10)
             Menu {
                 TaskMenuItems(task: task)
             } label: {
-                Image(systemName: "ellipsis").frame(width: 28, height: 26)
+                Image(systemName: "ellipsis").font(Fonts.body).frame(width: 28, height: 26)
             }
             .menuStyle(.borderlessButton)
             .menuIndicator(.hidden)
+            .tint(Theme.tertiaryText)
             .fixedSize()
             .pointerStyle(.link)
             .help("More actions")
             headerButton("xmark", help: "Close (Esc)") { model.detailTaskID = nil }
         }
         // The project button's icon lines up with the content column below.
-        .padding(.leading, 22).padding(.trailing, 10).padding(.vertical, 8)
+        .padding(.leading, Self.inset - 8).padding(.trailing, 10)
+        .frame(height: Self.headerHeight)
     }
+
+    static let headerHeight: CGFloat = 40
+
+    /// Horizontal padding of the panel's content.
+    static let inset: CGFloat = 24
+    /// The panel's grid: checkboxes and icons are centered in a column this wide at the content's
+    /// leading edge, text starts `columnGap` after it, and row pills reach `pillInset` past it.
+    static let column: CGFloat = 20
+    static let columnGap: CGFloat = 10
+    static let pillInset: CGFloat = 8
 
     private var sectionName: String? {
         guard let sid = task.sectionId else { return nil }
         return store.sections(in: task.projectId).first { $0.id == sid }?.name
     }
 
-    private func projectIcon(_ p: Project) -> some View {
-        Image(systemName: p.isInbox ? "tray" : "number")
-            .foregroundStyle(p.isInbox ? Color(hex: 0x246FE0) : Palette.color(p.color))
-    }
-
     private func headerButton(_ icon: String, help: String, action: @escaping () -> Void) -> some View {
         Button(action: action) {
             Image(systemName: icon)
-                .font(.system(size: 13, weight: .medium))
+                .font(.system(size: 12, weight: .semibold))
                 .frame(width: 28, height: 26)
                 .contentShape(Rectangle())
         }
         .buttonStyle(HoverButtonStyle())
-        .foregroundStyle(.secondary)
+        .foregroundStyle(Theme.tertiaryText)
         .help(help)
     }
 
@@ -144,65 +165,57 @@ private struct TaskDetailContent: View {
         VStack(alignment: .leading, spacing: 0) {
             if let pid = task.parentId, let parent = store.task(pid) {
                 Button { model.detailTaskID = parent.id } label: {
-                    HStack(spacing: 4) {
-                        Image(systemName: "arrow.turn.left.up")
+                    HStack(spacing: 5) {
+                        Image(systemName: "arrow.turn.left.up").font(Fonts.smallIcon)
                         Text(String(RichText.render(parent.content).characters)).lineLimit(1)
                     }
-                    .font(.system(size: 12))
-                    .foregroundStyle(.secondary)
+                    .font(Fonts.meta)
+                    .foregroundStyle(Theme.secondaryText)
                 }
                 .buttonStyle(.plain)
                 .pointerStyle(.link)
+                .help("Open the parent task")
                 .padding(.bottom, 10)
             }
-            HStack(alignment: .top, spacing: 12) {
-                CheckCircle(priority: task.priority, completed: task.isCompleted, size: 22) { model.setCompleted(task.id, !task.isCompleted) }
-                    .padding(.top, 3)
+            HStack(alignment: .top, spacing: Self.columnGap) {
+                CheckCircle(priority: task.priority, completed: task.isCompleted, size: Self.column) {
+                    model.setCompleted(task.id, !task.isCompleted)
+                }
+                .frame(width: Self.column, height: 24)
                 DetailTextFields(taskID: task.id, content: task.content, description: task.description,
                                  isCompleted: task.isCompleted, focus: $focus)
                     .id(task.id)
             }
-            .padding(.bottom, 14)
-            Divider()
+            .padding(.bottom, 12)
             attributes
-            subtasks.padding(.top, 18)
+            subtasks.padding(.top, 20)
         }
     }
 
-    /// Project, date, priority and labels as Todoist-style list rows.
+    /// Date, priority and labels as rows on the panel's grid. The project is the header button.
     private var attributes: some View {
         VStack(alignment: .leading, spacing: 0) {
-            if let p = store.project(task.projectId) {
-                attributeRow(popover: popoverBinding(.move)) {
-                    moveFromHeader = false
-                    model.popover = .move
-                } label: {
-                    projectIcon(p).frame(width: 20)
-                    Text(p.name)
-                    if let s = sectionName { Text("/ \(s)").foregroundStyle(.secondary) }
-                } popoverContent: { movePicker }
-            }
-            Divider()
             attributeRow(popover: popoverBinding(.date)) { model.popover = .date } label: {
-                Image(systemName: "calendar").frame(width: 20)
-                    .foregroundStyle(task.due?.chipColor ?? .secondary)
+                Image(systemName: "calendar")
+                    .foregroundStyle(task.due?.chipColor ?? Theme.tertiaryText)
+                    .frame(width: Self.column)
                 if let due = task.due {
                     Text(due.displayString()).foregroundStyle(due.chipColor)
                     if let rule = task.recurrence {
                         SwiftUI.Label(Recurrence.summary(rule), systemImage: "repeat")
-                            .font(.system(size: 11))
-                            .foregroundStyle(.secondary)
+                            .font(Fonts.meta)
+                            .foregroundStyle(Theme.secondaryText)
                     }
                     Spacer()
                     Button { store.updateTask(task.id) { $0.due = nil } } label: {
-                        Image(systemName: "xmark").font(.system(size: 10, weight: .bold))
-                            .frame(width: 20, height: 20).contentShape(Rectangle())
+                        Image(systemName: "xmark").font(.system(size: 11, weight: .bold))
+                            .frame(width: 22, height: 22).contentShape(Rectangle())
                     }
                     .buttonStyle(.plain)
-                    .foregroundStyle(.secondary)
+                    .foregroundStyle(Theme.tertiaryText)
                     .help("Remove date")
                 } else {
-                    Text("Date").foregroundStyle(.secondary)
+                    Text("Date").foregroundStyle(Theme.tertiaryText)
                 }
             } popoverContent: {
                 DueDatePicker(due: task.due) { due in
@@ -210,7 +223,6 @@ private struct TaskDetailContent: View {
                     model.popover = nil
                 }
             }
-            Divider()
             Menu {
                 ForEach(Priority.allCases, id: \.self) { p in
                     Button { model.setPriority(p, for: task.id) } label: {
@@ -218,40 +230,39 @@ private struct TaskDetailContent: View {
                     }
                 }
             } label: {
-                HStack(spacing: 10) {
-                    Image(systemName: task.priority == .p4 ? "flag" : "flag.fill").frame(width: 20)
-                        .foregroundStyle(task.priority == .p4 ? Color.secondary : task.priority.color)
+                HStack(spacing: Self.columnGap) {
+                    Image(systemName: task.priority == .p4 ? "flag" : "flag.fill")
+                        .foregroundStyle(task.priority == .p4 ? Theme.tertiaryText : task.priority.color)
+                        .frame(width: Self.column)
                     // Normal priority reads as an empty field, like "Date".
                     Text(task.priority == .p4 ? "Priority" : task.priority.title)
-                        .foregroundStyle(task.priority == .p4 ? .secondary : .primary)
+                        .foregroundStyle(task.priority == .p4 ? Theme.tertiaryText : Theme.text)
                     Spacer()
                 }
-                .frame(minHeight: 22)
-                .font(.system(size: 13))
-                .padding(.horizontal, 6).padding(.vertical, 9)
-                .contentShape(Rectangle())
+                .attributeRowStyle()
             }
             .menuStyle(.button)
             .buttonStyle(HoverButtonStyle())
             .menuIndicator(.hidden)
             .pointerStyle(.link)
-            Divider()
+            .padding(.horizontal, -Self.pillInset)
             attributeRow(popover: popoverBinding(.labels)) { model.popover = .labels } label: {
-                Image(systemName: "tag").frame(width: 20).foregroundStyle(.secondary)
+                Image(systemName: "tag").foregroundStyle(Theme.tertiaryText).frame(width: Self.column)
                 if task.labels.isEmpty {
-                    Text("Add labels").foregroundStyle(.secondary)
+                    Text("Labels").foregroundStyle(Theme.tertiaryText)
                 } else {
                     FlowRow(task.labels) { name in
-                        HStack(spacing: 3) {
+                        HStack(spacing: 4) {
                             Text(name)
                             Button {
                                 store.updateTask(task.id) { $0.labels.removeAll { $0 == name } }
-                            } label: { Image(systemName: "xmark").font(.system(size: 8, weight: .bold)) }
+                            } label: { Image(systemName: "xmark").font(.system(size: 9, weight: .bold)) }
                             .buttonStyle(.plain)
+                            .help("Remove label")
                         }
-                        .font(.system(size: 12))
-                        .padding(.horizontal, 7).padding(.vertical, 3)
-                        .background(Capsule().fill(labelColor(name).opacity(0.18)))
+                        .font(Fonts.meta)
+                        .padding(.horizontal, 8).padding(.vertical, 3)
+                        .background(Capsule().fill(labelColor(name).opacity(0.15)))
                         .foregroundStyle(labelColor(name))
                     }
                 }
@@ -261,9 +272,7 @@ private struct TaskDetailContent: View {
                     set: { new in store.updateTask(task.id) { $0.labels = new } }))
                 .environment(store)
             }
-            Divider()
         }
-        .padding(.top, 6)
     }
 
     private func attributeRow<Label: View, Pop: View>(
@@ -271,17 +280,14 @@ private struct TaskDetailContent: View {
         @ViewBuilder label: () -> Label, @ViewBuilder popoverContent: @escaping () -> Pop
     ) -> some View {
         Button(action: action) {
-            HStack(spacing: 10) {
+            HStack(spacing: Self.columnGap) {
                 label()
             }
-            // One height for every row, whether it holds text, a clear button or label chips.
-            .frame(maxWidth: .infinity, minHeight: 22, alignment: .leading)
-            .font(.system(size: 13))
-            .padding(.horizontal, 6).padding(.vertical, 9)
-            .contentShape(Rectangle())
+            .attributeRowStyle()
         }
         .buttonStyle(HoverButtonStyle())
         .popover(isPresented: popover, arrowEdge: .bottom, content: popoverContent)
+        .padding(.horizontal, -Self.pillInset)
     }
 
     private var subtasks: some View {
@@ -289,12 +295,14 @@ private struct TaskDetailContent: View {
         let done = subs.filter(\.isCompleted).count
         return VStack(alignment: .leading, spacing: 0) {
             if !subs.isEmpty {
-                HStack(spacing: 6) {
-                    Text("Sub-tasks").font(.system(size: 13, weight: .semibold))
-                    Text("\(done)/\(subs.count)").font(.system(size: 12)).foregroundStyle(.secondary)
+                HStack(spacing: 8) {
+                    Text("Sub-tasks").font(Fonts.bodySemibold).foregroundStyle(Theme.text)
+                    Text("\(done)/\(subs.count)")
+                        .font(Fonts.meta).monospacedDigit()
+                        .foregroundStyle(done == subs.count ? Theme.today : Theme.tertiaryText)
                 }
                 .padding(.bottom, 6)
-                Hairline()
+                Hairline().padding(.bottom, 4)
             }
             let drag = model.drag
             let gap = subtaskGap(subs.map(\.id), target: drag.inPanel ? drag.target : nil)
@@ -306,8 +314,14 @@ private struct TaskDetailContent: View {
             slot(open: gap == .some(nil), drag.rowHeight)
             if addingSubtask {
                 HStack(spacing: 8) {
-                    TextField("Sub-task name", text: $newSubtask)
-                        .textFieldStyle(.roundedBorder)
+                    TextField("Sub-task name", text: $newSubtask,
+                              prompt: Text("Sub-task name").foregroundStyle(Theme.tertiaryText))
+                        .textFieldStyle(.plain)
+                        .font(Fonts.body)
+                        .foregroundStyle(Theme.text)
+                        .padding(.horizontal, 10).padding(.vertical, 6)
+                        .background(RoundedRectangle(cornerRadius: 7, style: .continuous).fill(Theme.field))
+                        .overlay(RoundedRectangle(cornerRadius: 7, style: .continuous).strokeBorder(Theme.accent.opacity(0.7)))
                         .focused($focus, equals: .subtask)
                         .onSubmit(addSubtask)
                         .onExitCommand { addingSubtask = false }
@@ -315,17 +329,16 @@ private struct TaskDetailContent: View {
                         .disabled(newSubtask.trimmingCharacters(in: .whitespaces).isEmpty)
                     Button("Cancel") { addingSubtask = false }.buttonStyle(SoftButtonStyle())
                 }
-                .padding(.vertical, 8)
+                .padding(.vertical, 6)
                 .onAppear { focus = .subtask }
             } else {
-                AddTaskRow(title: "Add sub-task") { addingSubtask = true }
-                    .padding(.leading, -(Theme.gutter + Theme.rowInset))
+                AddTaskRow(title: "Add sub-task", leading: -Self.pillInset, column: Self.column) { addingSubtask = true }
             }
         }
     }
 
     private func slot(open: Bool, _ height: CGFloat) -> some View {
-        DropSlot(open: open, depth: 0, height: height, inset: -4)
+        DropSlot(open: open, depth: 0, height: height, inset: -Self.pillInset)
     }
 
     /// The sub-task the drop slot opens before (`.some(nil)`: after the last one); nil when closed.
@@ -350,12 +363,12 @@ private struct TaskDetailContent: View {
     }
 
     private func labelColor(_ name: String) -> Color {
-        store.labels.first { $0.name == name }.map { Palette.color($0.color) } ?? .secondary
+        store.labels.first { $0.name == name }.map { Palette.color($0.color) } ?? Theme.secondaryText
     }
 }
 
-/// A sub-task in the task panel. Open sub-tasks show Todoist's drag handle on hover and can be
-/// dragged among their siblings.
+/// A sub-task in the task panel, on the panel's grid. Open sub-tasks show the drag handle on hover
+/// and can be dragged among their siblings.
 private struct SubtaskRow: View {
     @Environment(AppModel.self) private var model
     @Environment(TodoStore.self) private var store
@@ -368,35 +381,36 @@ private struct SubtaskRow: View {
         HStack(alignment: .top, spacing: 0) {
             GripDots()
                 .opacity(hovering && !s.isCompleted ? 1 : 0)
-                .frame(width: Theme.grip, height: 32)
-            VStack(spacing: 0) {
-                HStack(alignment: .top, spacing: 10) {
-                    CheckCircle(priority: s.priority, completed: s.isCompleted) { model.setCompleted(s.id, !s.isCompleted) }
-                    VStack(alignment: .leading, spacing: 2) {
-                        Text(RichText.render(s.content))
-                            .font(.system(size: 13))
-                            .strikethrough(s.isCompleted)
-                            .foregroundStyle(s.isCompleted ? .secondary : .primary)
-                            .richTextLinks(tint: s.isCompleted ? .secondary : .primary)
-                        let progress = store.subtaskProgress(of: s.id)
-                        TaskMetaRow(task: s, labelColors: model.labelColorKeys(s.labels),
-                                    subtaskTotal: progress.total, subtaskDone: progress.done)
-                    }
-                    Spacer()
+                .frame(width: Theme.grip, height: 28)
+            HStack(alignment: .top, spacing: TaskDetailContent.columnGap) {
+                CheckCircle(priority: s.priority, completed: s.isCompleted) { model.setCompleted(s.id, !s.isCompleted) }
+                    .frame(width: TaskDetailContent.column, height: 18)
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(RichText.render(s.content))
+                        .font(Fonts.body)
+                        .strikethrough(s.isCompleted)
+                        .foregroundStyle(s.isCompleted ? Theme.tertiaryText : Theme.text)
+                        .richTextLinks(tint: s.isCompleted ? Theme.tertiaryText : Theme.text)
+                        .frame(minHeight: 18)
+                    let progress = store.subtaskProgress(of: s.id)
+                    TaskMetaRow(task: s, labelColors: model.labelColorKeys(s.labels),
+                                subtaskTotal: progress.total, subtaskDone: progress.done)
                 }
-                .padding(.vertical, 7)
-                Hairline()
+                Spacer()
             }
+            .padding(.vertical, 5)
+            .padding(.horizontal, TaskDetailContent.pillInset)
+            .background(RoundedRectangle(cornerRadius: Theme.rowRadius, style: .continuous).fill(hovering ? Theme.hover : .clear))
         }
         .contentShape(Rectangle())
         .pointerStyle(.link)
-        .onHover { hovering = $0 }
+        .onHover { h in withAnimation(Theme.hoverAnimation) { hovering = h } }
         .onTapGesture { model.detailTaskID = s.id }
         .contextMenu { TaskMenuItems(task: s) }
         .onGeometryChange(for: CGFloat.self, of: { $0.size.height }) { [height] h in height.value = h }
         .modifier(SubtaskDragModifier(model: model, task: s, height: height))
         .onDrop(of: [.text], delegate: SubtaskDropDelegate(model: model, task: s, height: height))
-        .padding(.leading, -Theme.grip)
+        .padding(.leading, -(Theme.grip + TaskDetailContent.pillInset))
     }
 }
 
@@ -420,7 +434,7 @@ private struct SubtaskDragModifier: ViewModifier {
     }
 }
 
-/// Plain button with a light rounded hover background (task view header and rows).
+/// Plain button with a rounded hover pill (task panel header and rows).
 struct HoverButtonStyle: ButtonStyle {
     func makeBody(configuration: Configuration) -> some View {
         HoverBody(configuration: configuration)
@@ -431,11 +445,22 @@ struct HoverButtonStyle: ButtonStyle {
         @State private var hovering = false
         var body: some View {
             configuration.label
-                .background(RoundedRectangle(cornerRadius: 5)
-                    .fill(Color.primary.opacity(configuration.isPressed ? 0.12 : hovering ? 0.06 : 0)))
+                .background(RoundedRectangle(cornerRadius: 7, style: .continuous)
+                    .fill(configuration.isPressed ? Theme.selection : hovering ? Theme.hover : .clear))
                 .pointerStyle(.link)
-                .onHover { hovering = $0 }
+                .onHover { h in withAnimation(Theme.hoverAnimation) { hovering = h } }
         }
+    }
+}
+
+private extension View {
+    /// An attribute row of the task panel: 32 pt tall whatever it holds (text, a clear button or
+    /// label chips), with its pill reaching `pillInset` past the grid.
+    func attributeRowStyle() -> some View {
+        frame(maxWidth: .infinity, minHeight: 32, alignment: .leading)
+            .font(Fonts.body)
+            .padding(.horizontal, TaskDetailContent.pillInset)
+            .contentShape(Rectangle())
     }
 }
 
@@ -481,20 +506,21 @@ private struct DetailTextFields: View {
         VStack(alignment: .leading, spacing: 8) {
             TextField("Task name", text: $title, axis: .vertical)
                 .textFieldStyle(.plain)
-                .font(.system(size: 20, weight: .bold))
+                .font(Fonts.panelTitle)
+                .foregroundStyle(isCompleted ? Theme.tertiaryText : Theme.text)
                 .strikethrough(isCompleted)
+                .frame(minHeight: 24)
                 .focused(focus, equals: .title)
                 .onSubmit { commit(); focus.wrappedValue = nil }
                 .onExitCommand { commit(); focus.wrappedValue = nil }
-            HStack(alignment: .top, spacing: 6) {
-                Image(systemName: "text.alignleft").foregroundStyle(.secondary).font(.system(size: 12)).padding(.top, 2)
-                TextField("Description", text: $details, axis: .vertical)
-                    .textFieldStyle(.plain)
-                    .font(.system(size: 13))
-                    .lineLimit(1...20)
-                    .focused(focus, equals: .details)
-                    .onExitCommand { commit(); focus.wrappedValue = nil }
-            }
+            TextField("Description", text: $details,
+                      prompt: Text("Add a description").foregroundStyle(Theme.tertiaryText), axis: .vertical)
+                .textFieldStyle(.plain)
+                .font(Fonts.body)
+                .foregroundStyle(Theme.secondaryText)
+                .lineLimit(1...20)
+                .focused(focus, equals: .details)
+                .onExitCommand { commit(); focus.wrappedValue = nil }
         }
         .onChange(of: title) { scheduleCommit() }
         .onChange(of: details) { scheduleCommit() }

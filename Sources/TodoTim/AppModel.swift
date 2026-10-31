@@ -49,6 +49,9 @@ final class AppModel {
         }
     }
 
+    /// Whether the sidebar is shown (bound to the split view).
+    var columnVisibility: NavigationSplitViewVisibility = .all
+
     var selectedTaskID: EntityID? {
         didSet {
             guard selectedTaskID != oldValue else { return }
@@ -214,7 +217,7 @@ final class AppModel {
         }
         func isBoundary(_ item: DisplayItem) -> Bool {
             switch item {
-            case .sectionHeader, .groupHeader, .projectHeader, .labelHeader: true
+            case .sectionHeader, .groupHeader: true
             default: false
             }
         }
