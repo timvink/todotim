@@ -1,10 +1,11 @@
 import Foundation
 import Observation
 
-/// Connection settings for a Nextcloud (or other CalDAV) server. Password lives in the Keychain.
+/// Connection settings for a CalDAV server. Password lives in the Keychain.
 public struct SyncSettings: Codable, Equatable, Sendable {
-    /// The DAV root, e.g. "https://cloud.example.com/remote.php/dav/" (an old-style files URL,
-    /// ".../remote.php/dav/files/USER/", also works). Calendars live under `calendars/<username>/`.
+    /// The DAV root, e.g. "https://cloud.example.com/remote.php/dav/" for Nextcloud (an old-style
+    /// files URL, ".../remote.php/dav/files/USER/", also works) or "https://dav.example.com/". The
+    /// calendar home is found by discovery (`CalDAVDiscovery`), else `calendars/<username>/`.
     public var serverURL: String
     public var username: String
     public var enabled: Bool
@@ -68,7 +69,9 @@ public final class SyncController {
 
     public static let settingsKey = "syncSettings"
 
-    typealias ServerFactory = (SyncSettings, String) throws -> CalDAVServer
+    /// Makes the server for settings and password, at the calendar home from the sync state (nil:
+    /// discover it).
+    typealias ServerFactory = (SyncSettings, String, CalendarHome?) async throws -> CalDAVServer
 
     @ObservationIgnored private let store: TodoStore
     @ObservationIgnored private let defaults: UserDefaults
@@ -111,10 +114,8 @@ public final class SyncController {
         self.defaults = defaults
         self.credentials = credentials
         self.stateURL = stateURL
-        self.makeServer = makeServer ?? { s, password in
-            let dav = try WebDAVClient(serverURL: try CalDAVClient.davRoot(s.serverURL).absoluteString,
-                                       username: s.username, password: password)
-            return CalDAVClient(dav: dav, username: s.username)
+        self.makeServer = makeServer ?? { s, password, home in
+            try await CalDAVClient.connect(serverURL: s.serverURL, username: s.username, password: password, cached: home)
         }
         if let data = defaults.data(forKey: Self.settingsKey),
            let saved = try? JSONDecoder().decode(SyncSettings.self, from: data) {
@@ -145,13 +146,13 @@ public final class SyncController {
     /// Current password, from memory or the Keychain (for the settings form).
     public func storedPassword() -> String? { settings.credentialAccount.flatMap(password(for:)) }
 
-    /// Checks the server URL, credentials and access to the calendars. Returns nil on success or
-    /// an error message.
+    /// Checks the server URL, credentials and access to the calendars (discovering the calendar
+    /// home). Returns nil on success or an error message.
     public func testConnection(_ settings: SyncSettings, password: String) async -> String? {
         guard !settings.username.trimmingCharacters(in: .whitespaces).isEmpty else { return "Enter a username" }
         guard !password.isEmpty else { return "Enter an app password" }
         do {
-            _ = try await makeServer(settings, password).calendars()
+            _ = try await makeServer(settings, password, nil).calendars()
             return nil
         } catch {
             return Self.message(for: error)
@@ -235,12 +236,24 @@ public final class SyncController {
             return
         }
         status = .syncing
-        let state = loadState(account: stateAccount)
+        var state = loadState(account: stateAccount)
         let snapshot = store.db
         do {
-            let server = try makeServer(settings, password)
-            let result = try await CalDAVSync.sync(local: snapshot, state: state, server: server, shareWith: shareWith,
+            // The calendar home from the state, else discovery: an idle sync stays one request.
+            let cached = state.home
+            var server = try await connect(settings, password, cached: cached)
+            state = adopt(server.calendarHome, in: state, settings: settings)
+            var result: SyncResult
+            do {
+                result = try await CalDAVSync.sync(local: snapshot, state: state, server: server, shareWith: shareWith,
                                                    previous: lastSynced)
+            } catch let error where server.calendarHome == cached && Self.isHomeUnavailable(error, home: server.home) {
+                // The home found earlier is gone or refused (404, 403): discover it again, once.
+                server = try await makeServer(settings, password, nil)
+                state = adopt(server.calendarHome, in: state, settings: settings)
+                result = try await CalDAVSync.sync(local: snapshot, state: state, server: server, shareWith: shareWith,
+                                                   previous: lastSynced)
+            }
             // Settings changed mid-sync: the result belongs to another server or user.
             guard self.settings == settings else { return }
             let latest = store.db
@@ -262,6 +275,46 @@ public final class SyncController {
             status = .idle(lastSync: lastSync)
         } catch {
             status = .error(Self.message(for: error))
+        }
+    }
+
+    /// The server at the calendar home `cached`, or at the one discovery finds when there is none
+    /// or it cannot be used (for example a state file from an older version).
+    private func connect(_ settings: SyncSettings, _ password: String, cached: CalendarHome?) async throws -> CalDAVServer {
+        if let cached {
+            do {
+                return try await makeServer(settings, password, cached)
+            } catch SyncError.invalidPath, SyncError.otherServer {
+                NSLog("TodoTim: the saved calendar home cannot be used; discovering it again")
+            }
+        }
+        return try await makeServer(settings, password, nil)
+    }
+
+    /// `state` for syncing with the calendar home `home`, which it remembers (in memory at once,
+    /// so a failed sync does not discover again). When the state's paths belong to another home,
+    /// a fresh state: a merge from scratch matches lists and tasks by id and deletes nothing.
+    private func adopt(_ home: CalendarHome, in state: CalDAVState, settings: SyncSettings) -> CalDAVState {
+        var adopted = state
+        let previousHome = state.home?.url
+            ?? (try? CalDAVClient.davRoot(settings.serverURL)).flatMap { CalDAVDiscovery.legacyHome(root: $0, username: settings.username) }
+        let isEmpty = state.calendars.isEmpty && state.resources.isEmpty && state.synced.isEmpty
+        if !isEmpty && previousHome != home.url {
+            NSLog("TodoTim: the calendar home moved; syncing from scratch")
+            adopted = CalDAVState(account: state.account)
+            lastSynced = nil
+        }
+        adopted.home = home
+        if self.state?.account == adopted.account { self.state = adopted }
+        return adopted
+    }
+
+    /// Whether `error` means that the calendar home `home` is gone or refused (404, 403).
+    nonisolated static func isHomeUnavailable(_ error: Error, home: String) -> Bool {
+        switch error as? SyncError {
+        case .notFound(let path)?, .forbidden(let path)?: return path == home
+        case .baseNotFound?: return home.isEmpty
+        default: return false
         }
     }
 

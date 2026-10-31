@@ -13,7 +13,7 @@ import Foundation
 ///     username = "tim"
 ///     # Prints the password; run once per launch and kept in memory (the Keychain is not used).
 ///     password_command = "rbw get 'Nextcloud app password'"
-///     # Optional: Nextcloud users that new lists are shared with (read-write).
+///     # Optional, Nextcloud only: users that new lists are shared with (read-write).
 ///     share_with = ["tasks-agent"]
 public struct AppConfig: Equatable, Sendable {
     public static let defaultRepository = "https://github.com/timvink/todotim"

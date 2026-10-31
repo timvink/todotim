@@ -5,6 +5,10 @@ import Foundation
 public struct CalDAVState: Codable, Equatable, Sendable {
     /// "<DAV root>|<username>". State for another account is discarded.
     public var account: String
+    /// The calendar home the paths below belong to, found by discovery and kept so the next sync
+    /// needs no discovery. nil in a new state, and in one saved before discovery existed (whose
+    /// paths belong to `calendars/<username>/` below the DAV root).
+    public var home: CalendarHome?
     /// Calendars by path, with the sync token up to which their tasks are in `resources`.
     var calendars: [String: RemoteCalendar] = [:]
     /// Calendar objects by path.
@@ -18,6 +22,9 @@ public struct CalDAVState: Codable, Equatable, Sendable {
     /// overrides), by path, with the task id they had. Their tasks are left as they are on both
     /// sides; they are not taken for deleted.
     var unreadable: [String: EntityID] = [:]
+    /// Calendar properties the server refused to store (Xandikos has no dead properties). They
+    /// are not sent again; sections and labels then travel with the tasks only. nil: none.
+    var refusedProperties: Set<CalendarProperty>?
 
     public init(account: String) { self.account = account }
 
@@ -52,7 +59,8 @@ public struct SyncResult: Equatable, Sendable {
 /// every write conditional on the ETag it was based on. A 412 leaves that entity for the next
 /// pass, which re-fetches it and merges again.
 enum CalDAVSync {
-    /// URI of the inbox calendar. Not "inbox": that is the CalDAV scheduling inbox on Nextcloud.
+    /// URI of the inbox calendar. Not "inbox": SabreDAV servers (Nextcloud, Baïkal) keep the CalDAV
+    /// scheduling inbox there.
     static let inboxURI = "todotim-inbox"
 
     static func sync(local: Database, state: CalDAVState, server: CalDAVServer, shareWith: [String] = [],
@@ -74,6 +82,18 @@ enum CalDAVSync {
         // Keep what was done; the next sync tries the rest again.
         result.warnings.append(SyncError.tooManyConflicts.errorDescription!)
         return result
+    }
+
+    /// Shown once, when the server first refuses to store some list properties.
+    static func refusedPropertiesWarning(_ refused: Set<CalendarProperty>) -> String {
+        let names: [(CalendarProperty, String)] = [(.sections, "sections"), (.labels, "labels"), (.color, "list colors"),
+                                                   (.order, "list order")]
+        let list = names.filter { refused.contains($0.0) }.map(\.1).joined(separator: ", ")
+        var message = "The server does not store some list settings (\(list)); TodoTim keeps them on this device."
+        if refused.contains(.sections) || refused.contains(.labels) {
+            message += " Sections and labels still sync through the tasks that use them."
+        }
+        return message
     }
 }
 
@@ -201,7 +221,8 @@ private struct Pass {
             for path in changes.removed { resources[path] = nil }
             for r in changes.changed { resources[r.path] = .init(etag: r.etag, ics: r.ics) }
             if !changes.changed.isEmpty || !changes.removed.isEmpty || changes.isFull { remoteChanged = true }
-            cal.syncToken = changes.syncToken
+            // Without a token from the REPORT (calendar-query), the listing's (a getctag) is the base.
+            cal.syncToken = changes.syncToken ?? cal.syncToken
             calendars[cal.path] = cal
         }
         let listedPaths = Set(listed.map(\.path))
@@ -384,13 +405,15 @@ private struct Pass {
     private mutating func write(remote: View) async throws {
         let home = server.home
         func calendarPath(_ projectId: EntityID) -> String {
-            remote.calendarOf[projectId]?.path ?? "\(home)/\(projectId == TodoStore.inboxID ? CalDAVSync.inboxURI : projectId)"
+            remote.calendarOf[projectId]?.path ?? davPath(home, projectId == TodoStore.inboxID ? CalDAVSync.inboxURI : projectId)
         }
 
         // 1. Lists: create, then update properties. A list that cannot be created is reported and
         //    its tasks wait; the other lists still sync.
         let projects = merged.projects.values.sorted { $0.id < $1.id }
         var unavailable = Set<EntityID>()
+        /// Properties the server refused for the first time in this pass.
+        var refusedNow = Set<CalendarProperty>()
         for p in projects where !p.deleted {
             let path = calendarPath(p.id)
             var props = calendarProperties(p)
@@ -403,8 +426,9 @@ private struct Pass {
                 if p.color == read?.color { props[.color] = nil }
                 if p.isInbox || p.order == read?.order { props[.order] = nil }
             } else {
+                let leftOut: Set<CalendarProperty>
                 do {
-                    try await server.createCalendar(path, name: props[.name]!!, color: props[.color]!!, order: props[.order]!!)
+                    leftOut = try await server.createCalendar(path, name: props[.name]!!, color: props[.color]!!, order: props[.order]!!)
                 } catch let e as SyncError where e.isPerResource {
                     warnings.append(SyncController.message(for: e))
                     unavailable.insert(p.id)
@@ -412,7 +436,8 @@ private struct Pass {
                     continue
                 }
                 writes += 1
-                cal = RemoteCalendar(path: path, name: props[.name]!, color: props[.color]!, order: props[.order]!)
+                cal = RemoteCalendar(path: path, name: props[.name]!, color: leftOut.contains(.color) ? nil : props[.color]!,
+                                     order: leftOut.contains(.order) ? nil : props[.order]!)
                 state.calendars[path] = cal
                 for user in shareWith {
                     do {
@@ -423,25 +448,32 @@ private struct Pass {
                     }
                 }
             }
+            let refused = state.refusedProperties ?? []
             props = props.filter { key, value in
+                if refused.contains(key) { return false }
                 switch key {
-                case .name: value != cal.name
-                case .color: value.flatMap(ProjectColor.key(hex:)) != cal.color.flatMap(ProjectColor.key(hex:))
-                case .order: value.flatMap(VTodo.finiteDouble) != cal.order.flatMap(VTodo.finiteDouble)
-                case .sections: value.flatMap(PropertyList.decode) != cal.sections.flatMap(PropertyList.decode)
-                case .labels: value.flatMap(PropertyList.decode) != cal.labels.flatMap(PropertyList.decode)
+                case .name: return value != cal.name
+                case .color: return value.flatMap(ProjectColor.key(hex:)) != cal.color.flatMap(ProjectColor.key(hex:))
+                case .order: return value.flatMap(VTodo.finiteDouble) != cal.order.flatMap(VTodo.finiteDouble)
+                case .sections: return value.flatMap(PropertyList.decode) != cal.sections.flatMap(PropertyList.decode)
+                case .labels: return value.flatMap(PropertyList.decode) != cal.labels.flatMap(PropertyList.decode)
                 }
             }
             if !props.isEmpty {
+                let newlyRefused: Set<CalendarProperty>
                 do {
-                    try await server.setProperties(path, props)
+                    newlyRefused = try await server.setProperties(path, props)
                 } catch let e as SyncError where e.isPerResource {
                     warnings.append(SyncController.message(for: e))
                     incomplete = true
                     continue
                 }
                 writes += 1
-                for (k, v) in props {
+                if !newlyRefused.isEmpty {
+                    state.refusedProperties = refused.union(newlyRefused)
+                    refusedNow.formUnion(newlyRefused)
+                }
+                for (k, v) in props where !newlyRefused.contains(k) {
                     switch k {
                     case .name: cal.name = v
                     case .color: cal.color = v
@@ -453,6 +485,7 @@ private struct Pass {
                 state.calendars[path] = cal
             }
         }
+        if !refusedNow.isEmpty { warnings.append(CalDAVSync.refusedPropertiesWarning(refusedNow)) }
 
         // 2. Tasks, a few at a time.
         let liveProjects = Set(merged.projects.values.filter { !$0.deleted }.map(\.id)).subtracting(unavailable)

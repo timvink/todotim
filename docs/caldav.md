@@ -1,28 +1,55 @@
 # CalDAV mapping
 
 TodoTim stores its data as CalDAV to-dos (VTODO, [RFC 5545](https://www.rfc-editor.org/rfc/rfc5545)) in the
-user's own Nextcloud calendars. Any CalDAV task client, the Nextcloud Tasks app and the tasks MCP server
-read and write the same objects, so this document is the contract between them. A client that follows it
-keeps TodoTim's projects, sections, labels, subtasks and order intact. A client that ignores the TodoTim
+user's own calendars on a CalDAV server ([RFC 4791](https://www.rfc-editor.org/rfc/rfc4791)), such as
+Nextcloud or Radicale. Any CalDAV task client, the Nextcloud Tasks app and the tasks MCP server read and
+write the same objects, so this document is the contract between them. A client that follows it keeps
+TodoTim's projects, sections, labels, subtasks and order intact. A client that ignores the TodoTim
 properties still sees normal to-dos, and TodoTim keeps everything that client writes.
 
-Paths below are relative to the DAV root (`server_url`, for example
-`https://cloud.example.com/remote.php/dav/`). The calendar home is `calendars/<username>/`.
+## Calendar home
+
+`server_url` is the server's DAV root, for example `https://cloud.example.com/remote.php/dav/` (Nextcloud)
+or `https://dav.example.com/` (Radicale). TodoTim finds the user's calendar home as
+[RFC 6764](https://www.rfc-editor.org/rfc/rfc6764) (§6) and RFC 4791 (§6.2.1) describe:
+
+1. `PROPFIND` (Depth 0) of `{DAV:}current-user-principal` on the server URL. When that names no
+   principal, the same on `/.well-known/caldav` of the same origin. TodoTim follows redirects itself, one at
+   a time (at most 5) and as PROPFIND.
+2. `PROPFIND` (Depth 0) of `{urn:ietf:params:xml:ns:caldav}calendar-home-set` on that principal.
+
+When neither gives a home, the home is `calendars/<username>/` below the server URL: the SabreDAV layout of
+Nextcloud, ownCloud and Baïkal, and what TodoTim used before discovery. A wrong password (401) or a server
+error (5xx, 429) stops discovery instead. Examples of homes: `remote.php/dav/calendars/<user>/` (Nextcloud),
+`/<user>/` (Radicale), `/user/calendars/` (Xandikos).
+
+TodoTim keeps the home in `caldav-state.json`, so a sync needs no discovery requests. It discovers again
+when the home answers 404 or 403, and when the server URL or username changes. When the home changes, the
+next sync starts from scratch: it matches lists and tasks by id and deletes nothing.
+
+**Allowed root.** Discovery sends requests only to the server URL's origin (scheme, host and port). A
+principal, home or redirect on another origin, such as iCloud's `pNN-caldav.icloud.com` hosts or a redirect
+from https to http, is refused with an error that names it, and is not followed. Sync requests, redirects
+and hrefs must stay inside the server URL when the home is inside it (Nextcloud: `remote.php/dav/`), and
+otherwise inside the home itself (for example when `server_url` is a principal or a calendar). Below,
+`<home>` stands for the calendar home.
 
 ## Projects: calendars
 
 - A **project** is a calendar in the home whose `supported-calendar-component-set` is exactly `VTODO`.
-  TodoTim ignores calendars that allow VEVENT (for example "Personal"), subscriptions, calendars that
-  other users share (Nextcloud lists them as `<uri>_shared_by_<owner>`, with another
-  `{http://owncloud.org/ns}owner-principal`), and calendars that Nextcloud apps generate
-  (`app-generated--…`, such as Deck boards). It syncs only the user's own calendars.
+  TodoTim ignores calendars that allow VEVENT (for example "Personal"), subscriptions, the scheduling
+  inbox and outbox ([RFC 6638](https://www.rfc-editor.org/rfc/rfc6638), recognized by their
+  `resourcetype`, whatever their name), calendars that other users share (Nextcloud lists them as
+  `<uri>_shared_by_<owner>`, with an `{http://owncloud.org/ns}owner-principal` that is not the user's
+  principal), and calendars that Nextcloud apps generate (`app-generated--…`, such as Deck boards). It
+  syncs only the user's own calendars.
 - **Project id** = the calendar URI (the last path segment) when it is a valid id
   (`[A-Za-z0-9_-]{1,64}`). Otherwise the id is a name-based UUID (v5) derived from the URI, and TodoTim keeps
-  the mapping to the path. TodoTim creates a new project with MKCALENDAR at `calendars/<user>/<project id>/`,
-  with a VTODO-only component set.
+  the mapping to the path. TodoTim creates a new project with MKCALENDAR at `<home>/<project id>/`, with a
+  VTODO-only component set.
 - **Inbox**: the calendar with URI **`todotim-inbox`** (display name "Inbox"). Its internal id is `inbox`.
-  TodoTim creates it if it is missing. The URI cannot be `inbox`, because Nextcloud reserves
-  `calendars/<user>/inbox/` for its CalDAV scheduling inbox, which refuses MKCALENDAR.
+  TodoTim creates it if it is missing. The URI cannot be `inbox`, because SabreDAV servers (Nextcloud,
+  Baïkal) keep the CalDAV scheduling inbox at `<home>/inbox/`, which refuses MKCALENDAR.
 - Calendar properties:
 
   | Project | Property | Notes |
@@ -35,9 +62,17 @@ Paths below are relative to the DAV root (`server_url`, for example
 
 - MKCALENDAR keeps the display name, color, order and component set. Nextcloud silently drops custom (dead)
   properties sent with MKCALENDAR, so TodoTim sets `sections` and `labels` with a PROPPATCH right after it.
-- **Sharing**: with `share_with = ["tasks-agent"]` in `[sync]`, TodoTim shares each calendar it creates,
-  read-write, with every user in that list. It sends `POST <calendar path>` with Content-Type
-  `application/xml` and this body:
+  When a server refuses the MKCALENDAR (400, 403, 409, 415, 422 or 424), TodoTim tries once more with only
+  the display name and the component set, and sets the color and order with PROPPATCH.
+- **Servers without dead properties.** A server may refuse to store the color, order, `sections` or
+  `labels` (Xandikos refuses `sections` and `labels` with 403). TodoTim then sends the rest again without
+  them (servers that apply a PROPPATCH all or nothing answer 424 for the rest), remembers the refused
+  properties in `caldav-state.json`, stops sending them, and shows a warning once. Sections then come from
+  the tasks' `X-TODOTIM-SECTION` parameters and labels from `CATEGORIES`, as for a calendar shared with
+  you: a section without tasks, and label colors and order, stay on the device that made them.
+- **Sharing** (Nextcloud and ownCloud only): with `share_with = ["tasks-agent"]` in `[sync]`, TodoTim
+  shares each calendar it creates, read-write, with every user in that list. It sends
+  `POST <calendar path>` with Content-Type `application/xml` and this body:
 
   ```xml
   <o:share xmlns:d="DAV:" xmlns:o="http://owncloud.org/ns">
@@ -45,7 +80,8 @@ Paths below are relative to the DAV root (`server_url`, for example
   </o:share>
   ```
 
-  This is best-effort: a failure shows as a sync warning and does not stop the sync.
+  This is best-effort: a failure, including a server without this extension, shows as a sync warning
+  and does not stop the sync.
 - **Deleting** a project deletes its calendar (DELETE on the collection; Nextcloud moves it to its trash
   bin). A calendar that disappears from the server deletes the project in TodoTim. The inbox is created
   again. A calendar still in Nextcloud's trash bin blocks MKCALENDAR at its path: TodoTim reports it and
@@ -79,8 +115,8 @@ Paths below are relative to the DAV root (`server_url`, for example
 ## Tasks: VTODO objects
 
 - **Task id** = `UID` when it is a valid id. Otherwise the id is a name-based UUID derived from the UID, and
-  TodoTim keeps the original UID and path. TodoTim creates a new task with `PUT
-  calendars/<user>/<calendar>/<uid>.ics` and `If-None-Match: *`, where UID = the task id.
+  TodoTim keeps the original UID and path. TodoTim creates a new task with `PUT <home>/<calendar>/<uid>.ics`
+  and `If-None-Match: *`, where UID = the task id.
 - Objects are read from the **master** VTODO (the one without `RECURRENCE-ID`). An object without a UID,
   without a master (only overrides), or that cannot be parsed is skipped and never written. If a task's
   object becomes unreadable, TodoTim keeps the task as it was and does not take it for deleted. It writes
@@ -124,11 +160,17 @@ Paths below are relative to the DAV root (`server_url`, for example
 ## Sync protocol
 
 1. **Listing**: one `PROPFIND` (Depth 1) on the calendar home, for `resourcetype`,
-   `supported-calendar-component-set`, `sync-token`, `owner-principal` and the properties above.
+   `supported-calendar-component-set`, `sync-token`, `{http://calendarserver.org/ns/}getctag`,
+   `owner-principal` and the properties above.
 2. **Changes**: for each calendar whose `sync-token` differs from the one TodoTim stored, a
    `sync-collection` REPORT ([RFC 6578](https://www.rfc-editor.org/rfc/rfc6578)) since the stored token,
    asking for `getetag` and `calendar-data`. TodoTim follows truncated results (507) page by page, and a
-   rejected token (403/409) falls back to a full listing. An idle sync is the single PROPFIND.
+   rejected token (403/409) falls back to a full listing. Objects reported without `calendar-data`
+   (Xandikos leaves it out) are fetched with `calendar-multiget` (RFC 4791 §7.9), 100 at a time; an object
+   the server then cannot return fails the sync instead of looking deleted. A calendar without a
+   `sync-token` (RFC 6578 is optional) is compared by its `getctag`, and read whole with a `calendar-query`
+   REPORT when that changes; so is a calendar whose server refuses sync-collection. An idle sync is the
+   single PROPFIND.
 3. **Merge**: three-way per entity: the local version, the server's, and the base (what the previous sync
    saw: the server objects and calendar properties, and each task as the local database held it; TodoTim
    keeps it in `caldav-state.json` next to `db.json`). A side that did not change since the
@@ -142,13 +184,23 @@ Paths below are relative to the DAV root (`server_url`, for example
    to move a task to another list, `DELETE` with `If-Match`, then calendar DELETEs. A 412 skips that write.
    Another pass then fetches the newer version and merges again (at most 3 passes). A local tombstone stays
    until the server delete succeeds. A list is deleted only after every task that moves out of it has moved.
-   A sync with refused writes stays incomplete, and the next sync retries it.
+   A sync with refused writes stays incomplete, and the next sync retries it. TodoTim writes up to 4 tasks at
+   a time; a request answered 423 (Locked, which Xandikos sends while it stores another write) is sent again
+   up to 4 times, with backoff.
+
+## Servers
+
+The mapping uses only standard CalDAV, plus properties that other servers store or refuse. TodoTim was
+developed against Nextcloud; its live sync test (`LiveCalDAVTests`) also passes against Radicale 3.9 and
+Xandikos 0.4.10. Servers that keep the calendar home on another host, such as iCloud, are refused (see
+[Calendar home](#calendar-home)); Google Calendar's CalDAV has no VTODO.
 
 ## Limits (server data is untrusted)
 
-The client accepts only https (http for localhost only), no redirects outside the DAV root, and responses
-up to 32 MB. One calendar object may be at most 1 MB, 20,000 lines, 8 nesting levels and 1,000 components,
-and the parser refuses anything malformed. XML with a DTD or entities is refused. Hrefs must be direct
+The client accepts only https (http for localhost only), no requests, redirects or hrefs outside the allowed
+root (see [Calendar home](#calendar-home)), and responses up to 32 MB (1 MB during discovery). One calendar
+object may be at most 1 MB, 20,000 lines, 8 nesting levels and 1,000 components, and the parser refuses
+anything malformed. XML with a DTD or entities is refused. Hrefs must be direct
 children of the home or the calendar. Ids must be valid or are derived. Text is clipped (title 10,000
 characters, description 100,000, names 1,000, 100 labels per task), subtasks nest at most 32 levels deep,
 and the sections and labels properties may hold at most 5,000 entries and 1 MB.

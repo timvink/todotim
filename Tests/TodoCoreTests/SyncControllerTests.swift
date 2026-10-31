@@ -20,7 +20,7 @@ final class SyncControllerTests: XCTestCase {
     private func makeController(_ store: TodoStore, _ remote: FakeCalDAVServer,
                                 credentials: CredentialStore = InMemoryCredentialStore(), stateURL: URL? = nil) -> SyncController {
         let c = SyncController(store: store, defaults: defaults, credentials: credentials, config: nil,
-                               configPath: "/nonexistent", stateURL: stateURL) { _, _ in remote }
+                               configPath: "/nonexistent", stateURL: stateURL) { _, _, cached in await remote.connect(cached: cached) }
         c.syncInterval = .seconds(3600)
         c.debounceInterval = .milliseconds(20)
         return c
@@ -69,7 +69,7 @@ final class SyncControllerTests: XCTestCase {
         let creds = InMemoryCredentialStore(["tim": "legacy", "tim@cloud.example.com": "pw"])
         var used: [String] = []
         let c = SyncController(store: TodoStore(), defaults: defaults, credentials: creds, config: nil,
-                               configPath: "/nonexistent", stateURL: nil) { s, pw in
+                               configPath: "/nonexistent", stateURL: nil) { s, pw, _ in
             used.append("\(s.serverURL) \(pw)")
             return FakeCalDAVServer()
         }
@@ -203,6 +203,138 @@ final class SyncControllerTests: XCTestCase {
     }
 }
 
+/// Discovery of the calendar home: once, kept in the sync state, and again only when needed.
+@MainActor
+final class SyncControllerDiscoveryTests: XCTestCase {
+    private var defaults: UserDefaults!
+    private let suite = "TodoTimSyncControllerDiscoveryTests"
+    private let settings = SyncSettings(serverURL: "https://cloud.example.com/remote.php/dav/", username: "tim", enabled: true)
+    private var dir: URL!
+    private var stateURL: URL { dir.appendingPathComponent("caldav-state.json") }
+
+    override func setUp() async throws {
+        defaults = UserDefaults(suiteName: suite)
+        defaults.removePersistentDomain(forName: suite)
+        dir = FileManager.default.temporaryDirectory.appendingPathComponent("todotim-discovery-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+    }
+
+    override func tearDown() async throws {
+        defaults.removePersistentDomain(forName: suite)
+        try? FileManager.default.removeItem(at: dir)
+    }
+
+    private func makeController(_ store: TodoStore, _ makeServer: @escaping SyncController.ServerFactory) -> SyncController {
+        let c = SyncController(store: store, defaults: defaults, credentials: InMemoryCredentialStore(), config: nil,
+                               configPath: "/nonexistent", stateURL: stateURL, makeServer: makeServer)
+        c.syncInterval = .seconds(3600)
+        c.debounceInterval = .milliseconds(20)
+        return c
+    }
+
+    private func waitUntil(timeout: TimeInterval = 5, _ condition: () async -> Bool) async throws {
+        let deadline = Date().addingTimeInterval(timeout)
+        while await !condition() {
+            if Date() > deadline { return XCTFail("timed out") }
+            try await Task.sleep(for: .milliseconds(10))
+        }
+    }
+
+    private func savedState() throws -> CalDAVState {
+        try JSONDecoder().decode(CalDAVState.self, from: Data(contentsOf: stateURL))
+    }
+
+    func testHomeIsDiscoveredOnceAndKept() async throws {
+        let remote = FakeCalDAVServer(layout: .radicale())
+        let store = TodoStore()
+        store.addTask(content: "x", projectId: TodoStore.inboxID)
+        let c = makeController(store) { _, _, cached in await remote.connect(cached: cached) }
+        c.configure(settings, password: "pw")
+        try await waitUntil { c.lastSync != nil }
+        try await waitUntil { (try? self.savedState())?.home != nil }
+        XCTAssertEqual(try savedState().home, remote.calendarHome)
+        XCTAssertTrue(try savedState().resources.keys.allSatisfy { $0.hasPrefix("tim/todotim-inbox/") })
+
+        // Later syncs use the kept home: an idle sync is a single request.
+        await c.syncNow()
+        await remote.resetCounts()
+        await c.syncNow()
+        let requests = await remote.requests
+        XCTAssertEqual(requests, ["PROPFIND": 1])
+        // So does the next launch.
+        let c2 = makeController(store) { _, _, cached in await remote.connect(cached: cached) }
+        c2.configure(settings, password: "pw")
+        try await waitUntil { c2.lastSync != nil }
+        let discoveries = await remote.discoveries
+        XCTAssertEqual(discoveries, 1)
+    }
+
+    func testHomeIsDiscoveredAgainWhenItIsGone() async throws {
+        // The account moves to another calendar home (say, a server migration); the old one
+        // answers 404.
+        let old = FakeCalDAVServer(), new = FakeCalDAVServer(layout: .radicale())
+        let store = TodoStore()
+        let t = store.addTask(content: "keep me", projectId: TodoStore.inboxID)
+        let c = makeController(store) { _, _, cached in
+            if cached == nil, await old.homeGone { return await new.connect(cached: nil) }
+            return cached == new.calendarHome ? new : await old.connect(cached: cached)
+        }
+        c.configure(settings, password: "pw")
+        try await waitUntil { c.lastSync != nil }
+        let first = c.lastSync
+        await old.setHomeGone(true)
+        await c.syncNow()
+        XCTAssertNotEqual(c.lastSync, first)
+        XCTAssertEqual(c.status, .idle(lastSync: c.lastSync))
+        XCTAssertEqual(store.task(t.id)?.content, "keep me", "nothing is deleted")
+        let uploaded = await new.ics("tim/todotim-inbox/\(t.id).ics")
+        XCTAssertNotNil(uploaded, "a new home is synced from scratch")
+        let discoveries = await new.discoveries
+        XCTAssertEqual(discoveries, 1)
+        try await waitUntil { (try? self.savedState())?.home == new.calendarHome }
+    }
+
+    func testAnotherServerOrUserIsDiscoveredAgain() async throws {
+        let remote = FakeCalDAVServer()
+        let c = makeController(TodoStore()) { _, _, cached in await remote.connect(cached: cached) }
+        c.configure(settings, password: "pw")
+        try await waitUntil { await remote.discoveries == 1 }
+        var other = settings
+        other.username = "tim2"
+        c.configure(other, password: "pw")
+        try await waitUntil { await remote.discoveries == 2 }
+        other.serverURL = "https://other.example.com/dav/"
+        c.configure(other, password: "pw")
+        try await waitUntil { await remote.discoveries == 3 }
+    }
+
+    /// The sync state of an earlier version has no home; its paths are those of the SabreDAV
+    /// layout. When discovery finds that home, the state still applies: nothing is fetched or
+    /// written again.
+    func testStateFromBeforeDiscoveryIsKept() async throws {
+        let remote = FakeCalDAVServer()
+        let store = TodoStore()
+        store.addTask(content: "x", projectId: TodoStore.inboxID)
+        var legacy = CalDAVState(account: try XCTUnwrap(settings.stateAccount))
+        for _ in 0..<2 {
+            let r = try await CalDAVSync.sync(local: store.db, state: legacy, server: remote)
+            store.replaceDatabase(r.merged)
+            legacy = r.state
+        }
+        XCTAssertNil(legacy.home)
+        try JSONEncoder().encode(legacy).write(to: stateURL)
+        await remote.resetCounts()
+
+        let c = makeController(store) { _, _, cached in await remote.connect(cached: cached) }
+        c.configure(settings, password: "pw")
+        try await waitUntil { c.lastSync != nil }
+        let requests = await remote.requests
+        XCTAssertEqual(requests, ["PROPFIND": 1])
+        try await waitUntil { (try? self.savedState())?.home == remote.calendarHome }
+        XCTAssertEqual(try savedState().resources, legacy.resources)
+    }
+}
+
 @MainActor
 private final class TodoBox { var id: EntityID? }
 
@@ -222,7 +354,7 @@ final class SyncControllerConfigTests: XCTestCase {
         let remote = FakeCalDAVServer()
         let store = TodoStore()
         let c = SyncController(store: store, defaults: defaults, credentials: creds, config: config,
-                               configPath: "/tmp/test.toml", stateURL: nil) { _, _ in remote }
+                               configPath: "/tmp/test.toml", stateURL: nil) { _, _, _ in remote }
         c.syncInterval = .seconds(3600)
         XCTAssertEqual(c.settings, managed)
         XCTAssertEqual(c.managedConfigPath, "/tmp/test.toml")

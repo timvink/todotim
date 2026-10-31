@@ -1,6 +1,6 @@
 # TodoTim
 
-Native macOS (15+) Todoist clone in SwiftUI, syncing with Nextcloud over CalDAV (VTODO).
+Native macOS (15+) Todoist clone in SwiftUI, syncing with any CalDAV server (VTODO), such as Nextcloud or Radicale.
 No calendar, board, Today or Upcoming views.
 
 ## Layout
@@ -23,8 +23,12 @@ TodoCore and its tests also build on Linux (the app target is left out there), f
 `password_command` are macOS-only. Linux XCTest crashes on synchronous test methods in `@MainActor` classes,
 so make them `async` in a scratch copy when running the whole suite there.
 
-Live sync test against a real Nextcloud (use a throwaway user; it deletes that user's task lists):
+Live sync test against a real CalDAV server (use a throwaway user; it deletes that user's task lists):
 `TODOTIM_LIVE_URL=https://host/remote.php/dav/ TODOTIM_LIVE_USER=… TODOTIM_LIVE_PASSWORD=… [TODOTIM_LIVE_SHARE_WITH=…] swift test --filter LiveCalDAVTests`.
+`TODOTIM_LIVE_SHARE_WITH` needs Nextcloud. Throwaway local servers work too (http is allowed for localhost):
+Radicale (`uvx --from radicale radicale --config <file>` with an htpasswd user and `owner_only` rights, or the
+`tomsquest/docker-radicale` image; `TODOTIM_LIVE_URL=http://localhost:5232/`) and Xandikos
+(`uvx xandikos serve -d <dir> --defaults -p 8237`, no auth; `TODOTIM_LIVE_URL=http://localhost:8237/`).
 
 ## Data model
 
@@ -38,13 +42,20 @@ Live sync test against a real Nextcloud (use a throwaway user; it deletes that u
 
 ## Sync
 
-Local-first: `~/Library/Application Support/TodoTim/db.json`. The server side is CalDAV, mapped in
-[docs/caldav.md](docs/caldav.md) (the contract shared with other clients and the tasks MCP server; change
-both together): project = VTODO-only calendar (inbox = `todotim-inbox`), task = VTODO, sections and labels =
-dead properties on the calendars plus `X-TODOTIM-SECTION` parameters and `CATEGORIES` on tasks.
+Local-first: `~/Library/Application Support/TodoTim/db.json`. The server side is any CalDAV server with
+VTODO, mapped in [docs/caldav.md](docs/caldav.md) (the contract shared with other clients and the tasks MCP
+server; change both together): project = VTODO-only calendar (inbox = `todotim-inbox`), task = VTODO,
+sections and labels = dead properties on the calendars plus `X-TODOTIM-SECTION` parameters and `CATEGORIES`
+on tasks.
 
 - `WebDAVClient` — HTTP with the security rules; `CalDAVClient` — the CalDAV requests (`CalDAVServer`
-  protocol; tests use `FakeCalDAVServer`); `Multistatus` — bounded 207 parser.
+  protocol; tests use `FakeCalDAVServer`, whose `FakeDAVLayout` also answers discovery over a stub
+  URLProtocol); `Multistatus` — bounded 207 parser.
+- `CalDAVDiscovery` — finds the calendar home: `current-user-principal` on the server URL, else on
+  `/.well-known/caldav`, then the principal's `calendar-home-set`; without them `calendars/<username>/` (the
+  SabreDAV layout, as before discovery). The home is kept in `CalDAVState.home`; `SyncController` discovers
+  again only on a 404/403 from the home, or for another server URL or username (a new state). A changed
+  home starts a fresh state (merge by id, nothing deleted).
 - `ICalendar` — bounded RFC 5545 parser/serializer; `VTodo` — `TodoTask` ↔ VTODO. Writes patch only the
   owned properties that changed, so other clients' properties survive. `Recurrence` — RRULE advance.
 - `CalDAVSync` — one sync: PROPFIND the home, `sync-collection` REPORT per calendar whose sync token moved,
@@ -52,6 +63,12 @@ dead properties on the calendars plus `X-TODOTIM-SECTION` parameters and `CATEGO
   writes (MKCALENDAR, PROPPATCH, PUT, MOVE, DELETE). A 412 skips the write, and the next pass (at most 3)
   re-fetches and merges. `SyncEngine` holds the database rules: last-writer-wins, `sanitize`, tombstone purge,
   `repairStructure`, and `rebase` for local edits made during a sync.
+- Server differences `CalDAVClient` absorbs: objects that sync-collection reports without `calendar-data`
+  (Xandikos) are fetched with `calendar-multiget`; a calendar without `sync-token` uses `getctag` and a
+  `calendar-query` (token prefix `ctag:`); optional properties a PROPPATCH refuses (Xandikos: `sections`,
+  `labels`) are kept in `CalDAVState.refusedProperties` and not sent again (sections and labels then come
+  from the tasks); a refused MKCALENDAR is retried with only name and component set; 423 Locked (Xandikos,
+  during concurrent writes) is retried in `WebDAVClient`.
 - `SyncController` — settings, Keychain, loop. It saves the state only after the database is on disk
   (`flushDatabase`): the state must never describe a newer database than the one stored.
 
@@ -66,16 +83,22 @@ unless the user changed them. Tombstones are purged after 30 days, except while 
 entity. A sync with refused or conflicting writes is `isComplete == false`, and the next one is never
 treated as idle.
 
-Nextcloud quirks: `calendars/<user>/inbox/` is the scheduling inbox (hence `todotim-inbox`); `calendar-order`
-is stored as an integer (projects are renumbered 1…N); dead properties sent with MKCALENDAR are dropped
-(PROPPATCH after it) and are per user (sharees can't read `sections`, hence the task parameters); deleted
-calendars go to a trash bin that blocks MKCALENDAR at the same path; compressing reverse proxies rewrite
-ETags (`WebDAVClient.normalizeETag` undoes that).
+Nextcloud quirks: `calendars/<user>/inbox/` is the scheduling inbox (hence `todotim-inbox`; scheduling
+inboxes and outboxes are skipped by `resourcetype` on every server); `calendar-order` is stored as an integer
+(projects are renumbered 1…N); dead properties sent with MKCALENDAR are dropped (PROPPATCH after it) and are
+per user (sharees can't read `sections`, hence the task parameters); deleted calendars go to a trash bin
+that blocks MKCALENDAR at the same path; compressing reverse proxies rewrite ETags
+(`WebDAVClient.normalizeETag` undoes that); the owner check on `oc:owner-principal` compares with the
+discovered principal (the login name can differ from the user id); `share_with` uses Nextcloud's sharing
+(elsewhere it fails as a sync warning).
 
 Remote data is untrusted: ids and references must pass `isValidEntityID` (`[A-Za-z0-9_-]{1,64}`, otherwise
 derived as UUID v5), calendar data and XML are parsed with bounds, and `SyncLimits` bounds responses,
-counts, text and depth. `WebDAVClient` refuses http:// (except localhost), dot segments and redirects outside
-the DAV root; hrefs must be direct children of the home or calendar.
+counts, text and depth. `WebDAVClient` refuses http:// (except localhost), dot segments, and requests,
+redirects and hrefs outside its allowed root: the DAV root, or the calendar home itself when discovery
+finds the home outside the DAV root. Discovery stays on the server URL's origin and refuses a principal,
+home or redirect elsewhere (`SyncError.otherServer`, e.g. iCloud). Hrefs must be direct children of the
+home or calendar.
 
 Performance benchmarks: `swift test -c release -Xswiftc -enable-testing --filter PerformanceTests`.
 Password is stored in the Keychain under `SyncSettings.credentialAccount` (`user@host[:port]`); the settings in

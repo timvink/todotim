@@ -27,6 +27,11 @@ public enum SyncError: LocalizedError, Equatable, Sendable {
     case invalidPath(String)
     /// The server redirected outside the configured server URL (other scheme, host, port or path).
     case redirectRejected(String)
+    /// Discovery found the principal or calendar home on another origin than the server URL (as
+    /// iCloud does); TodoTim does not follow it.
+    case otherServer(String)
+    /// The server has no Nextcloud-style sharing (`share_with`).
+    case sharingUnsupported
     /// Remote data exceeds a `SyncLimits` bound.
     case limitExceeded(String)
 
@@ -38,22 +43,24 @@ public enum SyncError: LocalizedError, Equatable, Sendable {
         }
     }
 
-    static let urlExample = "https://cloud.example.com/remote.php/dav/"
+    /// What a server URL looks like, for messages.
+    static let urlHint = "Use the address of your CalDAV server, for example https://cloud.example.com/remote.php/dav/ "
+        + "for Nextcloud or https://dav.example.com/ for Radicale."
 
     public var errorDescription: String? {
         switch self {
         case .invalidURL(let s):
-            return "Invalid server URL “\(s)”. It should look like \(Self.urlExample)"
+            return "Invalid server URL “\(s)”. \(Self.urlHint)"
         case .unauthorized:
             return "Wrong username or app password"
         case .forbidden(let p):
             return "Access denied to “\(p.isEmpty ? "/" : p)”"
         case .baseNotFound:
-            return "Server URL not found. It should look like \(Self.urlExample)"
+            return "Server URL not found. \(Self.urlHint)"
         case .notFound(let p):
             return "Not found on server: “\(p)”"
         case .notCalDAV:
-            return "This URL is not a CalDAV server. For Nextcloud use \(Self.urlExample)"
+            return "This URL is not a CalDAV server. \(Self.urlHint)"
         case .preconditionFailed(let p):
             return "“\(p)” was changed by another device during sync"
         case .conflict(let p):
@@ -80,6 +87,10 @@ public enum SyncError: LocalizedError, Equatable, Sendable {
             return "Refused to use the unsafe remote path “\(p)”"
         case .redirectRejected(let target):
             return "The server redirected to “\(target)”, outside the configured server URL. Check the server URL in Settings (use the final https:// address)."
+        case .sharingUnsupported:
+            return "this server does not support sharing lists (share_with works with Nextcloud)"
+        case .otherServer(let target):
+            return "The server says your calendars are at “\(target)”, on another server. TodoTim only sends your password to the server URL in Settings. If you trust that server, use its address as the server URL."
         case .limitExceeded(let what):
             return "The data on the server is too large to sync safely: \(what)"
         }

@@ -43,13 +43,20 @@ step, but needs a paid Apple Developer account.)
 
 Requires macOS 15 (Sequoia) or later, on Apple silicon or Intel.
 
-## Sync with Nextcloud
+## Sync with CalDAV
 
-TodoTim syncs with Nextcloud over CalDAV. Each project is a task list (a calendar that holds only to-dos), and
-the inbox is the list "Inbox". Other CalDAV task apps, such as the Nextcloud Tasks app or DAVx⁵-based clients
-on Android, see and edit the same tasks. Sections, labels, subtasks and manual order sync too, and TodoTim
-keeps what other apps add, such as reminders. Calendars with events are left alone.
-[docs/caldav.md](docs/caldav.md) describes the mapping.
+TodoTim syncs with any CalDAV server that stores to-dos (VTODO). Each project is a task list (a calendar that
+holds only to-dos), and the inbox is the list "Inbox". Other CalDAV task apps, such as the Nextcloud Tasks app,
+Thunderbird or DAVx⁵-based clients on Android, see and edit the same tasks. Sections, labels, subtasks and
+manual order sync too, and TodoTim keeps what other apps add, such as reminders. Calendars with events are left
+alone. [docs/caldav.md](docs/caldav.md) describes the mapping.
+
+TodoTim is developed against Nextcloud, and its sync test also passes against [Radicale](https://radicale.org)
+and [Xandikos](https://www.xandikos.org). Other standard servers, such as Baïkal, should work too. iCloud does
+not: it keeps your calendars on another server than the one you sign in to, and TodoTim sends your password
+only to the server you enter.
+
+For example, with Nextcloud:
 
 1. In Nextcloud, go to **Settings › Security › Devices & sessions** and create an app password.
 2. In TodoTim, open **Settings** (`⌘,`) and fill in:
@@ -57,12 +64,18 @@ keeps what other apps add, such as reminders. Calendars with events are left alo
    - **Username** and the **app password**
 3. Click **Test connection**, turn on sync, and close the window.
 
+For another server, enter its CalDAV address and your username and password, for example
+`https://dav.example.com/` for Radicale or `https://dav.example.com/dav.php/` for Baïkal. TodoTim finds your
+calendars from that address (it asks the server for your calendar home, as RFC 6764 describes), so the plain
+`https://` address of the server often works too. If it finds none, it uses `calendars/USERNAME/` below the
+server URL, the Nextcloud layout.
+
 The first sync uploads your existing projects and tasks. Running it again creates no duplicates.
 
 TodoTim syncs a few seconds after each change, every minute, and when you press `⌘R`. An idle sync is a single
 request. Your password is stored in the macOS Keychain, per server: after you change the server URL, enter the
 password again. Local data lives in `~/Library/Application Support/TodoTim/` (`db.json`, plus
-`caldav-state.json`, which records what the last sync saw).
+`caldav-state.json`, which records where your calendars are and what the last sync saw).
 
 When two devices edit the same task, the most recent edit wins. When TodoTim and another app change the same
 project, section or label, TodoTim's change wins.
@@ -87,7 +100,7 @@ server_url = "https://your.cloud/remote.php/dav/"
 username = "USERNAME"
 # Optional. Prints the password; runs once per launch, and TodoTim keeps it in memory instead of the Keychain.
 password_command = "rbw get 'Nextcloud app password'"
-# Optional. Nextcloud users each new list is shared with (read-write), e.g. an assistant's account.
+# Optional, Nextcloud only. Users each new list is shared with (read-write), e.g. an assistant's account.
 share_with = ["tasks-agent"]
 ```
 

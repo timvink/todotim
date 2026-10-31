@@ -468,6 +468,72 @@ final class CalDAVSyncTests: XCTestCase {
         XCTAssertEqual(b.store.projects.map(\.id), [p1.id, p3.id, p2.id])
     }
 
+    /// Radicale keeps calendars in "/<user>/", and a home can be the DAV root itself (when the
+    /// server URL is the home): the same sync with other paths.
+    func testSyncInOtherCalendarHomeLayouts() async throws {
+        let homeIsRoot = FakeDAVLayout(origin: "https://dav.example.com", root: "tim", davArea: "", principal: "tim", home: "tim")
+        for layout in [FakeDAVLayout.radicale(), .xandikos, homeIsRoot] {
+            let server = FakeCalDAVServer(layout: layout)
+            let home = server.home
+            let a = Device()
+            let p = a.store.addProject(name: "Home")
+            let sec = a.store.addSection(projectId: p.id, name: "Garden")
+            let t = a.store.addTask(content: "Water plants", projectId: p.id, sectionId: sec.id)
+            a.store.addTask(content: "Call mum", projectId: TodoStore.inboxID)
+            try await a.sync(server)
+            let calendars = await server.calendarsByPath
+            XCTAssertEqual(Set(calendars.keys), [davPath(home, "todotim-inbox"), davPath(home, p.id)], home)
+            let stored = await server.ics(davPath(home, "\(p.id)/\(t.id).ics"))
+            XCTAssertNotNil(stored, home)
+
+            let b = Device()
+            try await b.sync(server)
+            XCTAssertEqual(b.store.task(t.id), a.store.task(t.id), home)
+            XCTAssertEqual(b.store.sections(in: p.id).map(\.name), ["Garden"])
+            b.store.moveTask(t.id, projectId: TodoStore.inboxID, sectionId: nil, parentId: nil)
+            try await b.sync(server)
+            let moved = await server.paths(in: davPath(home, "todotim-inbox"))
+            XCTAssertEqual(moved.count, 2, home)
+            try await a.sync(server)
+            XCTAssertEqual(a.store.task(t.id)?.projectId, TodoStore.inboxID, home)
+            let again = try await a.sync(server)
+            XCTAssertEqual(again.writes, 0, home)
+        }
+    }
+
+    /// A server without dead properties (Xandikos) refuses the sections and labels lists: TodoTim
+    /// says so once, stops sending them, and sections still reach other devices through the tasks.
+    func testServerThatRefusesTheListPropertiesStillSyncs() async throws {
+        let server = FakeCalDAVServer(layout: .xandikos)
+        await server.setRefusedProperties([.sections, .labels])
+        let a = Device()
+        let p = a.store.addProject(name: "Home", color: "green")
+        let sec = a.store.addSection(projectId: p.id, name: "Garden")
+        let t = a.store.addTask(content: "Water plants", projectId: p.id, sectionId: sec.id, labels: ["outside"])
+        let r = try await a.sync(server)
+        XCTAssertEqual(r.warnings, [CalDAVSync.refusedPropertiesWarning([.sections, .labels])])
+        XCTAssertTrue(r.isComplete)
+        XCTAssertEqual(a.state.refusedProperties, [.sections, .labels])
+
+        await server.resetCounts()
+        let again = try await a.sync(server)
+        XCTAssertEqual(again.warnings, [])
+        XCTAssertEqual(again.writes, 0)
+        let proppatches = await server.count("PROPPATCH")
+        XCTAssertEqual(proppatches, 0, "refused properties are not sent again")
+        await server.resetCounts()
+        try await a.sync(server, previous: a.store.db)
+        let idle = await server.requests
+        XCTAssertEqual(idle, ["PROPFIND": 1])
+
+        let b = Device()
+        try await b.sync(server)
+        XCTAssertEqual(b.store.sections(in: p.id).map(\.name), ["Garden"])
+        XCTAssertEqual(b.store.task(t.id)?.sectionId, sec.id)
+        XCTAssertEqual(b.store.labels.map(\.name), ["outside"])
+        XCTAssertEqual(b.store.project(p.id)?.color, "green")
+    }
+
     func testRemoteRenameAndColorAndLabelChanges() async throws {
         let server = FakeCalDAVServer()
         let a = Device()

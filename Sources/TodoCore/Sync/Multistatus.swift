@@ -12,7 +12,12 @@ enum Multistatus {
     struct Property: Equatable, Sendable {
         var text: String = ""
         var children: [String] = []
+        /// Text of the `DAV:href` children (`current-user-principal`, `calendar-home-set`), at most
+        /// `maxHrefs`.
+        var hrefs: [String] = []
     }
+
+    static let maxHrefs = 100
 
     struct Response: Equatable, Sendable {
         var href: String
@@ -21,6 +26,8 @@ enum Multistatus {
         var status: Int?
         /// Keyed by qualified name, e.g. "DAV:|displayname".
         var properties: [String: Property] = [:]
+        /// The status of every property named in a propstat, including failed ones (PROPPATCH).
+        var propertyStatus: [String: Int] = [:]
 
         func text(_ qname: String) -> String? { properties[qname]?.text }
     }
@@ -91,7 +98,9 @@ enum Multistatus {
         private var href: String?
         private var responseStatus: Int?
         private var props: [String: Property] = [:]
+        private var propertyStatus: [String: Int] = [:]
         private var propstatProps: [String: Property] = [:]
+        private var propstatStatus: Int?
         private var propstatOK = true
         /// The property being read (a direct child of `prop`).
         private var current: (name: String, value: Property)?
@@ -106,9 +115,9 @@ enum Multistatus {
             switch q {
             case "DAV:|multistatus" where path.count == 1: sawMultistatus = true
             case "DAV:|response" where path.count == 2:
-                href = nil; responseStatus = nil; props = [:]
+                href = nil; responseStatus = nil; props = [:]; propertyStatus = [:]
             case "DAV:|propstat" where path.count == 3:
-                propstatProps = [:]; propstatOK = true
+                propstatProps = [:]; propstatStatus = nil; propstatOK = true
             default:
                 if path.count == 5, path[3] == "DAV:|prop" {
                     current = (q, Property())
@@ -135,17 +144,24 @@ enum Multistatus {
                 current = nil
                 return
             }
+            if depth == 6, q == "DAV:|href", current != nil, current!.value.hrefs.count < Multistatus.maxHrefs {
+                current!.value.hrefs.append(text.trimmingCharacters(in: .whitespacesAndNewlines))
+                return
+            }
             switch (q, depth) {
             case ("DAV:|sync-token", 2): syncToken = text.trimmingCharacters(in: .whitespacesAndNewlines)
             case ("DAV:|href", 3) where href == nil: href = text.trimmingCharacters(in: .whitespacesAndNewlines)
             case ("DAV:|status", 3): responseStatus = Self.statusCode(text)
-            case ("DAV:|status", 4): propstatOK = Self.statusCode(text).map { (200...299).contains($0) } ?? false
+            case ("DAV:|status", 4):
+                propstatStatus = Self.statusCode(text)
+                propstatOK = propstatStatus.map { (200...299).contains($0) } ?? false
             case ("DAV:|propstat", 3):
                 if propstatOK { props.merge(propstatProps) { a, _ in a } }
+                if let propstatStatus { for name in propstatProps.keys { propertyStatus[name] = propstatStatus } }
             case ("DAV:|response", 2):
                 guard let href else { break }
                 if responses.count >= maxEntries { return fail(parser, .tooManyEntries) }
-                responses.append(Response(href: href, status: responseStatus, properties: props))
+                responses.append(Response(href: href, status: responseStatus, properties: props, propertyStatus: propertyStatus))
             default: break
             }
         }
