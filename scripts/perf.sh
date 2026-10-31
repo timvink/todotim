@@ -10,6 +10,9 @@
 # Phases report wall-clock busy time per main-thread turn and the main thread's CPU time; a large
 # difference means the main thread waited (for example for the render server).
 # Launch timing: scripts/perf-launch.sh.
+# Profiling: copy the binary to another name first (cp …/TodoTim /tmp/TodoTim-perf). `xcrun xctrace
+# record --launch -- …/TodoTim` resolves the name TodoTim to the installed /Applications/TodoTim.app
+# and launches that app instead, with your test environment.
 # The app does not activate itself in this mode and only posts events to its own queue.
 set -euo pipefail
 cd "$(dirname "$0")/.."
