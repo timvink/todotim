@@ -383,6 +383,10 @@ final class CalDAVClient: CalDAVServer {
         // A property the server will not store fails with its own status (403, 409, …), the others
         // with 424 (RFC 4918 §9.2), unless the server applied them anyway (Xandikos does).
         let refused = failures.filter { status[$0] != 424 }
+        // A temporary failure (500, 423, 507, …) is not a refusal: the next sync sends it again.
+        if let temporary = refused.compactMap({ status[$0] }).first(where: { !Self.refusalStatuses.contains($0) }) {
+            throw WebDAVClient.error(status: temporary, path: path)
+        }
         guard !refused.isEmpty, refused.isSubset(of: CalendarProperty.optional) else {
             throw SyncError.http(status: 424, path: path)
         }
@@ -393,6 +397,11 @@ final class CalDAVClient: CalDAVServer {
         }
         return refused
     }
+
+    /// Property statuses by which a server says it will not store a property at all (RFC 4918
+    /// §9.2.1: 403 for a protected or unknown property, 409 for a value it cannot take; some servers
+    /// answer 400, 405, 422 or 501). Stored in `CalDAVState.refusedProperties` and not sent again.
+    static let refusalStatuses: Set<Int> = [400, 403, 405, 409, 422, 501]
 
     /// Sends a PROPPATCH; returns each property's status from a 207 response (none for another 2xx).
     private func proppatch(_ path: String, _ values: [CalendarProperty: String?]) async throws -> [CalendarProperty: Int] {

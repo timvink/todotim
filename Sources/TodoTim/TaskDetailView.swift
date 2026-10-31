@@ -40,8 +40,6 @@ fileprivate struct TaskDetailContent: View {
 
     @State private var newSubtask = ""
     @State private var addingSubtask = false
-    /// The move popover opened from the header (else from the project row).
-    @State private var moveFromHeader = false
     @FocusState private var focus: DetailField?
 
     var body: some View {
@@ -67,11 +65,10 @@ fileprivate struct TaskDetailContent: View {
             newSubtask = ""
             addingSubtask = false
         }
-        .onChange(of: model.popover) { _, p in if p == nil { moveFromHeader = false } }
     }
 
-    private func popoverBinding(_ kind: TaskPopover, header: Bool = false) -> Binding<Bool> {
-        Binding(get: { model.popover == kind && (kind != .move || moveFromHeader == header) },
+    private func popoverBinding(_ kind: TaskPopover) -> Binding<Bool> {
+        Binding(get: { model.popover == kind },
                 set: { if !$0, model.popover == kind { model.popover = nil } })
     }
 
@@ -80,10 +77,7 @@ fileprivate struct TaskDetailContent: View {
     private var header: some View {
         HStack(spacing: 2) {
             if let p = store.project(task.projectId) {
-                Button {
-                    moveFromHeader = true
-                    model.popover = .move
-                } label: {
+                Button { model.popover = .move } label: {
                     // On the panel's grid: the icon in the checkbox column, the name where titles start.
                     HStack(spacing: Self.columnGap) {
                         ProjectIcon(p, fill: 1, size: 9).frame(width: Self.column)
@@ -103,7 +97,7 @@ fileprivate struct TaskDetailContent: View {
                 }
                 .buttonStyle(HoverButtonStyle())
                 .help("Move to project (V)")
-                .popover(isPresented: popoverBinding(.move, header: true), arrowEdge: .bottom) { movePicker }
+                .popover(isPresented: popoverBinding(.move), arrowEdge: .bottom) { movePicker }
             }
             Spacer()
             headerButton("chevron.up", help: "Previous task (↑ / K)") { model.moveDetail(-1) }

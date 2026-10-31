@@ -467,6 +467,17 @@ final class WebDAVClientTests: XCTestCase {
         let partial = try await caldav.setProperties("calendars/tim/w", [.name: "New", .sections: "[]"])
         XCTAssertEqual(partial, [.sections])
         XCTAssertEqual(StubURLProtocol.requests.count, 1, "already applied")
+
+        // A temporary failure is no refusal: the update fails, and the next sync sends it again.
+        for status in ["500 Internal Server Error", "423 Locked", "507 Insufficient Storage"] {
+            StubURLProtocol.handler = { _ in
+                (207, [:], reply([("<d:displayname/>", "424 Failed Dependency"), ("<t:sections/>", status)]))
+            }
+            do {
+                let refused = try await caldav.setProperties("calendars/tim/w", [.name: "New", .sections: "[]"])
+                XCTFail("\(status) taken as a refusal of \(refused)")
+            } catch {}
+        }
     }
 
     func testCalendarIsCreatedWithoutPropertiesTheServerRefuses() async throws {
