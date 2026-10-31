@@ -31,24 +31,29 @@ struct ImportTodoistView: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             Text("Import from Todoist")
-                .font(.system(size: 16, weight: .bold))
+                .font(Fonts.panelTitle)
+                .foregroundStyle(Theme.text)
                 .padding(16)
-            Divider()
+            Hairline()
             Form {
                 SwiftUI.Section {
                     SecureField("API token", text: $token, prompt: Text("Paste your Todoist API token"))
                         .onSubmit(importFromAPI)
                         .disabled(isWorking)
                     Toggle("Include completed tasks", isOn: $includeCompleted)
+                        .tint(Theme.accent)
                         .disabled(isWorking)
                 } footer: {
                     VStack(alignment: .leading, spacing: 4) {
                         Text("In Todoist, open Settings › Integrations › Developer and copy the API token. TodoTim uses it for this import only and does not save it.")
                         Link("Open Todoist developer settings", destination: Self.developerSettingsURL)
+                            .foregroundStyle(Theme.link)
                         Text("Importing again updates what was imported before instead of adding duplicates. Recurrence, times, comments and reminders are not imported.")
                     }
-                    .font(.system(size: 11))
-                    .foregroundStyle(.secondary)
+                    .font(Fonts.small)
+                    .foregroundStyle(Theme.secondaryText)
+                    // A form footer otherwise right-aligns the wrapped lines.
+                    .multilineTextAlignment(.leading)
                     .frame(maxWidth: .infinity, alignment: .leading)
                 }
 
@@ -57,7 +62,9 @@ struct ImportTodoistView: View {
                 }
             }
             .formStyle(.grouped)
-            Divider()
+            .scrollContentBackground(.hidden)
+            .foregroundStyle(Theme.text)
+            Hairline()
             HStack {
                 Button("Import from file…") { showFilePicker = true }
                     .buttonStyle(SoftButtonStyle())
@@ -77,6 +84,7 @@ struct ImportTodoistView: View {
             .padding(12)
         }
         .frame(width: 480)
+        .background(Theme.panel)
         .fileImporter(isPresented: $showFilePicker, allowedContentTypes: [.json]) { result in
             switch result {
             case .success(let url): importFromFile(url)
@@ -96,22 +104,22 @@ struct ImportTodoistView: View {
         case .working(let message):
             HStack(spacing: 8) {
                 ProgressView().controlSize(.small)
-                Text(message)
+                Text(message).foregroundStyle(Theme.text)
             }
         case .failed(let message):
             SwiftUI.Label(message, systemImage: "xmark.octagon.fill")
-                .foregroundStyle(Theme.overdue)
+                .foregroundStyle(Theme.danger)
                 .textSelection(.enabled)
         case .done(let report, let source):
             VStack(alignment: .leading, spacing: 4) {
                 SwiftUI.Label(report.hasChanges ? "Imported from \(source)." : "Already up to date with \(source).",
                               systemImage: "checkmark.circle.fill")
                     .foregroundStyle(Theme.today)
-                ForEach(report.summaryLines, id: \.self) { Text($0).font(.system(size: 12)) }
+                ForEach(report.summaryLines, id: \.self) { Text($0).font(Fonts.body).foregroundStyle(Theme.text) }
                 ForEach(report.warnings, id: \.self) { w in
                     SwiftUI.Label(w, systemImage: "exclamationmark.triangle")
-                        .font(.system(size: 12))
-                        .foregroundStyle(.secondary)
+                        .font(Fonts.body)
+                        .foregroundStyle(Theme.secondaryText)
                 }
             }
             .textSelection(.enabled)
