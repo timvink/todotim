@@ -43,22 +43,24 @@ public enum SyncError: LocalizedError, Equatable, Sendable {
         }
     }
 
-    static let urlExample = "https://cloud.example.com/remote.php/dav/"
+    /// What a server URL looks like, for messages.
+    static let urlHint = "Use the address of your CalDAV server, for example https://cloud.example.com/remote.php/dav/ "
+        + "for Nextcloud or https://dav.example.com/ for Radicale."
 
     public var errorDescription: String? {
         switch self {
         case .invalidURL(let s):
-            return "Invalid server URL “\(s)”. It should look like \(Self.urlExample)"
+            return "Invalid server URL “\(s)”. \(Self.urlHint)"
         case .unauthorized:
             return "Wrong username or app password"
         case .forbidden(let p):
             return "Access denied to “\(p.isEmpty ? "/" : p)”"
         case .baseNotFound:
-            return "Server URL not found. It should look like \(Self.urlExample)"
+            return "Server URL not found. \(Self.urlHint)"
         case .notFound(let p):
             return "Not found on server: “\(p)”"
         case .notCalDAV:
-            return "This URL is not a CalDAV server. For Nextcloud use \(Self.urlExample)"
+            return "This URL is not a CalDAV server. \(Self.urlHint)"
         case .preconditionFailed(let p):
             return "“\(p)” was changed by another device during sync"
         case .conflict(let p):

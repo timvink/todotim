@@ -34,9 +34,9 @@ struct SettingsView: View {
                     Toggle("Enable sync", isOn: $enabled)
                 }
             } header: {
-                Text("CalDAV (Nextcloud)")
+                Text("CalDAV")
             } footer: {
-                Text("Your projects sync as Nextcloud task lists (CalDAV). Use a Nextcloud app password (Settings → Security → Devices & sessions); it is stored in the Keychain.")
+                Text("Your projects sync as task lists on any CalDAV server. Enter its address, for example https://cloud.example.com/remote.php/dav/ for Nextcloud or https://dav.example.com/ for Radicale; TodoTim finds your calendars there. With Nextcloud, use an app password (Settings → Security → Devices & sessions). The password is stored in the Keychain.")
                     .font(.system(size: 11))
                     .foregroundStyle(.secondary)
                     .frame(maxWidth: .infinity, alignment: .leading)
