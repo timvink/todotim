@@ -72,8 +72,8 @@ struct InlineTaskEditor: View {
             // The project menu's own 8 pt inset puts its icon under the title.
             .padding(.leading, 4).padding(.trailing, 8).padding(.vertical, 8)
         }
-        .background(RoundedRectangle(cornerRadius: 10, style: .continuous).fill(Theme.panel))
-        .overlay(RoundedRectangle(cornerRadius: 10, style: .continuous)
+        .background(RoundedRectangle(cornerRadius: Theme.panelRadius, style: .continuous).fill(Theme.panel))
+        .overlay(RoundedRectangle(cornerRadius: Theme.panelRadius, style: .continuous)
             .strokeBorder(focus != nil ? Theme.accent : Ctp.surface1.color, lineWidth: 1)
             .animation(Theme.hoverAnimation, value: focus != nil))
         .padding(.leading, CGFloat(depth) * Theme.indent + Theme.gutter)

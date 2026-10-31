@@ -202,7 +202,7 @@ private struct PickerIconButtonStyle: ButtonStyle {
                 .font(Fonts.icon)
                 .foregroundStyle(hovering ? Theme.text : Theme.secondaryText)
                 .frame(width: 28, height: 28)
-                .background(RoundedRectangle(cornerRadius: 6, style: .continuous)
+                .background(RoundedRectangle(cornerRadius: Theme.controlRadius, style: .continuous)
                     .fill(configuration.isPressed ? PickerStyle.pressed : hovering ? PickerStyle.hover : .clear))
                 .contentShape(Rectangle())
                 .pointerStyle(.link)
@@ -350,7 +350,7 @@ struct HoverRowButtonStyle: ButtonStyle {
         @State private var hovering = false
         var body: some View {
             configuration.label
-                .background(RoundedRectangle(cornerRadius: 6, style: .continuous)
+                .background(RoundedRectangle(cornerRadius: Theme.controlRadius, style: .continuous)
                     .fill(configuration.isPressed ? PickerStyle.pressed : hovering ? PickerStyle.hover : .clear)
                     .padding(.horizontal, 4))
                 .contentShape(Rectangle())
@@ -438,8 +438,8 @@ private struct PickerField: View {
             .font(Fonts.body)
             .padding(.horizontal, 8)
             .frame(height: PickerStyle.rowHeight)
-            .background(RoundedRectangle(cornerRadius: 6, style: .continuous).fill(Theme.field))
-            .overlay(RoundedRectangle(cornerRadius: 6, style: .continuous)
+            .background(RoundedRectangle(cornerRadius: Theme.controlRadius, style: .continuous).fill(Theme.field))
+            .overlay(RoundedRectangle(cornerRadius: Theme.controlRadius, style: .continuous)
                 .strokeBorder(focused.wrappedValue ? Theme.accent : Ctp.surface1.color, lineWidth: 1))
             .padding([.horizontal, .top], 4)
     }
@@ -586,7 +586,7 @@ private struct MenuLabelButtonStyle: ButtonStyle {
         @State private var hovering = false
         var body: some View {
             configuration.label
-                .background(RoundedRectangle(cornerRadius: 6, style: .continuous)
+                .background(RoundedRectangle(cornerRadius: Theme.controlRadius, style: .continuous)
                     .fill(configuration.isPressed ? Theme.selection : hovering ? Theme.hover : .clear))
                 .contentShape(Rectangle())
                 .pointerStyle(.link)

@@ -290,7 +290,7 @@ private struct QuietIconButtonStyle: ButtonStyle {
                 .font(Fonts.icon)
                 .foregroundStyle(hovering ? Theme.text : Theme.secondaryText)
                 .frame(width: 28, height: 28)
-                .background(RoundedRectangle(cornerRadius: 6, style: .continuous)
+                .background(RoundedRectangle(cornerRadius: Theme.controlRadius, style: .continuous)
                     .fill(configuration.isPressed ? Theme.selection : hovering ? Theme.hover : .clear))
                 .contentShape(Rectangle())
                 .onHover { hovering = $0 }

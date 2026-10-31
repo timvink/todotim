@@ -21,10 +21,10 @@ struct SidebarView: View {
                 ZStack {
                     Circle().fill(Theme.accent)
                     Image(systemName: "plus")
-                        .font(.system(size: 10, weight: .bold))
+                        .font(.system(size: 9, weight: .bold))
                         .foregroundStyle(Theme.onAccent)
                 }
-                .frame(width: 18, height: 18)
+                .frame(width: Theme.checkbox, height: Theme.checkbox)
                 .frame(width: Sidebar.iconWidth)
                 Text("Add task")
                     .font(Fonts.bodySemibold)
@@ -96,6 +96,8 @@ struct SidebarView: View {
         .scrollContentBackground(.hidden)
         // Rows set their own height; the default minimum would space them unevenly.
         .environment(\.defaultMinListRowHeight, 10)
+        // The first row (the account) is level with the list's first task, under the title band.
+        .padding(.top, 28)
         .safeAreaInset(edge: .bottom, spacing: 0) { SyncStatusView() }
         .background(Theme.sidebar)
         .sheet(item: $editingProject) { p in
@@ -173,7 +175,7 @@ private struct AccountMenu: View {
                 Text(Self.name).font(Fonts.bodySemibold).foregroundStyle(Theme.text).lineLimit(1)
                 Image(systemName: "chevron.down").font(.system(size: 10, weight: .semibold)).foregroundStyle(Theme.tertiaryText)
             }
-            .padding(.horizontal, Sidebar.padding).padding(.vertical, 5)
+            .padding(.horizontal, Sidebar.padding).padding(.vertical, 4)
             .background(RoundedRectangle(cornerRadius: Sidebar.radius, style: .continuous)
                 .fill(hovering ? Theme.hover : .clear))
             .contentShape(Rectangle())
@@ -204,7 +206,7 @@ enum Sidebar {
     static let spacing: CGFloat = 8
     /// Inner horizontal padding of a row (its highlight extends this far past the content).
     static let padding: CGFloat = 8
-    static let radius: CGFloat = 6
+    static let radius = Theme.rowRadius
     static let rowInsets = EdgeInsets(top: 1, leading: 10, bottom: 1, trailing: 10)
     /// Horizontal inset the sidebar list adds outside the row insets.
     static let listInset: CGFloat = 16
@@ -226,6 +228,8 @@ private struct SidebarCount: View {
     var body: some View {
         if n > 0 {
             Text("\(n)").font(Fonts.meta).monospacedDigit().foregroundStyle(Theme.tertiaryText)
+                .contentTransition(.numericText(countsDown: true))
+                .animation(Theme.motion, value: n)
         }
     }
 }
@@ -373,8 +377,8 @@ struct ProjectFormView: View {
                 .foregroundStyle(Theme.text)
                 .focused($nameFocused)
                 .padding(.horizontal, 10).padding(.vertical, 8)
-                .background(RoundedRectangle(cornerRadius: 7, style: .continuous).fill(Theme.field))
-                .overlay(RoundedRectangle(cornerRadius: 7, style: .continuous)
+                .background(RoundedRectangle(cornerRadius: Theme.controlRadius, style: .continuous).fill(Theme.field))
+                .overlay(RoundedRectangle(cornerRadius: Theme.controlRadius, style: .continuous)
                     .strokeBorder(nameFocused ? Theme.accent : Ctp.surface1.color))
                 .onSubmit(save)
             VStack(alignment: .leading, spacing: 8) {
@@ -540,7 +544,7 @@ private struct FooterButton: View {
                 .font(Fonts.icon)
                 .foregroundStyle(!isEnabled ? Theme.disabledText : hovering ? Theme.text : Theme.secondaryText)
                 .frame(width: 24, height: 24)
-                .background(RoundedRectangle(cornerRadius: 6, style: .continuous).fill(hovering && isEnabled ? Theme.hover : .clear))
+                .background(RoundedRectangle(cornerRadius: Theme.controlRadius, style: .continuous).fill(hovering && isEnabled ? Theme.hover : .clear))
                 .contentShape(Rectangle())
         }
         .buttonStyle(.plain)

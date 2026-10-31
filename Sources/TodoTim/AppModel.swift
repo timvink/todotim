@@ -51,6 +51,8 @@ final class AppModel {
 
     /// Whether the sidebar is shown (bound to the split view).
     var columnVisibility: NavigationSplitViewVisibility = .all
+    /// Left edge of the list pane in the window; panels center on the pane.
+    var detailMinX: CGFloat = 0
 
     var selectedTaskID: EntityID? {
         didSet {

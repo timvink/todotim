@@ -159,10 +159,11 @@ enum Theme {
     static let panelBorder = Ctp.surface1.color
     /// Popovers, menus and text fields.
     static let field = Ctp.surface0.color
-    static let hover = Color(nsColor: Ctp.surface0.nsColor(alpha: 0.55))
+    static let hover = Color(nsColor: .adaptive(dark: Ctp.surface0.nsColor(alpha: 0.55), light: Ctp.surface0.nsColor(alpha: 0.4)))
     /// The selected row (list and sidebar): a neutral fill, the text keeps its color.
     static let selection = Color(nsColor: .adaptive(dark: Ctp.surface0.nsColor, light: Ctp.surface0.nsColor(alpha: 0.75)))
-    static let separator = Ctp.surface0.color
+    /// Rules; one step lighter in Latte, where surface0 reads heavier.
+    static let separator = Color(nsColor: .adaptive(dark: Ctp.surface0.nsColor, light: Ctp.crust.nsColor))
     /// Behind the panels.
     static let scrim = Color(nsColor: .adaptive(dark: Ctp.crust.nsColor(alpha: 0.55), light: Ctp.text.nsColor(alpha: 0.18)))
     static let shadow = Color(nsColor: .adaptive(dark: NSColor(white: 0, alpha: 0.45), light: NSColor(white: 0, alpha: 0.14)))
@@ -206,8 +207,11 @@ enum Theme {
     /// Horizontal inset of a task row's content, so the checkbox starts at `gutter + rowInset`.
     static let rowInset: CGFloat = 8
     static let checkbox: CGFloat = 16
-    /// Corner radius of row pills (list and sidebar hover and selection).
+    /// The three corner radii: controls (buttons, fields, chips), row pills (list and sidebar
+    /// hover and selection), panels.
+    static let controlRadius: CGFloat = 6
     static let rowRadius: CGFloat = 8
+    static let panelRadius: CGFloat = 12
     /// Height of the pinned title bar at the top of the list.
     static let titleBarHeight: CGFloat = 52
 
@@ -305,7 +309,7 @@ struct AccentButtonStyle: ButtonStyle {
             .font(Fonts.bodySemibold)
             .foregroundStyle(Theme.onAccent)
             .padding(.horizontal, 12).padding(.vertical, 6)
-            .background(RoundedRectangle(cornerRadius: 7, style: .continuous)
+            .background(RoundedRectangle(cornerRadius: Theme.controlRadius, style: .continuous)
                 .fill(Theme.accent.opacity(isEnabled ? (configuration.isPressed ? 0.8 : 1) : 0.4)))
             .scaleEffect(configuration.isPressed ? 0.97 : 1)
             .animation(Theme.hoverAnimation, value: configuration.isPressed)
@@ -320,7 +324,7 @@ struct SoftButtonStyle: ButtonStyle {
             .font(Fonts.bodySemibold)
             .foregroundStyle(Theme.text)
             .padding(.horizontal, 12).padding(.vertical, 6)
-            .background(RoundedRectangle(cornerRadius: 7, style: .continuous)
+            .background(RoundedRectangle(cornerRadius: Theme.controlRadius, style: .continuous)
                 .fill(configuration.isPressed ? Ctp.surface1.color : Ctp.surface0.color))
             .pointerStyle(.link)
     }
@@ -338,7 +342,7 @@ struct ChipLabel: View {
         }
         .foregroundStyle(tint)
         .padding(.horizontal, 8).padding(.vertical, 4)
-        .background(RoundedRectangle(cornerRadius: 6, style: .continuous).fill(Theme.field))
+        .background(RoundedRectangle(cornerRadius: Theme.controlRadius, style: .continuous).fill(Theme.field))
         .contentShape(Rectangle())
         .pointerStyle(.link)
     }

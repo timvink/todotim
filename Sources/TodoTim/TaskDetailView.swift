@@ -84,17 +84,20 @@ fileprivate struct TaskDetailContent: View {
                     moveFromHeader = true
                     model.popover = .move
                 } label: {
-                    HStack(spacing: 7) {
-                        ProjectIcon(p, fill: 1, size: 9)
-                        Text(p.name)
-                        if let s = sectionName {
-                            Text("/").foregroundStyle(Theme.tertiaryText)
-                            Text(s)
+                    // On the panel's grid: the icon in the checkbox column, the name where titles start.
+                    HStack(spacing: Self.columnGap) {
+                        ProjectIcon(p, fill: 1, size: 9).frame(width: Self.column)
+                        HStack(spacing: 6) {
+                            Text(p.name)
+                            if let s = sectionName {
+                                Text("/").foregroundStyle(Theme.tertiaryText)
+                                Text(s)
+                            }
                         }
                     }
-                    .font(.system(size: 12, weight: .medium))
+                    .font(Fonts.bodyMedium)
                     .foregroundStyle(Theme.secondaryText)
-                    .padding(.horizontal, 8)
+                    .padding(.horizontal, Self.pillInset)
                     .frame(height: 26)
                     .contentShape(Rectangle())
                 }
@@ -119,8 +122,9 @@ fileprivate struct TaskDetailContent: View {
             .help("More actions")
             headerButton("xmark", help: "Close (Esc)") { model.detailTaskID = nil }
         }
-        // The project button's icon lines up with the content column below.
-        .padding(.leading, Self.inset - 8).padding(.trailing, 10)
+        // The project button's icon lines up with the content column below, and the close button
+        // with the date row's clear button.
+        .padding(.horizontal, Self.inset - Self.pillInset)
         .frame(height: Self.headerHeight)
     }
 
@@ -209,8 +213,9 @@ fileprivate struct TaskDetailContent: View {
                     Spacer()
                     Button { store.updateTask(task.id) { $0.due = nil } } label: {
                         Image(systemName: "xmark").font(.system(size: 11, weight: .bold))
-                            .frame(width: 22, height: 22).contentShape(Rectangle())
+                            .frame(width: 28, height: 26).contentShape(Rectangle())
                     }
+                    .padding(.trailing, -Self.pillInset)
                     .buttonStyle(.plain)
                     .foregroundStyle(Theme.tertiaryText)
                     .help("Remove date")
@@ -320,8 +325,8 @@ fileprivate struct TaskDetailContent: View {
                         .font(Fonts.body)
                         .foregroundStyle(Theme.text)
                         .padding(.horizontal, 10).padding(.vertical, 6)
-                        .background(RoundedRectangle(cornerRadius: 7, style: .continuous).fill(Theme.field))
-                        .overlay(RoundedRectangle(cornerRadius: 7, style: .continuous).strokeBorder(Theme.accent.opacity(0.7)))
+                        .background(RoundedRectangle(cornerRadius: Theme.controlRadius, style: .continuous).fill(Theme.field))
+                        .overlay(RoundedRectangle(cornerRadius: Theme.controlRadius, style: .continuous).strokeBorder(Theme.accent.opacity(0.7)))
                         .focused($focus, equals: .subtask)
                         .onSubmit(addSubtask)
                         .onExitCommand { addingSubtask = false }
@@ -445,7 +450,7 @@ struct HoverButtonStyle: ButtonStyle {
         @State private var hovering = false
         var body: some View {
             configuration.label
-                .background(RoundedRectangle(cornerRadius: 7, style: .continuous)
+                .background(RoundedRectangle(cornerRadius: Theme.controlRadius, style: .continuous)
                     .fill(configuration.isPressed ? Theme.selection : hovering ? Theme.hover : .clear))
                 .pointerStyle(.link)
                 .onHover { h in withAnimation(Theme.hoverAnimation) { hovering = h } }

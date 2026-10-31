@@ -80,7 +80,8 @@ struct TaskRowHost: View, Equatable {
     var body: some View {
         if let task = store.task(item.id) {
             let selected = model.selectedTaskID == item.id
-            TaskRowView(item: item, task: task, isSelected: selected,
+            // No selection pill while the task panel is open: it would peek out beside the panel.
+            TaskRowView(item: item, task: task, isSelected: selected && model.detailTaskID == nil,
                         popover: selected && model.detailTaskID == nil ? model.popover : nil,
                         labelColors: model.labelColorKeys(task.labels),
                         project: item.showProject ? store.project(task.projectId).map(ProjectBadge.init) : nil)
@@ -258,7 +259,7 @@ private struct RowIconButton: View {
                 .font(Fonts.body)
                 .foregroundStyle(hovering ? Theme.text : Theme.tertiaryText)
                 .frame(width: 24, height: 22)
-                .background(RoundedRectangle(cornerRadius: 6, style: .continuous).fill(hovering ? Theme.hover : .clear))
+                .background(RoundedRectangle(cornerRadius: Theme.controlRadius, style: .continuous).fill(hovering ? Theme.hover : .clear))
                 .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
@@ -341,7 +342,10 @@ struct DragPreview: View {
         .frame(minWidth: 220, maxWidth: 420, alignment: .leading)
         .background(RoundedRectangle(cornerRadius: Theme.rowRadius, style: .continuous).fill(Ctp.surface0.color))
         .overlay(RoundedRectangle(cornerRadius: Theme.rowRadius, style: .continuous).strokeBorder(Ctp.surface1.color))
-        .shadow(color: Theme.shadow, radius: 10, y: 4)
+        .shadow(color: Theme.shadow, radius: 14, y: 6)
+        // Picked up like a card: a slight tilt, with room for it and the shadow in the image.
+        .rotationEffect(.degrees(Theme.reduceMotion ? 0 : 1.5))
+        .padding(16)
     }
 }
 
@@ -362,6 +366,8 @@ struct TaskMetaRow: View {
                     HStack(spacing: 3) {
                         SubtaskIcon().frame(width: 11, height: 11)
                         Text("\(subtaskDone)/\(subtaskTotal)").monospacedDigit()
+                            .contentTransition(.numericText())
+                            .animation(Theme.motion, value: subtaskDone)
                     }
                     .foregroundStyle(subtaskDone == subtaskTotal ? Theme.today : Theme.secondaryText)
                 }

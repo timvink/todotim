@@ -16,6 +16,9 @@ struct ContentView: View {
             detail
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
                 .background(Theme.background)
+                .onGeometryChange(for: CGFloat.self, of: { $0.frame(in: .global).minX }) { x in
+                    if model.detailMinX != x { model.detailMinX = x }
+                }
                 .overlay(alignment: .bottomLeading) { ToastView().padding(20) }
         }
         .tint(Theme.accent)
@@ -103,30 +106,39 @@ private struct ModalLayer: View {
         let detail = model.detailTaskID != nil
         let quickAdd = model.showQuickAdd
         let shortcuts = model.showShortcuts
+        // Panels center on the list pane (the backdrop covers the whole window).
+        let left = model.detailMinX
         GeometryReader { geo in
             let size = geo.size
+            let paneWidth = size.width - left
             ZStack(alignment: .top) {
                 if detail {
                     Backdrop { model.detailTaskID = nil }
                     // Below the list's pinned title, so the panel never covers where you are.
-                    TaskDetailView(size: CGSize(width: min(600, size.width - 48),
-                                                height: max(240, min(size.height - Theme.titleBarHeight - 40, 680))))
+                    TaskDetailView(size: CGSize(width: min(600, paneWidth - 48),
+                                                height: max(240, min(size.height - Theme.titleBarHeight - 48, 680))))
                         .modalPanel()
-                        .padding(.top, Theme.titleBarHeight)
+                        .frame(maxWidth: .infinity)
+                        .padding(.leading, left)
+                        .padding(.top, Theme.titleBarHeight + 8)
                 }
                 if quickAdd {
                     Backdrop { model.showQuickAdd = false }
                     QuickAddView()
-                        .frame(width: min(560, size.width - 48))
+                        .frame(width: min(560, paneWidth - 48))
                         .modalPanel(lift: 8)
+                        .frame(maxWidth: .infinity)
+                        .padding(.leading, left)
                         .padding(.top, max(56, size.height * 0.14))
                 }
                 if shortcuts {
                     Backdrop { model.showShortcuts = false }
                     ShortcutsHelpView()
-                        .frame(width: min(640, size.width - 48), height: max(300, min(560, size.height - 96)))
+                        .frame(width: min(640, paneWidth - 48), height: max(300, min(560, size.height - 96)))
                         .modalPanel()
-                        .padding(.top, Theme.titleBarHeight)
+                        .frame(maxWidth: .infinity)
+                        .padding(.leading, left)
+                        .padding(.top, Theme.titleBarHeight + 8)
                 }
             }
             .frame(width: size.width, height: size.height, alignment: .top)
@@ -153,8 +165,8 @@ extension View {
     func modalPanel(lift: CGFloat = 0) -> some View {
         self
             .background(Theme.panel)
-            .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
-            .overlay(RoundedRectangle(cornerRadius: 12, style: .continuous).strokeBorder(Theme.panelBorder))
+            .clipShape(RoundedRectangle(cornerRadius: Theme.panelRadius, style: .continuous))
+            .overlay(RoundedRectangle(cornerRadius: Theme.panelRadius, style: .continuous).strokeBorder(Theme.panelBorder))
             .shadow(color: Theme.shadow, radius: 28, y: 10)
             .transition(.asymmetric(
                 insertion: .opacity.combined(with: .scale(scale: 0.97, anchor: .top)).combined(with: .offset(y: -lift)),
@@ -198,8 +210,8 @@ struct ToastView: View {
             .help("Dismiss")
         }
         .padding(.horizontal, 14).padding(.vertical, 10)
-        .background(RoundedRectangle(cornerRadius: 10, style: .continuous).fill(Ctp.surface0.color))
-        .overlay(RoundedRectangle(cornerRadius: 10, style: .continuous).strokeBorder(Theme.panelBorder))
+        .background(RoundedRectangle(cornerRadius: Theme.panelRadius, style: .continuous).fill(Ctp.surface0.color))
+        .overlay(RoundedRectangle(cornerRadius: Theme.panelRadius, style: .continuous).strokeBorder(Theme.panelBorder))
         .shadow(color: Theme.shadow, radius: 14, y: 4)
     }
 }

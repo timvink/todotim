@@ -108,17 +108,27 @@ struct ListTitleBar<Content: View>: View {
                     .padding(.leading, 74)
                 }
             }
-        .overlay(alignment: .bottom) {
-            Hairline().opacity(scrolled ? 1 : 0).animation(Theme.hoverAnimation, value: scrolled)
+        .overlay(alignment: .bottomLeading) {
+            // As wide as the section rules: from the title to the column's right edge.
+            Hairline()
+                .frame(width: max(0, column.right - column.left - Theme.gutter - Theme.rowInset))
+                .offset(x: column.left + Theme.gutter + Theme.rowInset)
+                .opacity(scrolled ? 1 : 0)
+                .animation(Theme.hoverAnimation, value: scrolled)
         }
+    }
+
+    /// The task column's edges in the bar (it is centered, at most `contentMaxWidth` wide).
+    private var column: (left: CGFloat, right: CGFloat) {
+        let outer = min(width, Theme.contentMaxWidth + 2 * Theme.contentPadding)
+        let left = (width - outer) / 2 + Theme.contentPadding
+        return (left, left + outer - 2 * Theme.contentPadding)
     }
 
     /// How far the title must move right to clear the window buttons and the sidebar button when
     /// the sidebar is hidden; zero unless the window is narrow (the column is centered).
     private var buttonsOverlap: CGFloat {
-        let column = min(width, Theme.contentMaxWidth + 2 * Theme.contentPadding)
-        let titleX = (width - column) / 2 + Theme.contentPadding + Theme.gutter + Theme.rowInset
-        return max(0, 112 - titleX)
+        max(0, 112 - (column.left + Theme.gutter + Theme.rowInset))
     }
 }
 
@@ -129,11 +139,20 @@ private struct ProjectTitle: View {
     let projectId: EntityID
 
     var body: some View {
+        let project = store.project(projectId)
         HStack(alignment: .center, spacing: 10) {
-            Text(store.project(projectId)?.name ?? "")
+            Text(project?.name ?? "")
                 .font(Fonts.pageTitle)
                 .foregroundStyle(Theme.text)
                 .lineLimit(1)
+                // The project's icon sits in the chevron gutter, echoing the sidebar.
+                .overlay(alignment: .leading) {
+                    if let project {
+                        ProjectIcon(project, fill: 1, size: 10)
+                            .frame(width: Theme.gutter)
+                            .offset(x: -(Theme.gutter + Theme.rowInset))
+                    }
+                }
             Spacer(minLength: 12)
             moreMenu
         }
@@ -152,8 +171,8 @@ private struct ProjectTitle: View {
             Button("Add section") { model.sectionEditor = SectionEditorTarget(projectId: projectId, index: nil) }
         } label: {
             Image(systemName: "ellipsis")
-                .font(Fonts.icon)
-                .frame(width: 28, height: 24)
+                .font(Fonts.body)
+                .frame(width: 24, height: 22)
         }
         .menuStyle(.borderlessButton)
         .menuIndicator(.hidden)
@@ -161,6 +180,8 @@ private struct ProjectTitle: View {
         .fixedSize()
         .pointerStyle(.link)
         .help("More actions")
+        // Ends where the rows' hover buttons end.
+        .padding(.trailing, Theme.rowInset)
     }
 }
 
@@ -237,10 +258,10 @@ private struct EmptyStateView: View {
     var body: some View {
         let done = doneToday
         Text(done > 0 ? "All clear — \(done) done today" : "Nothing here yet — press Q to add a task")
-            .font(.system(size: 15, weight: .medium, design: .rounded))
+            .font(Fonts.body)
             .foregroundStyle(done > 0 ? Theme.today : Theme.tertiaryText)
             .padding(.leading, Theme.gutter + Theme.rowInset)
-            .padding(.top, 10).padding(.bottom, 14)
+            .padding(.top, 6).padding(.bottom, 10)
     }
 
     /// Only computed while the project is empty.
@@ -323,8 +344,8 @@ struct SectionHeaderView: View {
                     TextField("Section name", text: $name)
                         .textFieldStyle(.plain)
                         .padding(.horizontal, 8).padding(.vertical, 5)
-                        .background(RoundedRectangle(cornerRadius: 6, style: .continuous).fill(Theme.field))
-                        .overlay(RoundedRectangle(cornerRadius: 6, style: .continuous).strokeBorder(Theme.accent.opacity(0.7)))
+                        .background(RoundedRectangle(cornerRadius: Theme.controlRadius, style: .continuous).fill(Theme.field))
+                        .overlay(RoundedRectangle(cornerRadius: Theme.controlRadius, style: .continuous).strokeBorder(Theme.accent.opacity(0.7)))
                         .font(Fonts.bodySemibold)
                         .focused($nameFocused)
                         .onSubmit(commitRename)
@@ -342,6 +363,8 @@ struct SectionHeaderView: View {
                             .font(Fonts.meta)
                             .monospacedDigit()
                             .foregroundStyle(Theme.tertiaryText)
+                            .contentTransition(.numericText(countsDown: true))
+                            .animation(Theme.motion, value: count)
                             .padding(.leading, 8)
                     }
                     Spacer()
@@ -358,11 +381,11 @@ struct SectionHeaderView: View {
                     .fixedSize()
                     .pointerStyle(.link)
                     .opacity(hovering ? 1 : 0)
-                    .padding(.trailing, 4)
+                    .padding(.trailing, Theme.rowInset)
                 }
             }
             .padding(.vertical, 4)
-            Hairline().padding(.leading, Theme.gutter)
+            Hairline().padding(.leading, Theme.gutter + Theme.rowInset).padding(.bottom, 2)
         }
         .padding(.top, 8)
         .contentShape(Rectangle())
@@ -415,8 +438,8 @@ struct AddSectionGap: View {
                 TextField("Name this section", text: $name)
                     .textFieldStyle(.plain)
                     .padding(.horizontal, 8).padding(.vertical, 6)
-                    .background(RoundedRectangle(cornerRadius: 6, style: .continuous).fill(Theme.field))
-                    .overlay(RoundedRectangle(cornerRadius: 6, style: .continuous).strokeBorder(Theme.accent.opacity(0.7)))
+                    .background(RoundedRectangle(cornerRadius: Theme.controlRadius, style: .continuous).fill(Theme.field))
+                    .overlay(RoundedRectangle(cornerRadius: Theme.controlRadius, style: .continuous).strokeBorder(Theme.accent.opacity(0.7)))
                     .font(Fonts.bodySemibold)
                     .focused($focused)
                     .onSubmit(add)
