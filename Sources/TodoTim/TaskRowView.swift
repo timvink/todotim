@@ -20,10 +20,12 @@ struct CheckCircle: View {
             ZStack {
                 Circle().fill(filled ? color : color.opacity(priority == .p4 ? 0 : 0.12))
                 Circle().strokeBorder(color, lineWidth: 1.5)
-                Image(systemName: "checkmark")
-                    .font(.system(size: size * 0.55, weight: .bold))
-                    .foregroundStyle(filled ? Theme.onAccent : color)
-                    .opacity(filled || hovering ? 1 : 0)
+                // Built only when shown: most rows never show it.
+                if filled || hovering {
+                    Image(systemName: "checkmark")
+                        .font(.system(size: size * 0.55, weight: .bold))
+                        .foregroundStyle(filled ? Theme.onAccent : color)
+                }
             }
             .frame(width: size, height: size)
             .scaleEffect(checking ? 1.15 : 1)
@@ -47,7 +49,7 @@ struct CheckCircle: View {
         .buttonStyle(.plain)
         .pointerStyle(.link)
         .onHover { hovering = $0 }
-        .help(completed ? "Reopen task" : "Complete task")
+        .accessibilityLabel(completed ? "Reopen task" : "Complete task")
     }
 
     private struct Burst {
@@ -123,8 +125,7 @@ struct TaskRowView: View, Equatable {
         HStack(alignment: .top, spacing: 0) {
             // The drag handle, shown on hover. It sits in a column left of the row's normal frame
             // (see the negative padding below), so the layout is unchanged.
-            GripDots()
-                .opacity(hovering ? 1 : 0)
+            ZStack { if hovering { GripDots().transition(.opacity) } }
                 .frame(width: Theme.grip, height: Self.lineHeight)
             chevron(t)
             HStack(alignment: .top, spacing: 10) {
@@ -168,9 +169,12 @@ struct TaskRowView: View, Equatable {
         }
         .padding(.leading, CGFloat(item.depth) * Theme.indent)
         .background(alignment: .leading) {
-            RoundedRectangle(cornerRadius: Theme.rowRadius, style: .continuous)
-                .fill(isSelected ? Theme.selection : hovering ? Theme.hover : .clear)
-                .padding(.leading, pillStart)
+            if isSelected || hovering {
+                RoundedRectangle(cornerRadius: Theme.rowRadius, style: .continuous)
+                    .fill(isSelected ? Theme.selection : Theme.hover)
+                    .padding(.leading, pillStart)
+                    .transition(.opacity)
+            }
         }
         .background {
             if item.depth > 0 || item.expanded {
@@ -184,10 +188,15 @@ struct TaskRowView: View, Equatable {
         .onHover { h in withAnimation(Theme.hoverAnimation) { hovering = h } }
         .onTapGesture { model.openTask(t.id) }
         .contextMenu { TaskMenuItems(task: t) }
-        .popover(isPresented: Binding(get: { popover != nil }, set: { if !$0 { model.popover = nil } }),
-                 arrowEdge: .bottom) {
-            TaskPopoverContent(taskID: t.id, kind: popover ?? .date)
-                .environment(model).environment(model.store)
+        // The popover hangs off a background that only the row showing one has.
+        .background {
+            if let popover {
+                Color.clear.popover(isPresented: Binding(get: { true }, set: { if !$0 { model.popover = nil } }),
+                                    arrowEdge: .bottom) {
+                    TaskPopoverContent(taskID: t.id, kind: popover)
+                        .environment(model).environment(model.store)
+                }
+            }
         }
         .onGeometryChange(for: CGFloat.self, of: { $0.size.height }) { [height] h in height.value = h }
         .onDrag {

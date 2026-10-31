@@ -67,7 +67,7 @@ struct TaskListView<Header: View>: View {
                 .onScrollTargetVisibilityChange(idType: String.self, threshold: 0.9) { ids in
                     visible.ids = Set(ids)
                 }
-                .background { SelectionScroller(proxy: proxy, visible: visible) }
+                .background { SelectionScroller(proxy: proxy, visible: visible, items: items) }
             }
         }
         // The title bar takes the band beside the window buttons instead of a toolbar.
@@ -198,6 +198,11 @@ private struct SelectionScroller: View {
     @Environment(AppModel.self) private var model
     let proxy: ScrollViewProxy
     let visible: VisibleRows
+    let items: [DisplayItem]
+
+    /// Rows from the screen beyond which a scroll jumps: an animated scroll builds every row it
+    /// passes (150 rows took over a second).
+    private static let animatedDistance = 15
 
     var body: some View {
         Color.clear
@@ -207,12 +212,24 @@ private struct SelectionScroller: View {
                 // While a key is held, jump without animation instead of restarting one per press.
                 let repeating = now - visible.lastScroll < 0.25
                 visible.lastScroll = now
-                if repeating {
+                if repeating || distance(to: id) > Self.animatedDistance {
                     proxy.scrollTo(id)
                 } else {
                     withAnimation(.easeOut(duration: 0.12)) { proxy.scrollTo(id) }
                 }
             }
+    }
+
+    /// Rows between `id` and the nearest row on screen.
+    private func distance(to id: String) -> Int {
+        var target: Int?
+        var shown: [Int] = []
+        for (i, item) in items.enumerated() {
+            if item.id == id { target = i }
+            if visible.ids.contains(item.id) { shown.append(i) }
+        }
+        guard let target else { return .max }
+        return shown.map { abs($0 - target) }.min() ?? .max
     }
 }
 

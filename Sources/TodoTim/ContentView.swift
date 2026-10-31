@@ -29,7 +29,8 @@ struct ContentView: View {
                 // Shows through the 1 pt gap between the sidebar and the list, see below.
                 window.backgroundColor = Ctp.crust.nsColor
             }
-            Self.hideSplitDivider(in: window.contentView)
+            // Without the sidebar there is no divider to look for.
+            if model.columnVisibility != .detailOnly { Self.hideSplitDivider(in: window.contentView) }
         })
         .onAppear { model.undoManager = undoManager }
         .onChange(of: undoManager) { _, um in model.undoManager = um }
@@ -80,14 +81,25 @@ struct ContentView: View {
 
     /// The split view's divider is drawn black whatever the palette; hidden, the window's `crust`
     /// background shows through its 1 pt gap instead. Re-applied on updates, as AppKit recreates
-    /// the divider when the sidebar is shown again.
-    private static func hideSplitDivider(in view: NSView?) {
-        guard let view else { return }
-        if String(describing: type(of: view)).contains("SplitDividerView") {
-            if view.alphaValue != 0 { view.alphaValue = 0 }
-            return
+    /// the divider when the sidebar is shown again. The window is searched only until the
+    /// divider's superview is known (a full walk took milliseconds per update).
+    private static func hideSplitDivider(in root: NSView?) {
+        if dividerHost?.window == nil || dividerHost?.subviews.contains(where: isDivider) != true {
+            dividerHost = root.flatMap(findDividerHost)
         }
-        for sub in view.subviews { hideSplitDivider(in: sub) }
+        for view in dividerHost?.subviews ?? [] where isDivider(view) && view.alphaValue != 0 { view.alphaValue = 0 }
+    }
+
+    private static weak var dividerHost: NSView?
+
+    private static func isDivider(_ view: NSView) -> Bool {
+        String(describing: type(of: view)).contains("SplitDividerView")
+    }
+
+    private static func findDividerHost(_ view: NSView) -> NSView? {
+        if view.subviews.contains(where: isDivider) { return view }
+        for sub in view.subviews { if let host = findDividerHost(sub) { return host } }
+        return nil
     }
 
     private var emptyState: some View {

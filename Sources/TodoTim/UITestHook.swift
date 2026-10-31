@@ -120,7 +120,8 @@ enum UITestHook {
         case "key":
             // key esc|up|down|<char>: a key press posted to this app's own queue.
             let codes: [String: (String, UInt16)] = ["esc": ("\u{1b}", 53), "up": ("\u{F700}", 126), "down": ("\u{F701}", 125),
-                                                    "j": ("j", 38), "k": ("k", 40), "a": ("a", 0), "e": ("e", 14)]
+                                                    "j": ("j", 38), "k": ("k", 40), "a": ("a", 0), "e": ("e", 14),
+                                                    "t": ("t", 17), "v": ("v", 9)]
             guard let w = model.mainWindow, let (chars, code) = codes[arg] else { break }
             if let e = NSEvent.keyEvent(with: .keyDown, location: .zero, modifierFlags: [], timestamp: ProcessInfo.processInfo.systemUptime,
                                         windowNumber: w.windowNumber, context: nil, characters: chars,
@@ -135,7 +136,11 @@ enum UITestHook {
         case "appearance":
             NSApp.appearance = ["light": NSAppearance(named: .aqua), "dark": NSAppearance(named: .darkAqua)][arg] ?? nil
         case "snapshot":
-            guard let w = model.mainWindow, let view = w.contentView?.superview ?? w.contentView,
+            // snapshot PATH [popover]: the main window, or the open popover (a window of its own).
+            let window = arg2 == "popover"
+                ? NSApp.windows.first { $0.isVisible && String(describing: type(of: $0)).contains("Popover") }
+                : model.mainWindow
+            guard let w = window, let view = w.contentView?.superview ?? w.contentView,
                   let rep = view.bitmapImageRepForCachingDisplay(in: view.bounds) else { break }
             view.cacheDisplay(in: view.bounds, to: rep)
             try? rep.representation(using: .png, properties: [:])?.write(to: URL(fileURLWithPath: arg))
