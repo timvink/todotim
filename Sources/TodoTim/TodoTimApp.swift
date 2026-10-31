@@ -172,6 +172,7 @@ struct TodoTimApp: App {
             SettingsView()
                 .environment(services.sync)
                 .environment(services.model)
+                .tint(Theme.accent)
         }
     }
 }
