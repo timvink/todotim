@@ -202,6 +202,14 @@ final class PerformanceTests: XCTestCase {
         // The next sync reads back this device's own uploads once; after that it is idle.
         let first = try await CalDAVSync.sync(local: upload.merged, state: upload.state, server: server)
         let local = first.merged
+        #if !BENCH_BEFORE
+        do {
+            // The first sync after launch loads this file (now off the main actor).
+            let stateData = try JSONEncoder().encode(first.state)
+            print("BENCH caldav-state.json: \(stateData.count / 1024) KB")
+            time("decode caldav-state.json", runs: 7) { _ = try? JSONDecoder().decode(CalDAVState.self, from: stateData) }
+        }
+        #endif
         try await timeAsync("full merge, nothing to write") {
             let r = try await CalDAVSync.sync(local: local, state: first.state, server: server)
             XCTAssertEqual(r.writes, 0)

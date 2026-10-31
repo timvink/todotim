@@ -93,10 +93,13 @@ final class AppServices {
         if let ignored = config?.ignoredKeys, !ignored.isEmpty {
             NSLog("TodoTim: \(configURL.path): ignoring \(ignored.joined(separator: ", ")) (no longer used; sync uses CalDAV)")
         }
-        // The CalDAV sync state sits next to the database it describes.
+        // The CalDAV sync state sits next to the database it describes. Syncing starts after the
+        // first frame (`AppDelegate.startSyncAfterFirstFrame`): the first sync reads the Keychain
+        // and the state file, which must not delay the window.
         sync = SyncController(store: store, defaults: defaults, credentials: KeychainCredentialStore(),
                               config: config, configPath: configURL.path,
-                              stateURL: url.deletingLastPathComponent().appendingPathComponent("caldav-state.json"))
+                              stateURL: url.deletingLastPathComponent().appendingPathComponent("caldav-state.json"),
+                              startSyncing: false)
         model = AppModel(store: store, sync: sync, defaults: defaults)
         model.startupError = startupError
         // Only https links are opened from the Help menu.
@@ -145,7 +148,20 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             #endif
             if !quiet { NSApp.activate(ignoringOtherApps: true) }
             AppServices.shared.keyRouter.install()
+            startSyncAfterFirstFrame()
         }
+    }
+
+    /// Starts the sync loop when the main thread first goes idle, which is after Core Animation
+    /// committed the window's first frame (its run-loop observer is ordered before this one).
+    private func startSyncAfterFirstFrame() {
+        let observer = CFRunLoopObserverCreateWithHandler(nil, CFRunLoopActivity.beforeWaiting.rawValue, false, CFIndex(Int.max)) { _, _ in
+            MainActor.assumeIsolated {
+                Perf.mark("syncStart")
+                AppServices.shared.sync.start()
+            }
+        }
+        CFRunLoopAddObserver(CFRunLoopGetMain(), observer, .commonModes)
     }
 
     func applicationWillTerminate(_ notification: Notification) {
