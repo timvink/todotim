@@ -132,6 +132,16 @@ final class StoreIndexTests: XCTestCase {
         assertIndexMatchesScan(store)
     }
 
+    /// The bulk build at launch gives the same index as adding the tasks one by one.
+    func testBulkIndexEqualsIncrementalIndex() {
+        for seed in 0..<10 as Range<UInt64> {
+            let tasks = DatabaseDecoderTests.generated(tasks: 200, seed: seed).tasks.values
+            var incremental = TaskIndex()
+            for t in tasks { incremental.add(t) }
+            XCTAssertEqual(TaskIndex(tasks), incremental, "seed \(seed)")
+        }
+    }
+
     func testDescendantIDsSurvivesCycles() {
         var db = Database()
         db.tasks["a"] = TodoTask(id: "a", projectId: inbox, parentId: "b", content: "a", order: 1)

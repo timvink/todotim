@@ -843,6 +843,11 @@ struct AreaKey: Hashable {
 struct SubtaskProgress: Equatable {
     var done = 0
     var total = 0
+
+    mutating func count(done isDone: Bool) {
+        total += 1
+        if isDone { done += 1 }
+    }
 }
 
 private struct PendingChanges {
@@ -856,7 +861,7 @@ private struct PendingChanges {
 }
 
 /// Derived lookups over live (non-deleted) tasks. Maintained incrementally by `TodoStore.writeTask`.
-struct TaskIndex {
+struct TaskIndex: Equatable {
     var children: [EntityID: Set<EntityID>] = [:]
     var topLevel: [AreaKey: Set<EntityID>] = [:]
     /// Lazily sorted caches; an entry is dropped when its bucket changes.
@@ -874,8 +879,27 @@ struct TaskIndex {
 
     init() {}
 
+    /// The index of `tasks`, equal to adding them one by one with `add` (at launch: one hash
+    /// lookup per table and task, and no sorted caches to invalidate yet).
     init(_ tasks: some Sequence<TodoTask>) {
-        for t in tasks { add(t) }
+        for t in tasks where !t.deleted {
+            let open = !t.isCompleted
+            if let p = t.parentId {
+                children[p, default: []].insert(t.id)
+                childProgress[p, default: SubtaskProgress()].count(done: !open)
+            } else {
+                let area = AreaKey(projectId: t.projectId, sectionId: t.sectionId)
+                topLevel[area, default: []].insert(t.id)
+                if open { openTopByArea[area, default: 0] += 1 }
+            }
+            guard open else { continue }
+            openByProject[t.projectId, default: 0] += 1
+            if t.labels.count == 1 {
+                openByLabel[t.labels[0], default: []].insert(t.id)
+            } else if !t.labels.isEmpty {
+                for label in Set(t.labels) { openByLabel[label, default: []].insert(t.id) }
+            }
+        }
     }
 
     /// Whether two versions of a task contribute identically to the index (and to sort order).
