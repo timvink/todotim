@@ -156,8 +156,11 @@ struct SidebarView: View {
 private struct AccountMenu: View {
     @Environment(AppModel.self) private var model
     @State private var hovering = false
+    @State private var picture = AccountMenu.loadedPicture
     private static let name = NSFullUserName().isEmpty ? NSUserName() : NSFullUserName()
-    private static let picture: NSImage? = CBIdentity(name: NSUserName(), authority: .default())?.image
+    /// The account picture at the avatar's pixel size. Reading the user record takes several
+    /// milliseconds, so it loads off the main thread after the first frame (initials until then).
+    nonisolated(unsafe) private static var loadedPicture: CGImage?
 
     var body: some View {
         Menu {
@@ -186,11 +189,34 @@ private struct AccountMenu: View {
         .fixedSize()
         .pointerStyle(.link)
         .onHover { h in withAnimation(Theme.hoverAnimation) { hovering = h } }
+        .task {
+            guard picture == nil else { return }
+            let side = Int(Sidebar.iconWidth * 2)
+            guard let image = await Task.detached(priority: .utility, operation: { Self.readPicture(side: side) }).value
+            else { return }
+            Self.loadedPicture = image
+            picture = image
+        }
+    }
+
+    /// The user's picture, scaled once to fill a `side`-pixel square.
+    private nonisolated static func readPicture(side: Int) -> CGImage? {
+        guard let source = CBIdentity(name: NSUserName(), authority: .default())?.image?
+                .cgImage(forProposedRect: nil, context: nil, hints: nil),
+              let space = CGColorSpace(name: CGColorSpace.sRGB),
+              let ctx = CGContext(data: nil, width: side, height: side, bitsPerComponent: 8, bytesPerRow: 0, space: space,
+                                  bitmapInfo: CGImageAlphaInfo.premultipliedFirst.rawValue | CGBitmapInfo.byteOrder32Little.rawValue)
+        else { return nil }
+        let w = CGFloat(source.width), h = CGFloat(source.height), scale = CGFloat(side) / min(w, h)
+        ctx.interpolationQuality = .high
+        ctx.draw(source, in: CGRect(x: (CGFloat(side) - w * scale) / 2, y: (CGFloat(side) - h * scale) / 2,
+                                    width: w * scale, height: h * scale))
+        return ctx.makeImage()
     }
 
     @ViewBuilder private var avatar: some View {
-        if let image = Self.picture {
-            Image(nsImage: image).resizable().scaledToFill()
+        if let picture {
+            Image(decorative: picture, scale: 2).resizable().scaledToFill()
         } else {
             let initials = Self.name.split(separator: " ").prefix(2).compactMap(\.first).map(String.init).joined()
             Circle().fill(Ctp.surface1.color)
