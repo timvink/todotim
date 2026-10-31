@@ -113,8 +113,10 @@ password in Settings instead. TodoTim versions before CalDAV sync used `folder` 
 - **Credentials.** The app password is stored in the macOS Keychain (service `TodoTim WebDAV`, a name kept from
   earlier versions), under an account named after both user and server, for example `tim@cloud.example.com`.
   With `password_command`, the password is kept in memory only and the Keychain is not read. A password saved for one server is never sent to another. TodoTim never logs it or shows `password_command` output.
-- **HTTPS only.** TodoTim refuses `http://` server URLs (except `localhost`), and does not follow redirects
-  that leave the configured server URL.
+- **HTTPS only.** TodoTim refuses `http://` server URLs (except `localhost`). It sends requests only to the
+  server URL's host: while finding your calendar home it follows redirects on that host only, and after that it
+  stays inside the server URL (or the calendar home, when that lies outside it). A principal, home or redirect on
+  another host, or from https to http, is refused.
 - **Config file trust.** `~/.todotim.toml` (and `TODOTIM_CONFIG`) can run a command and decides where the
   password is sent, so TodoTim only reads it when the file (after following symlinks) is a regular file owned by
   you and not writable by group or others, in a folder others can't write to. `chmod 600 ~/.todotim.toml` is
