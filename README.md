@@ -6,7 +6,7 @@ task apps can share.
 
 ![TodoTim showing a project with sections, tasks and sub-tasks](docs/screenshot.png)
 
-TodoTim began as a [Todoist](https://todoist.com) clone and keeps what matters for working through a list:
+TodoTim was inspired by [Todoist](https://todoist.com) and keeps what matters for working through a list:
 projects, sections, tasks and sub-tasks, labels, and Quick Add in plain language. It leaves out Today, Upcoming,
 the calendar and board views.
 
