@@ -184,6 +184,13 @@ final class PerformanceTests: XCTestCase {
         time("load + decode db", runs: 7) { _ = LocalPersistence.load(from: url) }
         #if !BENCH_BEFORE
         do {
+            let data = try Data(contentsOf: url)
+            time("decode db.json (JSONDecoder)", runs: 7) { _ = try? JSONCoding.decoder.decode(Database.self, from: data) }
+            XCTAssertNotNil(DatabaseDecoder.decode(data))
+            time("decode db.json (fast path)", runs: 7) { _ = DatabaseDecoder.decode(data) }
+            time("build store (TodoStore.init)", runs: 7) { _ = TodoStore(db: snapshot) }
+        }
+        do {
             let writer = PersistenceWriter(url: url, delay: 0)
             time("PersistenceWriter.save (main-thread cost)") { writer.save(snapshot) }
             time("PersistenceWriter.flush (encode + write)", runs: 7) { writer.save(snapshot); writer.flush() }

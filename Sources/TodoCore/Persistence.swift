@@ -23,6 +23,9 @@ public enum LocalPersistence {
             if !FileManager.default.fileExists(atPath: url.path) { return Database() }
             throw PersistenceError.unreadable(path: url.path, reason: error.localizedDescription)
         }
+        // Fast path; anything it does not read exactly like JSONDecoder goes to JSONDecoder, which
+        // alone decides whether the file is corrupt.
+        if let db = DatabaseDecoder.decode(data) { return db }
         do {
             return try JSONCoding.decoder.decode(Database.self, from: data)
         } catch {
@@ -251,31 +254,34 @@ enum MillisecondDate {
     /// (UTC). Returns nil for anything else so callers can fall back to a general parser.
     static func parse(_ s: String) -> Date? {
         var s = s
-        return s.withUTF8 { b -> Date? in
-            guard b.count == 19 || (b.count >= 21 && b.count <= 23 && b[19] == 46) else { return nil }
-            func num(_ at: Int, _ width: Int) -> Int64? {
-                var v: Int64 = 0
-                for k in at..<(at + width) {
-                    let c = b[k]
-                    guard c >= 48, c <= 57 else { return nil }
-                    v = v * 10 + Int64(c - 48)
-                }
-                return v
+        return s.withUTF8 { parse(utf8: $0) }
+    }
+
+    /// `parse(_:)` on UTF-8 bytes.
+    static func parse(utf8 b: UnsafeBufferPointer<UInt8>) -> Date? {
+        guard b.count == 19 || (b.count >= 21 && b.count <= 23 && b[19] == 46) else { return nil }
+        func num(_ at: Int, _ width: Int) -> Int64? {
+            var v: Int64 = 0
+            for k in at..<(at + width) {
+                let c = b[k]
+                guard c >= 48, c <= 57 else { return nil }
+                v = v * 10 + Int64(c - 48)
             }
-            guard b[4] == 45, b[7] == 45, b[10] == 84, b[13] == 58, b[16] == 58,
-                  let y = num(0, 4), let mo = num(5, 2), let d = num(8, 2),
-                  let h = num(11, 2), let mi = num(14, 2), let sec = num(17, 2),
-                  (1...12).contains(mo), (1...31).contains(d), h < 24, mi < 60, sec < 60 else { return nil }
-            var ms: Int64 = 0
-            if b.count > 19 {
-                let digits = b.count - 20
-                guard let f = num(20, digits) else { return nil }
-                ms = f * (digits == 1 ? 100 : digits == 2 ? 10 : 1)
-            }
-            let days = daysFromCivil(y, mo, d)
-            let totalMs = ((days * 86400) + h * 3600 + mi * 60 + sec) * 1000 + ms
-            return Date(timeIntervalSince1970: Double(totalMs) / 1000)
+            return v
         }
+        guard b[4] == 45, b[7] == 45, b[10] == 84, b[13] == 58, b[16] == 58,
+              let y = num(0, 4), let mo = num(5, 2), let d = num(8, 2),
+              let h = num(11, 2), let mi = num(14, 2), let sec = num(17, 2),
+              (1...12).contains(mo), (1...31).contains(d), h < 24, mi < 60, sec < 60 else { return nil }
+        var ms: Int64 = 0
+        if b.count > 19 {
+            let digits = b.count - 20
+            guard let f = num(20, digits) else { return nil }
+            ms = f * (digits == 1 ? 100 : digits == 2 ? 10 : 1)
+        }
+        let days = daysFromCivil(y, mo, d)
+        let totalMs = ((days * 86400) + h * 3600 + mi * 60 + sec) * 1000 + ms
+        return Date(timeIntervalSince1970: Double(totalMs) / 1000)
     }
 
     // Howard Hinnant's civil-date algorithms (proleptic Gregorian, UTC).
