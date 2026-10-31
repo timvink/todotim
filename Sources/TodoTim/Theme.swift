@@ -161,7 +161,7 @@ enum Theme {
     static let field = Ctp.surface0.color
     static let hover = Color(nsColor: Ctp.surface0.nsColor(alpha: 0.55))
     /// The selected row (list and sidebar): a neutral fill, the text keeps its color.
-    static let selection = Ctp.surface0.color
+    static let selection = Color(nsColor: .adaptive(dark: Ctp.surface0.nsColor, light: Ctp.surface0.nsColor(alpha: 0.75)))
     static let separator = Ctp.surface0.color
     /// Behind the panels.
     static let scrim = Color(nsColor: .adaptive(dark: Ctp.crust.nsColor(alpha: 0.55), light: Ctp.text.nsColor(alpha: 0.18)))

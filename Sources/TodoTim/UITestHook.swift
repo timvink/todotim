@@ -25,6 +25,9 @@ import TodoCore
 ///     state                print which modals are open
 ///     addtask TEXT         add a task with this raw title to the current project
 ///     hittest X Y          print the views a click at window point (X, Y) from the top left would reach
+///     appearance light|dark|system   switch the app's appearance (for screenshots)
+///     sidebar show|hide    show or hide the sidebar
+///     snapshot PATH        render the window into a PNG at PATH (works on any Space, no capture permission)
 ///     quit
 @MainActor
 enum UITestHook {
@@ -129,6 +132,15 @@ enum UITestHook {
         case "addtask":
             // addtask TEXT: adds a raw (unparsed) task to the current project.
             store.addTask(content: parts.dropFirst().joined(separator: " "), projectId: model.currentProjectID ?? TodoStore.inboxID)
+        case "appearance":
+            NSApp.appearance = ["light": NSAppearance(named: .aqua), "dark": NSAppearance(named: .darkAqua)][arg] ?? nil
+        case "snapshot":
+            guard let w = model.mainWindow, let view = w.contentView?.superview ?? w.contentView,
+                  let rep = view.bitmapImageRepForCachingDisplay(in: view.bounds) else { break }
+            view.cacheDisplay(in: view.bounds, to: rep)
+            try? rep.representation(using: .png, properties: [:])?.write(to: URL(fileURLWithPath: arg))
+        case "sidebar":
+            model.columnVisibility = arg == "hide" ? .detailOnly : .all
         case "hittest":
             guard let w = model.mainWindow, let frame = w.contentView?.superview,
                   let x = Double(arg), let y = Double(arg2) else { break }

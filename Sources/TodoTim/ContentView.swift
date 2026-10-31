@@ -21,7 +21,12 @@ struct ContentView: View {
         .tint(Theme.accent)
         .toolbar(removing: .title)
         .background(WindowAccessor { window in
-            if model.mainWindow !== window { model.mainWindow = window }
+            if model.mainWindow !== window {
+                model.mainWindow = window
+                // Shows through the 1 pt gap between the sidebar and the list, see below.
+                window.backgroundColor = Ctp.crust.nsColor
+            }
+            Self.hideSplitDivider(in: window.contentView)
         })
         .onAppear { model.undoManager = undoManager }
         .onChange(of: undoManager) { _, um in model.undoManager = um }
@@ -68,6 +73,18 @@ struct ContentView: View {
         case nil:
             emptyState
         }
+    }
+
+    /// The split view's divider is drawn black whatever the palette; hidden, the window's `crust`
+    /// background shows through its 1 pt gap instead. Re-applied on updates, as AppKit recreates
+    /// the divider when the sidebar is shown again.
+    private static func hideSplitDivider(in view: NSView?) {
+        guard let view else { return }
+        if String(describing: type(of: view)).contains("SplitDividerView") {
+            if view.alphaValue != 0 { view.alphaValue = 0 }
+            return
+        }
+        for sub in view.subviews { hideSplitDivider(in: sub) }
     }
 
     private var emptyState: some View {

@@ -82,32 +82,43 @@ struct ListTitleBar<Content: View>: View {
     @Environment(AppModel.self) private var model
     let scrolled: Bool
     @ViewBuilder let content: Content
+    @State private var width: CGFloat = 0
 
     var body: some View {
         let sidebarHidden = model.columnVisibility == .detailOnly
-        HStack(spacing: 0) {
-            if sidebarHidden {
-                Button { withAnimation(Theme.motion) { model.columnVisibility = .all } } label: {
-                    Image(systemName: "sidebar.left")
-                        .font(Fonts.icon)
-                        .foregroundStyle(Theme.tertiaryText)
-                        .frame(width: 28, height: 24)
-                        .contentShape(Rectangle())
+        content
+            .padding(.leading, Theme.gutter + Theme.rowInset + (sidebarHidden ? buttonsOverlap : 0))
+            .frame(maxWidth: Theme.contentMaxWidth, alignment: .leading)
+            .padding(.horizontal, Theme.contentPadding)
+            .frame(maxWidth: .infinity)
+            .onGeometryChange(for: CGFloat.self, of: { $0.size.width }) { width = $0 }
+            .frame(height: Theme.titleBarHeight)
+            .overlay(alignment: .topLeading) {
+                if sidebarHidden {
+                    // Level with the window buttons, just after them.
+                    Button { withAnimation(Theme.motion) { model.columnVisibility = .all } } label: {
+                        Image(systemName: "sidebar.left")
+                            .font(Fonts.icon)
+                            .foregroundStyle(Theme.tertiaryText)
+                            .frame(width: 28, height: 26)
+                            .contentShape(Rectangle())
+                    }
+                    .buttonStyle(.plain)
+                    .help("Show sidebar (⌃⌘S)")
+                    .padding(.leading, 74)
                 }
-                .buttonStyle(.plain)
-                .help("Show sidebar (⌃⌘S)")
-                .padding(.leading, 78)
             }
-            content
-                .padding(.leading, Theme.gutter + Theme.rowInset)
-                .frame(maxWidth: Theme.contentMaxWidth, alignment: .leading)
-                .padding(.horizontal, Theme.contentPadding)
-                .frame(maxWidth: .infinity)
-        }
-        .frame(height: Theme.titleBarHeight)
         .overlay(alignment: .bottom) {
             Hairline().opacity(scrolled ? 1 : 0).animation(Theme.hoverAnimation, value: scrolled)
         }
+    }
+
+    /// How far the title must move right to clear the window buttons and the sidebar button when
+    /// the sidebar is hidden; zero unless the window is narrow (the column is centered).
+    private var buttonsOverlap: CGFloat {
+        let column = min(width, Theme.contentMaxWidth + 2 * Theme.contentPadding)
+        let titleX = (width - column) / 2 + Theme.contentPadding + Theme.gutter + Theme.rowInset
+        return max(0, 112 - titleX)
     }
 }
 
