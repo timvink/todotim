@@ -21,13 +21,14 @@ import TodoCore
 ///     enddrag              cancel the drag
 ///     collapse S           toggle section S
 ///     order                print the visible task titles with depths
-///     key esc|up|down|j|k|a|e   post a key press to the app's own queue
+///     key esc|up|down|j|k|a|e|t|v   post a key press to the app's own queue
 ///     state                print which modals are open
 ///     addtask TEXT         add a task with this raw title to the current project
 ///     hittest X Y          print the views a click at window point (X, Y) from the top left would reach
 ///     appearance light|dark|system   switch the app's appearance (for screenshots)
 ///     sidebar show|hide    show or hide the sidebar
-///     snapshot PATH        render the window into a PNG at PATH (works on any Space, no capture permission)
+///     snapshot PATH [popover]   render the window (or the open popover) into a PNG at PATH (works on
+///                          any Space, no capture permission)
 ///     quit
 @MainActor
 enum UITestHook {
