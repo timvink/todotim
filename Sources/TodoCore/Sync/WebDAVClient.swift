@@ -26,6 +26,11 @@ public final class WebDAVClient: @unchecked Sendable {
     /// Whether redirects inside `baseURL` are followed. When false, every redirect response is
     /// returned to the caller (with `location`), which checks the target itself (discovery).
     var followsRedirects = true
+    /// A request answered 423 (Locked) was not performed: it is sent again up to this many times,
+    /// after `lockedRetryDelay`, doubled each time, with jitter. Xandikos locks its store while it
+    /// writes and refuses concurrent writes that way.
+    static let lockedRetries = 4
+    var lockedRetryDelay: Duration = .milliseconds(50)
 
     /// Throws `SyncError.invalidURL` if `serverURL` is not an http(s) URL, and
     /// `SyncError.insecureURL` for http:// to anything but localhost.
@@ -152,7 +157,13 @@ public final class WebDAVClient: @unchecked Sendable {
         req.cachePolicy = .reloadIgnoringLocalCacheData
         for (k, v) in headers { req.setValue(v, forHTTPHeaderField: k) }
         req.httpBody = body
-        let (data, response) = try await send(req)
+        var (data, response) = try await send(req)
+        var delay = lockedRetryDelay
+        for _ in 0..<Self.lockedRetries where response.statusCode == 423 {
+            try await Task.sleep(for: delay * Double.random(in: 0.5...1.5))
+            delay *= 2
+            (data, response) = try await send(req)
+        }
         return DAVResponse(status: response.statusCode, data: data,
                            etag: Self.normalizeETag(response.value(forHTTPHeaderField: "ETag")
                                                     ?? response.value(forHTTPHeaderField: "OC-ETag")),

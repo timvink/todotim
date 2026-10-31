@@ -30,6 +30,8 @@ public enum SyncError: LocalizedError, Equatable, Sendable {
     /// Discovery found the principal or calendar home on another origin than the server URL (as
     /// iCloud does); TodoTim does not follow it.
     case otherServer(String)
+    /// The server has no Nextcloud-style sharing (`share_with`).
+    case sharingUnsupported
     /// Remote data exceeds a `SyncLimits` bound.
     case limitExceeded(String)
 
@@ -83,6 +85,8 @@ public enum SyncError: LocalizedError, Equatable, Sendable {
             return "Refused to use the unsafe remote path “\(p)”"
         case .redirectRejected(let target):
             return "The server redirected to “\(target)”, outside the configured server URL. Check the server URL in Settings (use the final https:// address)."
+        case .sharingUnsupported:
+            return "this server does not support sharing lists (share_with works with Nextcloud)"
         case .otherServer(let target):
             return "The server says your calendars are at “\(target)”, on another server. TodoTim only sends your password to the server URL in Settings. If you trust that server, use its address as the server URL."
         case .limitExceeded(let what):

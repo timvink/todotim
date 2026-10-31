@@ -165,6 +165,27 @@ final class WebDAVClientTests: XCTestCase {
         }
     }
 
+    /// Xandikos answers 423 (Locked) to a write while it writes another one: sent again.
+    func testLockedRequestsAreSentAgain() async throws {
+        let client = try makeClient()
+        client.lockedRetryDelay = .milliseconds(1)
+        var calls = 0
+        StubURLProtocol.handler = { _ in
+            calls += 1
+            return calls < 3 ? (423, [:], Data()) : (204, ["ETag": "\"e2\""], Data())
+        }
+        let r = try await client.send("PUT", "calendars/tim/work/a.ics", headers: ["If-Match": "\"e1\""], body: Data("x".utf8))
+        XCTAssertEqual(r.status, 204)
+        XCTAssertEqual(StubURLProtocol.requests.count, 3)
+        XCTAssertTrue(StubURLProtocol.requests.allSatisfy { $0.value(forHTTPHeaderField: "If-Match") == "\"e1\"" })
+
+        StubURLProtocol.requests = []
+        StubURLProtocol.handler = { _ in (423, [:], Data()) }
+        let locked = try await client.send("PUT", "calendars/tim/work/a.ics")
+        XCTAssertEqual(locked.status, 423, "a lasting lock is reported")
+        XCTAssertEqual(StubURLProtocol.requests.count, 1 + WebDAVClient.lockedRetries)
+    }
+
     func testResponseBodyIsCapped() async throws {
         let client = try makeClient()
         client.maxResponseBytes = 100_000
@@ -293,6 +314,154 @@ final class WebDAVClientTests: XCTestCase {
         let full = try await caldav.changes(in: "calendars/tim/work", since: "stale")
         XCTAssertTrue(full.isFull)
         XCTAssertEqual(full.changed.count, 1)
+    }
+
+    /// A server without sync-collection (RFC 6578 is optional in CalDAV): the getctag serves as the
+    /// sync token, and a calendar-query lists the whole calendar.
+    func testServerWithoutSyncCollectionIsListedByCalendarQuery() async throws {
+        let listing = """
+        <d:multistatus xmlns:d="DAV:" xmlns:cal="urn:ietf:params:xml:ns:caldav" xmlns:cs="http://calendarserver.org/ns/">
+         <d:response><d:href>/remote.php/dav/calendars/tim/work/</d:href><d:propstat><d:prop>
+          <d:resourcetype><d:collection/><cal:calendar/></d:resourcetype>
+          <cal:supported-calendar-component-set><cal:comp name="VTODO"/></cal:supported-calendar-component-set>
+          <cs:getctag>42</cs:getctag></d:prop><d:status>HTTP/1.1 200 OK</d:status></d:propstat>
+          <d:propstat><d:prop><d:sync-token/></d:prop><d:status>HTTP/1.1 404 Not Found</d:status></d:propstat></d:response>
+        </d:multistatus>
+        """
+        let query = syncCollection.replacingOccurrences(of: " <d:sync-token>http://sabre.io/ns/sync/9</d:sync-token>\n", with: "")
+        StubURLProtocol.handler = { req in
+            if req.httpMethod == "PROPFIND" { return (207, [:], Data(listing.utf8)) }
+            return Self.body(req)?.contains("sync-collection") == true ? (501, [:], Data()) : (207, [:], Data(query.utf8))
+        }
+        let caldav = CalDAVClient(dav: try makeClient(), username: "tim")
+        let calendars = try await caldav.calendars()
+        XCTAssertEqual(calendars.map(\.syncToken), ["ctag:42"])
+
+        let changes = try await caldav.changes(in: "calendars/tim/work", since: "ctag:41")
+        XCTAssertEqual(changes.changed.map(\.path), ["calendars/tim/work/a.ics"])
+        XCTAssertEqual(changes.removed, [])
+        XCTAssertTrue(changes.isFull)
+        XCTAssertNil(changes.syncToken)
+        let request = try XCTUnwrap(StubURLProtocol.requests.last)
+        XCTAssertTrue(Self.body(request)?.contains("<c:calendar-query") == true)
+        XCTAssertEqual(request.value(forHTTPHeaderField: "Depth"), "1")
+
+        // Before any token is stored, a refused sync-collection falls back to calendar-query.
+        StubURLProtocol.requests = []
+        let first = try await caldav.changes(in: "calendars/tim/work", since: nil)
+        XCTAssertEqual(first.changed.map(\.path), ["calendars/tim/work/a.ics"])
+        XCTAssertEqual(StubURLProtocol.requests.count, 2)
+    }
+
+    /// Xandikos answers sync-collection with ETags but no calendar data (calendar-data 404): the
+    /// objects are fetched with calendar-multiget. An object it cannot return fails the listing
+    /// instead of looking deleted.
+    func testObjectsWithoutDataAreFetchedWithMultiget() async throws {
+        func response(_ name: String, data: Bool) -> String {
+            """
+            <d:response><d:href>/remote.php/dav/calendars/tim/work/\(name)</d:href>\
+            <d:propstat><d:prop><d:getetag>"e-\(name)"</d:getetag></d:prop><d:status>HTTP/1.1 200 OK</d:status></d:propstat>\
+            <d:propstat><d:prop><cal:calendar-data\(data ? ">BEGIN:VCALENDAR\nBEGIN:VTODO\nUID:\(name)\nEND:VTODO\nEND:VCALENDAR\n</cal:calendar-data>" : "/>")\
+            </d:prop><d:status>HTTP/1.1 \(data ? "200 OK" : "404 Not Found")</d:status></d:propstat></d:response>
+            """
+        }
+        func multistatus(_ responses: String) -> Data {
+            Data("""
+            <d:multistatus xmlns:d="DAV:" xmlns:cal="urn:ietf:params:xml:ns:caldav">\(responses)\
+            <d:sync-token>http://example.com/sync/2</d:sync-token></d:multistatus>
+            """.utf8)
+        }
+        let gone = "<d:response><d:href>/remote.php/dav/calendars/tim/work/b.ics</d:href><d:status>HTTP/1.1 404 Not Found</d:status></d:response>"
+        var omit = false
+        StubURLProtocol.handler = { req in
+            let body = Self.body(req) ?? ""
+            if body.contains("sync-collection") { return (207, [:], multistatus(response("a.ics", data: false) + response("b.ics", data: false))) }
+            return (207, [:], multistatus((omit ? "" : response("a.ics", data: true)) + gone))
+        }
+        let caldav = CalDAVClient(dav: try makeClient(), username: "tim")
+        let changes = try await caldav.changes(in: "calendars/tim/work", since: nil)
+        XCTAssertEqual(changes.changed.map(\.path), ["calendars/tim/work/a.ics"])
+        XCTAssertTrue(changes.changed[0].ics.contains("UID:a.ics"))
+        XCTAssertEqual(changes.changed[0].etag, "\"e-a.ics\"")
+        XCTAssertEqual(changes.removed, ["calendars/tim/work/b.ics"], "gone since the listing")
+        XCTAssertEqual(changes.syncToken, "http://example.com/sync/2")
+        let multiget = try XCTUnwrap(StubURLProtocol.requests.last.flatMap(Self.body))
+        XCTAssertTrue(multiget.contains("<c:calendar-multiget"), multiget)
+        XCTAssertTrue(multiget.contains("<d:href>/remote.php/dav/calendars/tim/work/a.ics</d:href>"), multiget)
+
+        omit = true
+        do {
+            _ = try await caldav.changes(in: "calendars/tim/work", since: nil)
+            XCTFail("expected badRemoteData")
+        } catch {
+            guard case .badRemoteData? = error as? SyncError else { return XCTFail("\(error)") }
+        }
+    }
+
+    /// A property the server will not store comes back 403; atomic servers fail the rest with 424
+    /// (sent again without it), others apply the rest at once (Xandikos).
+    func testRefusedOptionalPropertiesAreReportedAndTheRestIsSet() async throws {
+        func reply(_ statuses: [(String, String)]) -> Data {
+            let propstats = statuses.map { "<d:propstat><d:prop>\($0.0)</d:prop><d:status>HTTP/1.1 \($0.1)</d:status></d:propstat>" }
+            return Data("""
+            <d:multistatus xmlns:d="DAV:" xmlns:t="https://todotim.app/ns"><d:response><d:href>/remote.php/dav/calendars/tim/w/</d:href>\
+            \(propstats.joined())</d:response></d:multistatus>
+            """.utf8)
+        }
+        let caldav = CalDAVClient(dav: try makeClient(), username: "tim")
+        var calls = 0
+        StubURLProtocol.handler = { _ in
+            calls += 1
+            return calls == 1 ? (207, [:], reply([("<d:displayname/>", "424 Failed Dependency"), ("<t:sections/>", "403 Forbidden")]))
+                : (207, [:], reply([("<d:displayname/>", "200 OK")]))
+        }
+        let refused = try await caldav.setProperties("calendars/tim/w", [.name: "New", .sections: "[]"])
+        XCTAssertEqual(refused, [.sections])
+        XCTAssertEqual(StubURLProtocol.requests.count, 2)
+        let retry = try XCTUnwrap(StubURLProtocol.requests.last.flatMap(Self.body))
+        XCTAssertTrue(retry.contains("displayname") && !retry.contains("sections"), retry)
+
+        StubURLProtocol.requests = []
+        StubURLProtocol.handler = { _ in (207, [:], reply([("<d:displayname/>", "200 OK"), ("<t:sections/>", "403 Forbidden")])) }
+        let partial = try await caldav.setProperties("calendars/tim/w", [.name: "New", .sections: "[]"])
+        XCTAssertEqual(partial, [.sections])
+        XCTAssertEqual(StubURLProtocol.requests.count, 1, "already applied")
+    }
+
+    func testCalendarIsCreatedWithoutPropertiesTheServerRefuses() async throws {
+        var calls = 0
+        StubURLProtocol.handler = { _ in
+            calls += 1
+            return calls == 1 ? (403, [:], Data()) : (201, [:], Data())
+        }
+        let caldav = CalDAVClient(dav: try makeClient(), username: "tim")
+        let leftOut = try await caldav.createCalendar("calendars/tim/w", name: "W", color: "#DB4035", order: "1")
+        XCTAssertEqual(leftOut, [.color, .order])
+        let bodies = StubURLProtocol.requests.compactMap(Self.body)
+        XCTAssertEqual(bodies.count, 2)
+        XCTAssertTrue(bodies[0].contains("calendar-color"))
+        XCTAssertFalse(bodies[1].contains("calendar-color"))
+        XCTAssertTrue(bodies[1].contains("<c:comp name=\"VTODO\"/>"))
+
+        StubURLProtocol.handler = { _ in (405, [:], Data()) }
+        do {
+            _ = try await caldav.createCalendar("calendars/tim/w", name: "W", color: "#DB4035", order: "1")
+            XCTFail("expected calendarExists")
+        } catch {
+            XCTAssertEqual(error as? SyncError, .calendarExists("calendars/tim/w"))
+        }
+    }
+
+    func testSharingOnAServerWithoutItFailsClearly() async throws {
+        StubURLProtocol.handler = { _ in (405, [:], Data()) }
+        let caldav = CalDAVClient(dav: try makeClient(), username: "tim")
+        do {
+            try await caldav.share("calendars/tim/w", with: "bob")
+            XCTFail("expected sharingUnsupported")
+        } catch {
+            XCTAssertEqual(error as? SyncError, .sharingUnsupported)
+            XCTAssertTrue((error as? SyncError)?.errorDescription?.contains("Nextcloud") == true)
+        }
     }
 
     func testEndlessPagingFailsInsteadOfReturningAPartialListing() async throws {

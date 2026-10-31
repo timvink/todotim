@@ -33,7 +33,7 @@ final class LiveCalDAVTests: XCTestCase {
         var paths = Set(try await server.calendars().map(\.path))
         paths.insert(davPath(server.home, CalDAVSync.inboxURI))
         for path in paths {
-            try? await server.setProperties(path, [.sections: nil, .labels: nil])
+            _ = try? await server.setProperties(path, [.sections: nil, .labels: nil])
             _ = try await server.dav.send("DELETE", path, collection: true, headers: ["X-NC-CalDAV-No-Trashbin": "1"])
         }
     }
@@ -72,17 +72,24 @@ final class LiveCalDAVTests: XCTestCase {
         let inboxTask = s.addTask(content: "Call mum", projectId: TodoStore.inboxID, priority: .p2)
         s.updateTask(parent.id) { $0.collapsed = true }
 
-        // 1. First sync uploads everything (the migration of an existing database).
+        // 1. First sync uploads everything (the migration of an existing database). A server
+        //    without dead properties (Xandikos) refuses the sections and labels lists, once.
         let first = try await a.sync(server, shareWith: shareWith)
-        XCTAssertEqual(first.warnings, [], "sharing works")
+        let refused = a.state.refusedProperties ?? []
+        XCTAssertEqual(first.warnings, refused.isEmpty ? [] : [CalDAVSync.refusedPropertiesWarning(refused)], "sharing works")
+        XCTAssertTrue(refused.isSubset(of: [.sections, .labels]), "\(refused)")
         let calendars = try await server.calendars()
         XCTAssertEqual(Set(calendars.map(\.uri)), ["todotim-inbox", p.id, other.id])
         let inboxCal = try XCTUnwrap(calendars.first { $0.uri == "todotim-inbox" })
         XCTAssertEqual(inboxCal.name, "Inbox")
-        XCTAssertEqual(inboxCal.labels.flatMap(PropertyList.decode)?.map(\.name).sorted(), ["outside", "weekend"])
+        if !refused.contains(.labels) {
+            XCTAssertEqual(inboxCal.labels.flatMap(PropertyList.decode)?.map(\.name).sorted(), ["outside", "weekend"])
+        }
         let homeCal = try XCTUnwrap(calendars.first { $0.uri == p.id })
         XCTAssertEqual(homeCal.color.flatMap(ProjectColor.key(hex:)), "green")
-        XCTAssertEqual(homeCal.sections.flatMap(PropertyList.decode)?.map(\.name), ["Garden \"front\""])
+        if !refused.contains(.sections) {
+            XCTAssertEqual(homeCal.sections.flatMap(PropertyList.decode)?.map(\.name), ["Garden \"front\""])
+        }
         let parentPath = davPath(home, "\(p.id)/\(parent.id).ics")
         let parentObject = try await object(parentPath)
         let parentICS = try XCTUnwrap(parentObject?.ics).unfolded
@@ -139,7 +146,8 @@ final class LiveCalDAVTests: XCTestCase {
         // 6. Moving a task to another list (DAV MOVE), renaming the section (rewrites its tasks).
         s.moveTask(inboxTask.id, projectId: other.id, sectionId: nil, parentId: nil)
         s.updateSection(sec.id) { $0.name = "Garden" }
-        try await a.sync(server)
+        let renaming = try await a.sync(server)
+        XCTAssertEqual(renaming.warnings, [])
         let moved = try await object(davPath(home, "\(other.id)/\(inboxTask.id).ics"))
         XCTAssertNotNil(moved)
         let oldPlace = try await object(davPath(home, "todotim-inbox/\(inboxTask.id).ics"))
@@ -199,10 +207,10 @@ private actor Racing: CalDAVServer {
     func changes(in calendar: String, since token: String?) async throws -> CalendarChanges {
         try await base.changes(in: calendar, since: token)
     }
-    func createCalendar(_ path: String, name: String, color: String, order: String) async throws {
+    func createCalendar(_ path: String, name: String, color: String, order: String) async throws -> Set<CalendarProperty> {
         try await base.createCalendar(path, name: name, color: color, order: order)
     }
-    func setProperties(_ path: String, _ values: [CalendarProperty: String?]) async throws {
+    func setProperties(_ path: String, _ values: [CalendarProperty: String?]) async throws -> Set<CalendarProperty> {
         try await base.setProperties(path, values)
     }
     func deleteCalendar(_ path: String) async throws { try await base.deleteCalendar(path) }

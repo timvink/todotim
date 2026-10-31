@@ -29,6 +29,8 @@ actor FakeCalDAVServer: CalDAVServer {
     var failMoves = false
     /// Calendar paths whose MKCALENDAR fails with 429 (Nextcloud's creation rate limit).
     var rateLimitedCreates: Set<String> = []
+    /// Properties PROPPATCH refuses to store (a server without dead properties, like Xandikos).
+    var refusedProperties: Set<CalendarProperty> = []
     /// Called before each PUT; lets tests change an object "concurrently".
     var beforePut: (@Sendable (String) async -> Void)?
     /// Called once at the next calendar listing.
@@ -98,6 +100,7 @@ actor FakeCalDAVServer: CalDAVServer {
     func setBeforePut(_ f: (@Sendable (String) async -> Void)?) { beforePut = f }
     func setBeforeList(_ f: (@Sendable () async -> Void)?) { beforeList = f }
     func setHomeGone(_ v: Bool) { homeGone = v }
+    func setRefusedProperties(_ v: Set<CalendarProperty>) { refusedProperties = v }
 
     private func bump(_ calendar: String) {
         version += 1
@@ -150,20 +153,22 @@ actor FakeCalDAVServer: CalDAVServer {
         return out
     }
 
-    func createCalendar(_ path: String, name: String, color: String, order: String) async throws {
+    func createCalendar(_ path: String, name: String, color: String, order: String) async throws -> Set<CalendarProperty> {
         note("MKCALENDAR")
         if rateLimitedCreates.contains(path) { throw SyncError.rateLimited(path) }
         guard calendarsByPath[path] == nil else { throw SyncError.calendarExists(path) }
         calendarsByPath[path] = Calendar(props: RemoteCalendar(path: path, name: name, color: color, order: order))
         changeLog[path] = [:]
         bump(path)
+        return []
     }
 
-    func setProperties(_ path: String, _ values: [CalendarProperty: String?]) async throws {
+    func setProperties(_ path: String, _ values: [CalendarProperty: String?]) async throws -> Set<CalendarProperty> {
         note("PROPPATCH")
         guard calendarsByPath[path] != nil else { throw SyncError.notFound(path) }
-        for (k, v) in values { set(k, v, on: &calendarsByPath[path]!.props) }
+        for (k, v) in values where !refusedProperties.contains(k) { set(k, v, on: &calendarsByPath[path]!.props) }
         bump(path)
+        return refusedProperties.intersection(values.keys)
     }
 
     func deleteCalendar(_ path: String) async throws {

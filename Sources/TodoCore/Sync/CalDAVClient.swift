@@ -38,8 +38,12 @@ struct CalendarChanges: Equatable, Sendable {
 }
 
 /// Calendar properties TodoTim writes.
-enum CalendarProperty: String, CaseIterable, Sendable {
+enum CalendarProperty: String, CaseIterable, Codable, Sendable {
     case name, color, order, sections, labels
+
+    /// Properties a server may refuse to store (extensions: Apple's and TodoTim's own dead
+    /// properties); TodoTim then keeps them locally. The display name is standard WebDAV.
+    static let optional: Set<CalendarProperty> = [.color, .order, .sections, .labels]
 
     var element: (ns: String, name: String) {
         switch self {
@@ -66,12 +70,15 @@ protocol CalDAVServer: Sendable {
     /// Changes in `calendar` since `token` (RFC 6578 sync-collection, with calendar data); with a
     /// nil or rejected token, the full content.
     func changes(in calendar: String, since token: String?) async throws -> CalendarChanges
-    /// MKCALENDAR with a VTODO-only component set.
-    func createCalendar(_ path: String, name: String, color: String, order: String) async throws
-    /// PROPPATCH; a nil value removes the property.
-    func setProperties(_ path: String, _ values: [CalendarProperty: String?]) async throws
+    /// MKCALENDAR with a VTODO-only component set. Returns the properties that could not be set
+    /// with it (a server that refuses the color or order gets a calendar without them).
+    func createCalendar(_ path: String, name: String, color: String, order: String) async throws -> Set<CalendarProperty>
+    /// PROPPATCH; a nil value removes the property. Returns the optional properties the server
+    /// refused to store (`CalendarProperty.optional`, e.g. dead properties on Xandikos); the
+    /// others are set. Any other refusal throws.
+    func setProperties(_ path: String, _ values: [CalendarProperty: String?]) async throws -> Set<CalendarProperty>
     func deleteCalendar(_ path: String) async throws
-    /// Shares a calendar read-write with another user (Nextcloud sharing).
+    /// Shares a calendar read-write with another user (Nextcloud's sharing; other servers refuse it).
     func share(_ path: String, with user: String) async throws
     /// PUT a calendar object: `ifMatch` nil creates it (`If-None-Match: *`). Returns the new ETag if reported.
     func put(_ path: String, ics: String, ifMatch: String?) async throws -> String?
@@ -157,8 +164,8 @@ final class CalDAVClient: CalDAVServer {
         let props = CalendarProperty.allCases.map { "<x:\($0.element.name) xmlns:x=\"\($0.element.ns)\"/>" }.joined()
         let body = """
         <?xml version="1.0" encoding="utf-8"?>
-        <d:propfind xmlns:d="DAV:" xmlns:c="\(Self.caldavNS)" xmlns:oc="http://owncloud.org/ns"><d:prop>\
-        <d:resourcetype/><c:supported-calendar-component-set/><d:sync-token/><oc:owner-principal/>\(props)\
+        <d:propfind xmlns:d="DAV:" xmlns:c="\(Self.caldavNS)" xmlns:oc="http://owncloud.org/ns" xmlns:cs="\(Self.calendarServerNS)">\
+        <d:prop><d:resourcetype/><c:supported-calendar-component-set/><d:sync-token/><cs:getctag/><oc:owner-principal/>\(props)\
         </d:prop></d:propfind>
         """
         let doc = try await multistatus("PROPFIND", home, collection: true, depth: "1", body: body)
@@ -177,16 +184,29 @@ final class CalDAVClient: CalDAVServer {
             if path.split(separator: "/").last?.hasPrefix("app-generated--") == true { continue }
             if let owner = r.text("http://owncloud.org/ns|owner-principal"), !isOwnPrincipal(owner) { continue }
             func value(_ p: CalendarProperty) -> String? { r.text("\(p.element.ns)|\(p.element.name)") }
+            func nonEmpty(_ qname: String) -> String? { r.text(qname).flatMap { $0.isEmpty ? nil : $0 } }
+            // Without sync-collection (RFC 6578 is optional), the CalendarServer ctag tells changes.
+            let token = nonEmpty("DAV:|sync-token") ?? nonEmpty("\(Self.calendarServerNS)|getctag").map { Self.ctagPrefix + $0 }
             out.append(RemoteCalendar(path: path, name: value(.name), color: value(.color), order: value(.order),
-                                      sections: value(.sections), labels: value(.labels),
-                                      syncToken: r.text("DAV:|sync-token").flatMap { $0.isEmpty ? nil : $0 }))
+                                      sections: value(.sections), labels: value(.labels), syncToken: token))
         }
         return out
     }
 
+    private static let calendarServerNS = "http://calendarserver.org/ns/"
+    /// Marks a `RemoteCalendar.syncToken` that is a getctag: the calendar has no sync-collection.
+    static let ctagPrefix = "ctag:"
+
+    /// With a sync token (RFC 6578), the changes since it; otherwise the full content. On a server
+    /// without sync-collection (a getctag token, or a REPORT it refuses), the full content by
+    /// calendar-query, with no sync token.
     func changes(in calendar: String, since token: String?) async throws -> CalendarChanges {
+        if token?.hasPrefix(Self.ctagPrefix) == true { return try await allObjects(in: calendar) }
         var result = CalendarChanges(syncToken: token, changed: [], removed: [], isFull: token == nil)
         var seen: [String: Int] = [:]
+        /// Changed objects reported without their data (Xandikos leaves calendar-data out of
+        /// sync-collection): fetched with calendar-multiget.
+        var withoutData = Set<String>()
         var finished = false
         // Servers may return results in pages (a 507 response for the collection means "more").
         for _ in 0..<Self.maxPages {
@@ -199,13 +219,17 @@ final class CalDAVClient: CalDAVServer {
             do {
                 doc = try await multistatus("REPORT", calendar, collection: true, depth: nil, body: body,
                                             maxEntries: SyncLimits.maxTasks + 1)
-            } catch let error as SyncError where result.syncToken != nil {
-                // valid-sync-token precondition failed (RFC 6578 §3.2, 403 or 409): start over.
+            } catch let error as SyncError {
                 switch error {
-                case .forbidden, .conflict:
+                case .forbidden where result.syncToken != nil, .conflict where result.syncToken != nil:
+                    // valid-sync-token precondition failed (RFC 6578 §3.2, 403 or 409): start over.
                     result = CalendarChanges(syncToken: nil, changed: [], removed: [], isFull: true)
                     seen = [:]
+                    withoutData = []
                     continue
+                case .forbidden, .notCalDAV, .http(400, _), .http(405, _), .http(415, _), .http(422, _), .http(501, _):
+                    // No sync-collection here (403 is RFC 3253's answer to an unsupported REPORT).
+                    return try await allObjects(in: calendar)
                 default: throw error
                 }
             }
@@ -220,13 +244,19 @@ final class CalDAVClient: CalDAVServer {
                 if r.status == 404 {
                     result.removed.append(path)
                     if let i = seen.removeValue(forKey: path) { result.changed[i].ics = "" }
+                    withoutData.remove(path)
                 } else if let ics = r.text("\(Self.caldavNS)|calendar-data"), !ics.isEmpty {
                     let res = RemoteResource(path: path, etag: WebDAVClient.normalizeETag(r.text("DAV:|getetag")), ics: ics)
                     result.removed.removeAll { $0 == path }
+                    withoutData.remove(path)
                     if let i = seen[path] { result.changed[i] = res } else {
                         seen[path] = result.changed.count
                         result.changed.append(res)
                     }
+                } else if r.properties["DAV:|getetag"] != nil {
+                    result.removed.removeAll { $0 == path }
+                    if let i = seen.removeValue(forKey: path) { result.changed[i].ics = "" }
+                    withoutData.insert(path)
                 }
             }
             result.syncToken = doc.syncToken ?? result.syncToken
@@ -237,6 +267,11 @@ final class CalDAVClient: CalDAVServer {
         }
         // A listing cut short must not count as complete (missing objects would look deleted).
         guard finished else { throw SyncError.limitExceeded("more than \(Self.maxPages) pages of changes in “\(calendar)”") }
+        if !withoutData.isEmpty {
+            let fetched = try await multiget(withoutData.sorted(), in: calendar)
+            result.changed += fetched.found
+            result.removed += fetched.removed
+        }
         result.changed.removeAll { $0.ics.isEmpty }
         guard result.changed.count <= SyncLimits.maxTasks else {
             throw SyncError.limitExceeded("more than \(SyncLimits.maxTasks) tasks in “\(calendar)”")
@@ -244,25 +279,121 @@ final class CalDAVClient: CalDAVServer {
         return result
     }
 
-    func createCalendar(_ path: String, name: String, color: String, order: String) async throws {
+    /// Objects per calendar-multiget request.
+    static let multigetBatch = 100
+
+    /// The objects at `paths` in `calendar`, by calendar-multiget (RFC 4791 §7.9). Objects the
+    /// server reports as gone are `removed`. Any other object it leaves out fails the listing, so
+    /// that it cannot look deleted.
+    private func multiget(_ paths: [String], in calendar: String) async throws -> (found: [RemoteResource], removed: [String]) {
+        var found: [RemoteResource] = [], removed: [String] = []
+        for start in stride(from: 0, to: paths.count, by: Self.multigetBatch) {
+            let batch = paths[start..<min(start + Self.multigetBatch, paths.count)]
+            var hrefs = ""
+            for path in batch { hrefs += "<d:href>\(xmlEscape(try dav.url(for: path).path(percentEncoded: true)))</d:href>" }
+            let body = """
+            <?xml version="1.0" encoding="utf-8"?>
+            <c:calendar-multiget xmlns:d="DAV:" xmlns:c="\(Self.caldavNS)"><d:prop><d:getetag/><c:calendar-data/></d:prop>\
+            \(hrefs)</c:calendar-multiget>
+            """
+            let doc = try await multistatus("REPORT", calendar, collection: true, depth: "1", body: body,
+                                            maxEntries: batch.count + 10)
+            var missing = Set(batch)
+            for r in doc.responses {
+                guard let path = dav.relativePath(ofHref: r.href), missing.contains(path) else { continue }
+                if let ics = r.text("\(Self.caldavNS)|calendar-data"), !ics.isEmpty {
+                    found.append(RemoteResource(path: path, etag: WebDAVClient.normalizeETag(r.text("DAV:|getetag")), ics: ics))
+                    missing.remove(path)
+                } else if r.status == 404 {
+                    removed.append(path)
+                    missing.remove(path)
+                }
+            }
+            if let path = missing.sorted().first {
+                throw SyncError.badRemoteData(path: path, reason: "the server did not return its calendar data")
+            }
+        }
+        return (found, removed)
+    }
+
+    /// Every object in `calendar`, by a calendar-query REPORT (RFC 4791 §7.8, which every CalDAV
+    /// server has), with no sync token.
+    private func allObjects(in calendar: String) async throws -> CalendarChanges {
+        let body = """
+        <?xml version="1.0" encoding="utf-8"?>
+        <c:calendar-query xmlns:d="DAV:" xmlns:c="\(Self.caldavNS)"><d:prop><d:getetag/><c:calendar-data/></d:prop>\
+        <c:filter><c:comp-filter name="VCALENDAR"/></c:filter></c:calendar-query>
+        """
+        let doc = try await multistatus("REPORT", calendar, collection: true, depth: "1", body: body,
+                                        maxEntries: SyncLimits.maxTasks + 1)
+        var changed: [RemoteResource] = []
+        var seen = Set<String>()
+        var withoutData: [String] = []
+        for r in doc.responses {
+            guard let path = dav.relativePath(ofHref: r.href), Self.isChild(path, of: calendar), seen.insert(path).inserted else { continue }
+            if let ics = r.text("\(Self.caldavNS)|calendar-data"), !ics.isEmpty {
+                changed.append(RemoteResource(path: path, etag: WebDAVClient.normalizeETag(r.text("DAV:|getetag")), ics: ics))
+            } else if r.properties["DAV:|getetag"] != nil {
+                withoutData.append(path)
+            }
+        }
+        if !withoutData.isEmpty { changed += try await multiget(withoutData, in: calendar).found }
+        guard changed.count <= SyncLimits.maxTasks else {
+            throw SyncError.limitExceeded("more than \(SyncLimits.maxTasks) tasks in “\(calendar)”")
+        }
+        return CalendarChanges(syncToken: nil, changed: changed, removed: [], isFull: true)
+    }
+
+    func createCalendar(_ path: String, name: String, color: String, order: String) async throws -> Set<CalendarProperty> {
+        let status = try await mkcalendar(path, name: name, color: color, order: order)
+        if (200...299).contains(status) { return [] }
+        guard [400, 403, 409, 415, 422, 424].contains(status) else { throw Self.mkcalendarError(status, path: path) }
+        // A server may refuse a property it does not know: try again with only the name and the
+        // component set (the color and order then go through PROPPATCH, which may refuse them).
+        let plain = try await mkcalendar(path, name: name, color: nil, order: nil)
+        guard (200...299).contains(plain) else { throw Self.mkcalendarError(plain, path: path) }
+        return [.color, .order]
+    }
+
+    private func mkcalendar(_ path: String, name: String, color: String?, order: String?) async throws -> Int {
+        let apple = (color.map { "<a:calendar-color>\(xmlEscape($0))</a:calendar-color>" } ?? "")
+            + (order.map { "<a:calendar-order>\(xmlEscape($0))</a:calendar-order>" } ?? "")
         let body = """
         <?xml version="1.0" encoding="utf-8"?>
         <c:mkcalendar xmlns:d="DAV:" xmlns:c="\(Self.caldavNS)" xmlns:a="http://apple.com/ns/ical/"><d:set><d:prop>\
-        <d:displayname>\(xmlEscape(name))</d:displayname><a:calendar-color>\(xmlEscape(color))</a:calendar-color>\
-        <a:calendar-order>\(xmlEscape(order))</a:calendar-order>\
+        <d:displayname>\(xmlEscape(name))</d:displayname>\(apple)\
         <c:supported-calendar-component-set><c:comp name="VTODO"/></c:supported-calendar-component-set>\
         </d:prop></d:set></c:mkcalendar>
         """
-        let r = try await dav.send("MKCALENDAR", path, collection: true, headers: xmlHeaders, body: Data(body.utf8))
-        switch r.status {
-        case 200...299: return
-        case 405: throw SyncError.calendarExists(path)
-        default: throw WebDAVClient.error(status: r.status, path: path)
-        }
+        return try await dav.send("MKCALENDAR", path, collection: true, headers: xmlHeaders, body: Data(body.utf8)).status
     }
 
-    func setProperties(_ path: String, _ values: [CalendarProperty: String?]) async throws {
-        guard !values.isEmpty else { return }
+    private static func mkcalendarError(_ status: Int, path: String) -> SyncError {
+        status == 405 ? .calendarExists(path) : WebDAVClient.error(status: status, path: path)
+    }
+
+    func setProperties(_ path: String, _ values: [CalendarProperty: String?]) async throws -> Set<CalendarProperty> {
+        guard !values.isEmpty else { return [] }
+        let status = try await proppatch(path, values)
+        func failed(_ s: Int?) -> Bool { s.map { !(200...299).contains($0) } ?? false }
+        let failures = Set(values.keys.filter { failed(status[$0]) })
+        guard !failures.isEmpty else { return [] }
+        // A property the server will not store fails with its own status (403, 409, …), the others
+        // with 424 (RFC 4918 §9.2), unless the server applied them anyway (Xandikos does).
+        let refused = failures.filter { status[$0] != 424 }
+        guard !refused.isEmpty, refused.isSubset(of: CalendarProperty.optional) else {
+            throw SyncError.http(status: 424, path: path)
+        }
+        let retry = values.filter { failures.contains($0.key) && !refused.contains($0.key) }
+        if !retry.isEmpty {
+            let again = try await proppatch(path, retry)
+            if retry.keys.contains(where: { failed(again[$0]) }) { throw SyncError.http(status: 424, path: path) }
+        }
+        return refused
+    }
+
+    /// Sends a PROPPATCH; returns each property's status from a 207 response (none for another 2xx).
+    private func proppatch(_ path: String, _ values: [CalendarProperty: String?]) async throws -> [CalendarProperty: Int] {
         var set = "", remove = ""
         for (p, v) in values.sorted(by: { $0.key.rawValue < $1.key.rawValue }) {
             let (ns, name) = p.element
@@ -274,11 +405,21 @@ final class CalDAVClient: CalDAVServer {
         body += "</d:propertyupdate>"
         let r = try await dav.send("PROPPATCH", path, collection: true, headers: xmlHeaders, body: Data(body.utf8))
         guard r.status == 207 || (200...299).contains(r.status) else { throw WebDAVClient.error(status: r.status, path: path) }
-        // A 207 reports a status per property; any failure fails the whole update (RFC 4918 §9.2).
-        if r.status == 207, let text = String(data: r.data, encoding: .utf8),
-           text.range(of: #"HTTP/1\.[01] [45]\d\d"#, options: .regularExpression) != nil {
+        guard r.status == 207 else { return [:] }
+        if let doc = try? Multistatus.parse(r.data, maxEntries: 16) {
+            var status: [CalendarProperty: Int] = [:]
+            for response in doc.responses {
+                for p in values.keys {
+                    if let s = response.propertyStatus["\(p.element.ns)|\(p.element.name)"] { status[p] = s }
+                }
+            }
+            return status
+        }
+        // An unreadable 207 that reports an error fails the whole update.
+        if let text = String(data: r.data, encoding: .utf8), text.range(of: #"HTTP/1\.[01] [45]\d\d"#, options: .regularExpression) != nil {
             throw SyncError.http(status: 424, path: path)
         }
+        return [:]
     }
 
     func deleteCalendar(_ path: String) async throws {
@@ -292,7 +433,11 @@ final class CalDAVClient: CalDAVServer {
         <o:read-write/></o:set></o:share>
         """
         let r = try await dav.send("POST", path, collection: true, headers: ["Content-Type": "application/xml"], body: Data(body.utf8))
-        guard (200...299).contains(r.status) else { throw WebDAVClient.error(status: r.status, path: path) }
+        guard (200...299).contains(r.status) else {
+            // A server without Nextcloud's sharing has no POST here.
+            if r.status == 405 || r.status == 501 { throw SyncError.sharingUnsupported }
+            throw WebDAVClient.error(status: r.status, path: path)
+        }
     }
 
     // MARK: - Tasks
