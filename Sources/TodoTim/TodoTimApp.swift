@@ -161,7 +161,12 @@ struct TodoTimApp: App {
                 .frame(minWidth: 760, minHeight: 480)
         }
         .defaultSize(width: 1180, height: 820)
-        .commands { AppCommands(model: services.model) }
+        // No title bar or toolbar: the lists start at the top of the window (⌃⌘S toggles the sidebar).
+        .windowStyle(.hiddenTitleBar)
+        .commands {
+            SidebarCommands()
+            AppCommands(model: services.model)
+        }
 
         Settings {
             SettingsView()

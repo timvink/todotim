@@ -11,6 +11,7 @@ struct ContentView: View {
         NavigationSplitView {
             SidebarView()
                 .navigationSplitViewColumnWidth(min: 220, ideal: 270, max: 380)
+                .toolbar(removing: .sidebarToggle)
         } detail: {
             detail
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -19,7 +20,6 @@ struct ContentView: View {
         }
         .tint(Theme.accent)
         .toolbar(removing: .title)
-        .toolbarBackground(.hidden, for: .windowToolbar)
         .background(WindowAccessor { window in
             if model.mainWindow !== window { model.mainWindow = window }
         })

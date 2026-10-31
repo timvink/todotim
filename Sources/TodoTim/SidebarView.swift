@@ -382,7 +382,7 @@ struct ProjectFormView: View {
         .frame(width: 420)
         .onAppear {
             name = project?.name ?? ""
-            color = project.map { Palette.entry($0.color).key } ?? "charcoal"
+            color = project.map { ProjectColor.entry($0.color).key } ?? "charcoal"
         }
     }
 

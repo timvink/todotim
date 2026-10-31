@@ -24,6 +24,7 @@ import TodoCore
 ///     key esc|up|down|j|k|a|e   post a key press to the app's own queue
 ///     state                print which modals are open
 ///     addtask TEXT         add a task with this raw title to the current project
+///     hittest X Y          print the views a click at window point (X, Y) from the top left would reach
 ///     quit
 @MainActor
 enum UITestHook {
@@ -128,6 +129,14 @@ enum UITestHook {
         case "addtask":
             // addtask TEXT: adds a raw (unparsed) task to the current project.
             store.addTask(content: parts.dropFirst().joined(separator: " "), projectId: model.currentProjectID ?? TodoStore.inboxID)
+        case "hittest":
+            guard let w = model.mainWindow, let frame = w.contentView?.superview,
+                  let x = Double(arg), let y = Double(arg2) else { break }
+            let p = NSPoint(x: x, y: w.frame.height - y)
+            var chain: [String] = []
+            var v = frame.hitTest(frame.convert(p, from: nil))
+            while let view = v, chain.count < 6 { chain.append(String(describing: type(of: view))); v = view.superview }
+            out("hittest \(x),\(y): " + chain.joined(separator: " < "))
         case "quit": NSApp.terminate(nil)
         default: out("unknown command \(cmd)")
         }
