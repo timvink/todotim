@@ -18,41 +18,44 @@ struct InlineTaskEditor: View {
         @Bindable var draft = model.editorDraft
         VStack(alignment: .leading, spacing: 0) {
             VStack(alignment: .leading, spacing: 4) {
-                TextField("Task name", text: $draft.title)
+                TextField("", text: $draft.title)
                     .textFieldStyle(.plain)
-                    .font(.system(size: 14, weight: .semibold))
+                    .foregroundStyle(Theme.text)
                     .focused($focus, equals: .title)
                     .onSubmit(submit)
-                TextField("Description", text: $draft.details, axis: .vertical)
+                    .fieldPrompt("Task name", show: draft.title.isEmpty)
+                    .font(Fonts.bodySemibold)
+                TextField("", text: $draft.details, axis: .vertical)
                     .textFieldStyle(.plain)
-                    .font(.system(size: 13))
+                    .foregroundStyle(Theme.text)
                     .lineLimit(1...6)
                     .focused($focus, equals: .details)
+                    .fieldPrompt("Description", show: draft.details.isEmpty)
+                    .font(Fonts.body)
                 HStack(spacing: 8) {
                     Button { showDate = true } label: {
-                        ChipLabel(icon: "calendar", text: draft.due?.displayString() ?? "Date", tint: draft.due?.chipColor ?? .secondary)
+                        ChipLabel(icon: "calendar", text: draft.due?.displayString() ?? "Date",
+                                  tint: draft.due?.chipColor ?? Theme.secondaryText)
                     }
                     .buttonStyle(.plain)
                     .popover(isPresented: $showDate, arrowEdge: .bottom) {
                         DueDatePicker(due: draft.due) { draft.due = $0; showDate = false }
                     }
                     PriorityMenu(priority: $draft.priority)
-                        .padding(.horizontal, 7).padding(.vertical, 4)
-                        .overlay(RoundedRectangle(cornerRadius: 5).strokeBorder(Color.primary.opacity(0.15)))
                     Button { showLabels = true } label: {
                         ChipLabel(icon: "tag", text: draft.labels.isEmpty ? "Labels" : draft.labels.joined(separator: ", "),
-                                  tint: draft.labels.isEmpty ? .secondary : Theme.accent)
+                                  tint: draft.labels.isEmpty ? Theme.secondaryText : Theme.text)
                     }
                     .buttonStyle(.plain)
                     .popover(isPresented: $showLabels, arrowEdge: .bottom) {
                         LabelsPicker(selection: $draft.labels).environment(store)
                     }
                 }
-                .padding(.top, 6)
+                .padding(.top, 8)
             }
-            .padding(10)
-            Divider()
-            HStack {
+            .padding(12)
+            Hairline()
+            HStack(spacing: 8) {
                 if model.editor?.parentId == nil {
                     ProjectSectionMenu(projectId: draft.projectId, sectionId: draft.sectionId) { p, s in
                         draft.projectId = p
@@ -66,10 +69,13 @@ struct InlineTaskEditor: View {
                     .buttonStyle(AccentButtonStyle())
                     .disabled(draft.title.trimmingCharacters(in: .whitespaces).isEmpty)
             }
-            .padding(8)
+            // The project menu's own 8 pt inset puts its icon under the title.
+            .padding(.leading, 4).padding(.trailing, 8).padding(.vertical, 8)
         }
-        .background(RoundedRectangle(cornerRadius: 10).fill(Color(nsColor: .textBackgroundColor)))
-        .overlay(RoundedRectangle(cornerRadius: 10).strokeBorder(Color.primary.opacity(focus != nil ? 0.3 : 0.15)))
+        .background(RoundedRectangle(cornerRadius: 10, style: .continuous).fill(Theme.panel))
+        .overlay(RoundedRectangle(cornerRadius: 10, style: .continuous)
+            .strokeBorder(focus != nil ? Theme.accent : Ctp.surface1.color, lineWidth: 1)
+            .animation(Theme.hoverAnimation, value: focus != nil))
         .padding(.leading, CGFloat(depth) * Theme.indent + Theme.gutter)
         .padding(.vertical, 8)
         .onExitCommand { model.editor = nil }
