@@ -131,16 +131,25 @@ public final class TodoStore {
         return resolve(ids, includeCompleted: false)
     }
 
-    /// Case-insensitive search over content and description of open tasks.
+    /// Case-insensitive search over content and description of open tasks
+    /// (`localizedCaseInsensitiveContains`). The last result is reused while no task changed, so
+    /// views that ask again for the same query (one keystroke) do not scan again.
     public func search(_ query: String) -> [TodoTask] {
-        _ = taskContentVersion
+        let version = taskContentVersion
         let q = query.trimmingCharacters(in: .whitespaces)
         guard !q.isEmpty else { return [] }
-        return storage.tasks.values.filter {
-            !$0.deleted && !$0.isCompleted
-                && ($0.content.localizedCaseInsensitiveContains(q) || $0.description.localizedCaseInsensitiveContains(q))
-        }.sorted(by: Self.taskOrder)
+        let locale = Locale.current
+        if let c = lastSearch, c.query == q, c.version == version, c.locale == locale.identifier { return c.result }
+        let matcher = TextMatcher(q, locale: locale)
+        let result = Self.sortedByTaskOrder(storage.tasks.values.filter {
+            !$0.deleted && !$0.isCompleted && (matcher.matches($0.content) || matcher.matches($0.description))
+        })
+        lastSearch = (q, version, locale.identifier, result)
+        return result
     }
+
+    /// Every task change bumps `taskContentVersion` (structure changes too), so it keys the cache.
+    @ObservationIgnored private var lastSearch: (query: String, version: Int, locale: String, result: [TodoTask])?
 
     /// Number of open tasks (including subtasks) in a project, for the sidebar badge.
     public func openTaskCount(projectId: EntityID) -> Int {
@@ -669,7 +678,8 @@ public final class TodoStore {
 
     private func sortIDs(_ ids: Set<EntityID>?) -> [EntityID] {
         guard let ids, !ids.isEmpty else { return [] }
-        return ids.compactMap { storage.tasks[$0] }.sorted(by: Self.taskOrder).map(\.id)
+        let tasks = ids.compactMap { storage.tasks[$0] }
+        return tasks.indices.sorted { Self.taskOrder(tasks[$0], tasks[$1]) }.map { tasks[$0].id }
     }
 
     /// Tasks for sorted ids; registers each returned task's observation slot.
@@ -809,6 +819,12 @@ public final class TodoStore {
         if a.createdAt != b.createdAt { return a.createdAt < b.createdAt }
         return a.id < b.id
     }
+
+    /// `tasks.sorted(by: taskOrder)`, sorting indices: moving the large task values around while
+    /// sorting costs more than the comparisons.
+    nonisolated static func sortedByTaskOrder(_ tasks: [TodoTask]) -> [TodoTask] {
+        tasks.indices.sorted { taskOrder(tasks[$0], tasks[$1]) }.map { tasks[$0] }
+    }
 }
 
 public protocol Orderable { var order: Double { get } }
@@ -827,6 +843,11 @@ struct AreaKey: Hashable {
 struct SubtaskProgress: Equatable {
     var done = 0
     var total = 0
+
+    mutating func count(done isDone: Bool) {
+        total += 1
+        if isDone { done += 1 }
+    }
 }
 
 private struct PendingChanges {
@@ -840,7 +861,7 @@ private struct PendingChanges {
 }
 
 /// Derived lookups over live (non-deleted) tasks. Maintained incrementally by `TodoStore.writeTask`.
-struct TaskIndex {
+struct TaskIndex: Equatable {
     var children: [EntityID: Set<EntityID>] = [:]
     var topLevel: [AreaKey: Set<EntityID>] = [:]
     /// Lazily sorted caches; an entry is dropped when its bucket changes.
@@ -858,8 +879,27 @@ struct TaskIndex {
 
     init() {}
 
+    /// The index of `tasks`, equal to adding them one by one with `add` (at launch: one hash
+    /// lookup per table and task, and no sorted caches to invalidate yet).
     init(_ tasks: some Sequence<TodoTask>) {
-        for t in tasks { add(t) }
+        for t in tasks where !t.deleted {
+            let open = !t.isCompleted
+            if let p = t.parentId {
+                children[p, default: []].insert(t.id)
+                childProgress[p, default: SubtaskProgress()].count(done: !open)
+            } else {
+                let area = AreaKey(projectId: t.projectId, sectionId: t.sectionId)
+                topLevel[area, default: []].insert(t.id)
+                if open { openTopByArea[area, default: 0] += 1 }
+            }
+            guard open else { continue }
+            openByProject[t.projectId, default: 0] += 1
+            if t.labels.count == 1 {
+                openByLabel[t.labels[0], default: []].insert(t.id)
+            } else if !t.labels.isEmpty {
+                for label in Set(t.labels) { openByLabel[label, default: []].insert(t.id) }
+            }
+        }
     }
 
     /// Whether two versions of a task contribute identically to the index (and to sort order).

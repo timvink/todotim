@@ -97,23 +97,29 @@ public final class SyncController {
     /// access prompt returns with every update of an ad-hoc signed app), or one whose Keychain save
     /// failed. For the account it belongs to.
     @ObservationIgnored private var sessionPassword: (account: String, password: String)?
+    /// Whether the sync loop may run; false until `start()` for a controller created with
+    /// `startSyncing: false`.
+    @ObservationIgnored private var started: Bool
 
     /// Loads settings from `config` (when it has a `[sync]` table) or else from `defaults`, and
     /// starts syncing if enabled (the first sync starts after the current main-actor turn, so
     /// callbacks set right after `init` are in place). `stateURL` is where the CalDAV sync state
-    /// is kept (nil: memory only).
+    /// is kept (nil: memory only). With `startSyncing: false` nothing is synced until `start()`
+    /// (or `syncNow()`), so an app can keep the first sync's work out of its launch.
     public convenience init(store: TodoStore, defaults: UserDefaults = .standard, credentials: CredentialStore,
-                            config: AppConfig? = nil, configPath: String = AppConfig.defaultURL.path, stateURL: URL? = nil) {
+                            config: AppConfig? = nil, configPath: String = AppConfig.defaultURL.path, stateURL: URL? = nil,
+                            startSyncing: Bool = true) {
         self.init(store: store, defaults: defaults, credentials: credentials, config: config, configPath: configPath,
-                  stateURL: stateURL, makeServer: nil)
+                  stateURL: stateURL, makeServer: nil, startSyncing: startSyncing)
     }
 
     init(store: TodoStore, defaults: UserDefaults, credentials: CredentialStore, config: AppConfig?,
-         configPath: String, stateURL: URL?, makeServer: ServerFactory?) {
+         configPath: String, stateURL: URL?, makeServer: ServerFactory?, startSyncing: Bool = true) {
         self.store = store
         self.defaults = defaults
         self.credentials = credentials
         self.stateURL = stateURL
+        self.started = startSyncing
         self.makeServer = makeServer ?? { s, password, home in
             try await CalDAVClient.connect(serverURL: s.serverURL, username: s.username, password: password, cached: home)
         }
@@ -140,6 +146,7 @@ public final class SyncController {
         if managedConfigPath == nil, let data = try? JSONEncoder().encode(settings) {
             defaults.set(data, forKey: Self.settingsKey)
         }
+        started = true
         restartLoop()
     }
 
@@ -159,9 +166,18 @@ public final class SyncController {
         }
     }
 
-    /// Call after local edits; debounces and then syncs.
+    /// Starts the sync loop of a controller created with `startSyncing: false`; does nothing when it
+    /// runs already.
+    public func start() {
+        guard !started else { return }
+        started = true
+        restartLoop()
+    }
+
+    /// Call after local edits; debounces and then syncs. Before `start()` the edits wait for the
+    /// first sync of the loop.
     public func scheduleSync() {
-        guard settings.enabled else { return }
+        guard settings.enabled, started else { return }
         debounceTask?.cancel()
         let delay = debounceInterval
         debounceTask = Task { [weak self] in
@@ -197,6 +213,7 @@ public final class SyncController {
         debounceTask?.cancel()
         guard settings.enabled else { status = .disabled; return }
         status = .idle(lastSync: lastSync)
+        guard started else { return }
         let interval = syncInterval
         periodicTask = Task { [weak self] in
             while !Task.isCancelled {
@@ -219,7 +236,7 @@ public final class SyncController {
             status = .error(Self.message(for: SyncError.missingPassword))
             return
         }
-        var password = self.password(for: account) ?? ""
+        var password = await loadPassword(for: account) ?? ""
         if password.isEmpty, let command = passwordCommand, !passwordCommandAttempted {
             passwordCommandAttempted = true
             status = .syncing
@@ -236,7 +253,7 @@ public final class SyncController {
             return
         }
         status = .syncing
-        var state = loadState(account: stateAccount)
+        var state = await loadState(account: stateAccount)
         let snapshot = store.db
         do {
             // The calendar home from the state, else discovery: an idle sync stays one request.
@@ -320,14 +337,23 @@ public final class SyncController {
 
     /// The sync state for `account`, from memory or `stateURL`; a fresh one for another account
     /// or an unreadable file (the next sync then compares everything, which is safe but slower).
-    private func loadState(account: String) -> CalDAVState {
+    /// The file is read and decoded off the main actor (it holds every synced task).
+    private func loadState(account: String) async -> CalDAVState {
         if let state, state.account == account { return state }
         lastSynced = nil
-        if let stateURL, let data = try? Data(contentsOf: stateURL),
-           let saved = try? JSONDecoder().decode(CalDAVState.self, from: data), saved.account == account {
-            state = saved
-            savedState = saved
-            return saved
+        if let stateURL {
+            let saved: CalDAVState? = await withCheckedContinuation { continuation in
+                // On the queue that writes the file, so a write still pending is read back.
+                stateQueue.async(qos: .userInitiated) {
+                    let data = try? Data(contentsOf: stateURL)
+                    continuation.resume(returning: data.flatMap { try? JSONDecoder().decode(CalDAVState.self, from: $0) })
+                }
+            }
+            if let saved, saved.account == account {
+                state = saved
+                savedState = saved
+                return saved
+            }
         }
         let fresh = CalDAVState(account: account)
         state = fresh
@@ -357,6 +383,15 @@ public final class SyncController {
     private func password(for account: String) -> String? {
         if let s = sessionPassword, s.account == account { return s.password }
         return passwordCommand == nil ? credentials.password(for: account) : nil
+    }
+
+    /// `password(for:)` with the Keychain read off the main actor: it is a call to another
+    /// process that can block, for example on an access prompt.
+    private func loadPassword(for account: String) async -> String? {
+        if let s = sessionPassword, s.account == account { return s.password }
+        guard passwordCommand == nil else { return nil }
+        let credentials = self.credentials
+        return await Task.detached(priority: .userInitiated) { credentials.password(for: account) }.value
     }
 
     private func storePassword(_ password: String, for account: String) {

@@ -37,13 +37,15 @@ final class AppServices {
             dbURL = LocalPersistence.fileURL
         }
         Perf.installRunLoopMonitor()
-        Perf.log(String(format: "services init start: %.0f ms after process start", Perf.sinceProcessStart() * 1000))
+        Perf.mark("servicesStart")
+        // When the first main-actor job queued at launch runs (the sync loop starts like this).
+        if Perf.enabled { Task { @MainActor in Perf.mark("firstMainTask") } }
         let url = dbURL
         var startupError: String?
         var canSave = true
         let loaded: Database
         do {
-            loaded = try Perf.measure("load db.json") { try LocalPersistence.loadChecked(from: url) }
+            loaded = try Perf.measure("load db.json", key: "loadDB") { try LocalPersistence.loadChecked(from: url) }
         } catch let error as PersistenceError {
             loaded = Database()
             startupError = error.errorDescription
@@ -54,13 +56,13 @@ final class AppServices {
             startupError = error.localizedDescription
             canSave = false
         }
-        store = Perf.measure("build store") { TodoStore(db: loaded) }
+        store = Perf.measure("build store", key: "buildStore") { TodoStore(db: loaded) }
         writer = canSave ? PersistenceWriter(url: url, delay: 0.3, onError: { error in
             NSLog("TodoTim: failed to save database: \(error)")
         }) : nil
-        // Seeding and the perf script only touch a scratch database (`TODOTIM_DATA_DIR`), with sync off.
+        // Seeding and the perf modes only touch a scratch database (`TODOTIM_DATA_DIR`), with sync off.
         let seed = customDir == nil ? nil : env["TODOTIM_SEED"].flatMap { $0 == "1" || $0 == "large" ? $0 : nil }
-        let scratchMode = customDir != nil && (seed != nil || Perf.scripted)
+        let scratchMode = customDir != nil && (seed != nil || Perf.runsInBackground)
         if let seed, canSave, store.db.tasks.isEmpty {
             if seed == "large" { SampleData.seedLarge(store) } else { SampleData.seed(store) }
             writer?.save(store.db)
@@ -91,10 +93,13 @@ final class AppServices {
         if let ignored = config?.ignoredKeys, !ignored.isEmpty {
             NSLog("TodoTim: \(configURL.path): ignoring \(ignored.joined(separator: ", ")) (no longer used; sync uses CalDAV)")
         }
-        // The CalDAV sync state sits next to the database it describes.
+        // The CalDAV sync state sits next to the database it describes. Syncing starts after the
+        // first frame (`AppDelegate.startSyncAfterFirstFrame`): the first sync reads the Keychain
+        // and the state file, which must not delay the window.
         sync = SyncController(store: store, defaults: defaults, credentials: KeychainCredentialStore(),
                               config: config, configPath: configURL.path,
-                              stateURL: url.deletingLastPathComponent().appendingPathComponent("caldav-state.json"))
+                              stateURL: url.deletingLastPathComponent().appendingPathComponent("caldav-state.json"),
+                              startSyncing: false)
         model = AppModel(store: store, sync: sync, defaults: defaults)
         model.startupError = startupError
         // Only https links are opened from the Help menu.
@@ -115,6 +120,7 @@ final class AppServices {
         }
         // Without a writer (unreadable database file) the state is never saved either.
         sync.flushDatabase = { [weak self] in self?.writer?.flush() ?? false }
+        Perf.mark("servicesDone")
     }
 
     /// Commits pending edits and writes the database synchronously (on quit).
@@ -125,19 +131,37 @@ final class AppServices {
 }
 
 final class AppDelegate: NSObject, NSApplicationDelegate {
+    func applicationWillFinishLaunching(_ notification: Notification) {
+        MainActor.assumeIsolated { Perf.mark("willFinishLaunching") }
+    }
+
     func applicationDidFinishLaunching(_ notification: Notification) {
         MainActor.assumeIsolated {
+            Perf.mark("didFinishLaunching")
             NSApp.setActivationPolicy(.regular)
-            // A scripted perf run (or the debug UI test hook) must not take focus from whatever
-            // the user is doing.
-            var quiet = Perf.scripted
+            // A perf run (or the debug UI test hook) must not take focus from whatever the user
+            // is doing.
+            var quiet = Perf.runsInBackground
             #if DEBUG
             quiet = quiet || UITestHook.active
             UITestHook.start()
             #endif
             if !quiet { NSApp.activate(ignoringOtherApps: true) }
             AppServices.shared.keyRouter.install()
+            startSyncAfterFirstFrame()
         }
+    }
+
+    /// Starts the sync loop when the main thread first goes idle, which is after Core Animation
+    /// committed the window's first frame (its run-loop observer is ordered before this one).
+    private func startSyncAfterFirstFrame() {
+        let observer = CFRunLoopObserverCreateWithHandler(nil, CFRunLoopActivity.beforeWaiting.rawValue, false, CFIndex(Int.max)) { _, _ in
+            MainActor.assumeIsolated {
+                Perf.mark("syncStart")
+                AppServices.shared.sync.start()
+            }
+        }
+        CFRunLoopAddObserver(CFRunLoopGetMain(), observer, .commonModes)
     }
 
     func applicationWillTerminate(_ notification: Notification) {
@@ -150,7 +174,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 @main
 struct TodoTimApp: App {
     @NSApplicationDelegateAdaptor(AppDelegate.self) private var appDelegate
-    private let services = AppServices.shared
+    private let services: AppServices
+
+    init() {
+        Perf.mark("appInit")
+        services = AppServices.shared
+    }
 
     var body: some Scene {
         Window("TodoTim", id: "main") {

@@ -38,6 +38,8 @@ Radicale (`uvx --from radicale radicale --config <file>` with an htpasswd user a
 - `TodoStore` keeps indexes (children, areas, counts) and fine-grained observation: iterate `taskIDs`/`subtaskIDs`
   and read `store.task(id)` per row so a content edit redraws one row. Use `structureVersion` as a cache key.
 - Local saves go through `PersistenceWriter` (background, coalesced). A corrupt `db.json` is moved aside, never overwritten.
+  Loading tries `DatabaseDecoder` (strict byte-level fast path) first; whatever it declines goes to `JSONDecoder`,
+  which alone decides whether the file is corrupt. Keep both in step when the model's `Codable` fields change.
 - Due dates are local calendar dates (`yyyy-MM-dd`), no time.
 
 ## Sync
@@ -70,7 +72,9 @@ on tasks.
   from the tasks); a refused MKCALENDAR is retried with only name and component set; 423 Locked (Xandikos,
   during concurrent writes) is retried in `WebDAVClient`.
 - `SyncController` — settings, Keychain, loop. It saves the state only after the database is on disk
-  (`flushDatabase`): the state must never describe a newer database than the one stored.
+  (`flushDatabase`): the state must never describe a newer database than the one stored. The app creates it
+  with `startSyncing: false` and calls `start()` after the first frame; the Keychain read and the state file
+  load run off the main actor.
 
 Merge: if only one side changed since the base, that side wins. If both changed, tasks are
 last-writer-wins on `updatedAt` ↔ `LAST-MODIFIED` (whole seconds on the server), and project, section and
@@ -101,5 +105,6 @@ home or redirect elsewhere (`SyncError.otherServer`, e.g. iCloud). Hrefs must be
 home or calendar.
 
 Performance benchmarks: `swift test -c release -Xswiftc -enable-testing --filter PerformanceTests`.
+In the app: `scripts/perf-launch.sh DATA_DIR` (launch timing, medians) and `scripts/perf.sh` (scripted interactions).
 Password is stored in the Keychain under `SyncSettings.credentialAccount` (`user@host[:port]`); the settings in
 UserDefaults. `~/.todotim.toml` is only read when owned by the user and not group/world-writable (`AppConfig.load`).

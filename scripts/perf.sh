@@ -5,6 +5,14 @@
 # Env: DATA_DIR      scratch database directory (default $TMPDIR/todotim-perf); seeded with the
 #                    5,000-task fixture on first run. Sync is off and no config file is read.
 #      SCRATCH_PATH  build directory (default .build-perf)
+#      TODOTIM_PERF_ONLY  run only these steps (comma-separated: open, held, sheet, search,
+#                    switch, panel, quickadd, complete), e.g. to profile one with xctrace
+# Phases report wall-clock busy time per main-thread turn and the main thread's CPU time; a large
+# difference means the main thread waited (for example for the render server).
+# Launch timing: scripts/perf-launch.sh.
+# Profiling: copy the binary to another name first (cp …/TodoTim /tmp/TodoTim-perf). `xcrun xctrace
+# record --launch -- …/TodoTim` resolves the name TodoTim to the installed /Applications/TodoTim.app
+# and launches that app instead, with your test environment.
 # The app does not activate itself in this mode and only posts events to its own queue.
 set -euo pipefail
 cd "$(dirname "$0")/.."

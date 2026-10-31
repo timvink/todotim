@@ -108,6 +108,38 @@ final class SyncControllerTests: XCTestCase {
         XCTAssertEqual(creds.password(for: "tim@cloud.example.com"), "pw")
     }
 
+    /// An app can start the loop after its first frame: nothing syncs before `start()`.
+    func testDeferredStartSyncsOnlyAfterStart() async throws {
+        defaults.set(try JSONEncoder().encode(settings), forKey: SyncController.settingsKey)
+        let remote = FakeCalDAVServer()
+        let c = SyncController(store: TodoStore(), defaults: defaults,
+                               credentials: InMemoryCredentialStore(["tim@cloud.example.com": "pw"]), config: nil,
+                               configPath: "/nonexistent", stateURL: nil, makeServer: { _, _, _ in remote }, startSyncing: false)
+        c.syncInterval = .seconds(3600)
+        c.debounceInterval = .milliseconds(20)
+        XCTAssertEqual(c.status, .idle(lastSync: nil), "enabled settings show as not synced yet")
+        c.scheduleSync()
+        try await Task.sleep(for: .milliseconds(200))
+        let requests = await remote.count("PROPFIND")
+        XCTAssertEqual(requests, 0)
+        XCTAssertNil(c.lastSync)
+
+        c.start()
+        try await waitUntil { c.lastSync != nil }
+        c.start()  // already running: no second loop
+        XCTAssertEqual(c.status, .idle(lastSync: c.lastSync))
+    }
+
+    /// The Keychain is a call to another process (and can show a prompt): never on the main thread.
+    func testKeychainIsReadOffTheMainThread() async throws {
+        let creds = ThreadRecordingCredentials()
+        let c = makeController(TodoStore(), FakeCalDAVServer(), credentials: creds)
+        c.configure(settings, password: nil)
+        try await waitUntil { c.lastSync != nil }
+        XCTAssertFalse(creds.readsOnMainThread.isEmpty)
+        XCTAssertFalse(creds.readsOnMainThread.contains(true))
+    }
+
     func testTestConnectionListsCalendars() async {
         let remote = FakeCalDAVServer()
         let c = makeController(TodoStore(), remote)
@@ -337,6 +369,20 @@ final class SyncControllerDiscoveryTests: XCTestCase {
 
 @MainActor
 private final class TodoBox { var id: EntityID? }
+
+/// Returns "pw" and records whether each read ran on the main thread.
+private final class ThreadRecordingCredentials: CredentialStore, @unchecked Sendable {
+    private let lock = NSLock()
+    private var reads: [Bool] = []
+    var readsOnMainThread: [Bool] { lock.withLock { reads } }
+
+    func password(for account: String) -> String? {
+        lock.withLock { reads.append(Thread.isMainThread) }
+        return "pw"
+    }
+
+    func setPassword(_ password: String?, for account: String) {}
+}
 
 @MainActor
 final class SyncControllerConfigTests: XCTestCase {

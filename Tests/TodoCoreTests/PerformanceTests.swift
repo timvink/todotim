@@ -144,6 +144,14 @@ final class PerformanceTests: XCTestCase {
 
         time("build rows of one project (\(rows.count) rows)") { _ = buildRows(store, projectId: pid) }
         time("all sidebar counts") { _ = sidebarCounts(store, projectId: pid) }
+        for q in ["r", "re", "review", "Task 4999"] {
+            // Alternate the case so every run scans (the store reuses the result for a repeated query).
+            var flip = false
+            time("search \"\(q)\" (\(store.search(q).count) results)") {
+                flip.toggle()
+                _ = store.search(flip ? q.uppercased() : q)
+            }
+        }
 
         var k = 0
         time("title edit + rows + sidebar counts") {
@@ -184,6 +192,13 @@ final class PerformanceTests: XCTestCase {
         time("load + decode db", runs: 7) { _ = LocalPersistence.load(from: url) }
         #if !BENCH_BEFORE
         do {
+            let data = try Data(contentsOf: url)
+            time("decode db.json (JSONDecoder)", runs: 7) { _ = try? JSONCoding.decoder.decode(Database.self, from: data) }
+            XCTAssertNotNil(DatabaseDecoder.decode(data))
+            time("decode db.json (fast path)", runs: 7) { _ = DatabaseDecoder.decode(data) }
+            time("build store (TodoStore.init)", runs: 7) { _ = TodoStore(db: snapshot) }
+        }
+        do {
             let writer = PersistenceWriter(url: url, delay: 0)
             time("PersistenceWriter.save (main-thread cost)") { writer.save(snapshot) }
             time("PersistenceWriter.flush (encode + write)", runs: 7) { writer.save(snapshot); writer.flush() }
@@ -195,6 +210,14 @@ final class PerformanceTests: XCTestCase {
         // The next sync reads back this device's own uploads once; after that it is idle.
         let first = try await CalDAVSync.sync(local: upload.merged, state: upload.state, server: server)
         let local = first.merged
+        #if !BENCH_BEFORE
+        do {
+            // The first sync after launch loads this file (now off the main actor).
+            let stateData = try JSONEncoder().encode(first.state)
+            print("BENCH caldav-state.json: \(stateData.count / 1024) KB")
+            time("decode caldav-state.json", runs: 7) { _ = try? JSONDecoder().decode(CalDAVState.self, from: stateData) }
+        }
+        #endif
         try await timeAsync("full merge, nothing to write") {
             let r = try await CalDAVSync.sync(local: local, state: first.state, server: server)
             XCTAssertEqual(r.writes, 0)
