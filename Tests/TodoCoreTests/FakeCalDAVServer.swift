@@ -2,9 +2,12 @@ import Foundation
 @testable import TodoCore
 
 /// In-memory CalDAV server for sync tests: calendars with properties and sync tokens (RFC 6578
-/// semantics: changes and removals since a token), objects with ETags and conditional writes.
+/// semantics: changes and removals since a token), objects with ETags and conditional writes. Its
+/// calendar home follows `layout` (by default Nextcloud's).
 actor FakeCalDAVServer: CalDAVServer {
     nonisolated let home: String
+    nonisolated let calendarHome: CalendarHome
+    nonisolated let layout: FakeDAVLayout
 
     struct Calendar {
         var props: RemoteCalendar
@@ -30,14 +33,29 @@ actor FakeCalDAVServer: CalDAVServer {
     var beforePut: (@Sendable (String) async -> Void)?
     /// Called once at the next calendar listing.
     var beforeList: (@Sendable () async -> Void)?
+    /// The calendar home answers 404 (it moved or was removed).
+    var homeGone = false
+    /// Connections made without a known home (`connect(cached: nil)`): discoveries.
+    private(set) var discoveries = 0
 
-    init(user: String = "tim") { home = "calendars/\(user)" }
+    init(user: String = "tim", layout: FakeDAVLayout? = nil) {
+        let layout = layout ?? .nextcloud(user: user)
+        self.layout = layout
+        home = layout.homePath
+        calendarHome = layout.calendarHome
+    }
+
+    /// What `CalDAVClient.connect` does for this server: discovery when there is no home yet.
+    func connect(cached: CalendarHome?) -> FakeCalDAVServer {
+        if cached == nil { discoveries += 1 }
+        return self
+    }
 
     // MARK: - Test helpers
 
     func addCalendar(_ uri: String, name: String? = nil, components: [String] = ["VTODO"], sharedBy: String? = nil,
                      sections: String? = nil, labels: String? = nil, color: String? = nil) {
-        let path = "\(home)/\(uri)"
+        let path = davPath(home, uri)
         calendarsByPath[path] = Calendar(props: RemoteCalendar(path: path, name: name ?? uri, color: color, order: "1",
                                                                sections: sections, labels: labels),
                                          components: components, sharedBy: sharedBy)
@@ -79,6 +97,7 @@ actor FakeCalDAVServer: CalDAVServer {
     func setRateLimitedCreates(_ v: Set<String>) { rateLimitedCreates = v }
     func setBeforePut(_ f: (@Sendable (String) async -> Void)?) { beforePut = f }
     func setBeforeList(_ f: (@Sendable () async -> Void)?) { beforeList = f }
+    func setHomeGone(_ v: Bool) { homeGone = v }
 
     private func bump(_ calendar: String) {
         version += 1
@@ -112,6 +131,7 @@ actor FakeCalDAVServer: CalDAVServer {
             await f()
         }
         note("PROPFIND")
+        if homeGone { throw home.isEmpty ? SyncError.baseNotFound : SyncError.notFound(home) }
         return calendarsByPath.values.filter { $0.components == ["VTODO"] && $0.sharedBy == nil }.map(\.props)
     }
 
@@ -196,6 +216,128 @@ actor FakeCalDAVServer: CalDAVServer {
               root.components.filter({ $0.name == "VTODO" }).count >= 1 else {
             fatalError("invalid calendar object written:\n\(ics)")
         }
+    }
+}
+
+/// Where a CalDAV server keeps the user's principal and calendar home, and how it answers
+/// discovery over HTTP (`respond(to:)`, for `StubURLProtocol`). Paths are relative to the origin,
+/// without slashes at either end.
+struct FakeDAVLayout: Sendable {
+    struct Collection: Sendable {
+        var name: String
+        /// `resourcetype` children, e.g. ["d:collection", "c:calendar"].
+        var types: [String]
+        var components: [String] = []
+    }
+
+    var user = "tim"
+    /// "https://cloud.example.com"
+    var origin: String
+    /// The server URL the user enters (the DAV root).
+    var root: String
+    /// Where PROPFIND works (and names the principal); elsewhere the server answers 404.
+    var davArea: String
+    /// nil: the server has no `current-user-principal`.
+    var principal: String?
+    /// The principal's `calendar-home-set`; nil: none.
+    var home: String?
+    /// The origin in the `calendar-home-set` href, when the home is on another server (iCloud).
+    var homeOrigin: String?
+    /// Target of the redirect at `/.well-known/caldav` (a path, or an absolute URL); nil: 404.
+    var wellKnown: String?
+    /// What a Depth 1 PROPFIND of the home lists.
+    var collections: [Collection] = []
+    /// When set, requests without this password get 401.
+    var password: String?
+
+    static func nextcloud(user: String = "tim") -> FakeDAVLayout {
+        FakeDAVLayout(user: user, origin: "https://cloud.example.com", root: "remote.php/dav", davArea: "remote.php/dav",
+                      principal: "remote.php/dav/principals/users/\(user)", home: "remote.php/dav/calendars/\(user)",
+                      wellKnown: "remote.php/dav/")
+    }
+
+    /// Radicale: the principal is the calendar home, "/<user>/"; no well-known redirect.
+    static func radicale(user: String = "tim") -> FakeDAVLayout {
+        FakeDAVLayout(user: user, origin: "http://localhost:5232", root: "", davArea: "", principal: user, home: user)
+    }
+
+    /// Xandikos: principal "/user/", calendar home "/user/calendars/".
+    static let xandikos = FakeDAVLayout(origin: "http://localhost:8080", root: "", davArea: "", principal: "user",
+                                        home: "user/calendars", wellKnown: "")
+
+    /// A hosted service that answers WebDAV only below /dav/, found through /.well-known/caldav.
+    static let hosted = FakeDAVLayout(user: "tim@example.com", origin: "https://caldav.example.com", root: "", davArea: "dav",
+                                      principal: "dav/principals/user/tim@example.com",
+                                      home: "dav/calendars/user/tim@example.com", wellKnown: "dav/")
+
+    var serverURL: String { "\(origin)/" + (root.isEmpty ? "" : "\(root)/") }
+
+    /// The calendar home relative to the DAV root, as `CalDAVClient` sees it.
+    var homePath: String {
+        guard let home else { return "calendars/\(user)" }
+        if root.isEmpty { return home }
+        if home.hasPrefix(root + "/") { return String(home.dropFirst(root.count + 1)) }
+        return ""  // the home itself, or outside the server URL: the home is the DAV root
+    }
+
+    var calendarHome: CalendarHome {
+        CalendarHome(url: home.map { "\(homeOrigin ?? origin)/\($0)/" } ?? "\(serverURL)calendars/\(user)/",
+                     principal: principal.map { "\(origin)/\($0)/" })
+    }
+
+    /// An absolute-path href for `path`; "@" is percent-encoded, as some servers do.
+    private func href(_ path: String) -> String {
+        var allowed = CharacterSet.alphanumerics
+        allowed.insert(charactersIn: "-._~")
+        let encoded = path.split(separator: "/").map { String($0).addingPercentEncoding(withAllowedCharacters: allowed)! }
+        return "/" + encoded.map { $0 + "/" }.joined()
+    }
+
+    func respond(to request: URLRequest) -> (Int, [String: String], Data) {
+        guard let url = request.url, let segments = WebDAVClient.decodedSegments(url) else { return (400, [:], Data()) }
+        if let password, request.value(forHTTPHeaderField: "Authorization")
+            != "Basic " + Data("\(user):\(password)".utf8).base64EncodedString() {
+            return (401, ["WWW-Authenticate": "Basic realm=\"dav\""], Data())
+        }
+        let path = segments.joined(separator: "/")
+        guard request.httpMethod == "PROPFIND" else { return (405, [:], Data()) }
+        if path == ".well-known/caldav" {
+            guard let wellKnown else { return (404, [:], Data()) }
+            return (301, ["Location": wellKnown.hasPrefix("http") ? wellKnown : "/" + wellKnown], Data())
+        }
+        guard davArea.isEmpty || path == davArea || path.hasPrefix(davArea + "/") else {
+            return (404, ["Content-Type": "text/html"], Data("<html><body>Not found</body></html>".utf8))
+        }
+        let body = WebDAVClientTests.body(request) ?? ""
+        var responses: [String] = []
+        var props = ""
+        if body.contains("current-user-principal"), let principal {
+            props += "<d:current-user-principal><d:href>\(href(principal))</d:href></d:current-user-principal>"
+        }
+        if body.contains("calendar-home-set"), path == principal, let home {
+            props += "<c:calendar-home-set><d:href>\(homeOrigin ?? "")\(href(home))</d:href></c:calendar-home-set>"
+        }
+        if request.value(forHTTPHeaderField: "Depth") == "1", path == home {
+            props += "<d:resourcetype><d:collection/></d:resourcetype>"
+            for c in collections {
+                responses.append("""
+                <d:response><d:href>\(href(path + "/" + c.name))</d:href><d:propstat><d:prop>\
+                <d:resourcetype>\(c.types.map { "<\($0)/>" }.joined())</d:resourcetype>\
+                <c:supported-calendar-component-set>\(c.components.map { "<c:comp name=\"\($0)\"/>" }.joined())\
+                </c:supported-calendar-component-set><d:sync-token>http://example.com/sync/1</d:sync-token>\
+                <d:displayname>\(c.name)</d:displayname></d:prop><d:status>HTTP/1.1 200 OK</d:status></d:propstat></d:response>
+                """)
+            }
+        }
+        let own = props.isEmpty
+            ? "<d:propstat><d:prop><d:current-user-principal/></d:prop><d:status>HTTP/1.1 404 Not Found</d:status></d:propstat>"
+            : "<d:propstat><d:prop>\(props)</d:prop><d:status>HTTP/1.1 200 OK</d:status></d:propstat>"
+        responses.insert("<d:response><d:href>\(href(path))</d:href>\(own)</d:response>", at: 0)
+        let xml = """
+        <?xml version="1.0" encoding="utf-8"?>
+        <d:multistatus xmlns:d="DAV:" xmlns:c="urn:ietf:params:xml:ns:caldav">\(responses.joined())</d:multistatus>
+        """
+        return (207, ["Content-Type": "application/xml; charset=utf-8"], Data(xml.utf8))
     }
 }
 

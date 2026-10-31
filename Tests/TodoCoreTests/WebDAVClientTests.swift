@@ -243,6 +243,35 @@ final class WebDAVClientTests: XCTestCase {
                        "Basic " + Data("tim:app-pass".utf8).base64EncodedString())
     }
 
+    /// Nextcloud with a login name that is not the user id (LDAP, e-mail login): the calendars'
+    /// owner-principal is the user id, which the discovered principal names.
+    func testOwnCalendarsAreRecognizedByTheDiscoveredPrincipal() async throws {
+        StubURLProtocol.handler = { _ in (207, [:], Data(calendarHome.utf8)) }
+        let principal = CalendarHome(url: "https://cloud.example.com/remote.php/dav/calendars/tim/",
+                                     principal: "https://cloud.example.com/remote.php/dav/principals/users/tim/")
+        let discovered = CalDAVClient(dav: try makeClient(), username: "tim@example.com", home: "calendars/tim", calendarHome: principal)
+        let listed = try await discovered.calendars()
+        XCTAssertEqual(listed.map(\.uri), ["todotim-inbox"], "the calendar shared by bob stays out")
+        let guessed = CalDAVClient(dav: try makeClient(), username: "tim@example.com", home: "calendars/tim")
+        let none = try await guessed.calendars()
+        XCTAssertEqual(none, [], "without the principal, the login name does not match the owner")
+    }
+
+    func testPathsAreComparedDecodedAndHomeCanBeTheRoot() throws {
+        let client = try WebDAVClient(serverURL: "https://dav.example.com/dav/calendars/user/tim@example.com/",
+                                      username: "tim@example.com", password: "pw")
+        XCTAssertEqual(client.relativePath(ofHref: "/dav/calendars/user/tim%40example.com/work/"), "work")
+        XCTAssertEqual(client.relativePath(ofHref: "https://dav.example.com/dav/calendars/user/tim@example.com/"), "")
+        XCTAssertNil(client.relativePath(ofHref: "/dav/calendars/user/bob%40example.com/work/"))
+        XCTAssertTrue(CalDAVClient.isChild("work", of: ""))
+        XCTAssertFalse(CalDAVClient.isChild("", of: ""))
+        XCTAssertFalse(CalDAVClient.isChild("work/a.ics", of: ""))
+        XCTAssertTrue(CalDAVClient.isChild("work/a.ics", of: "work"))
+        XCTAssertFalse(CalDAVClient.isChild("work2/a.ics", of: "work"))
+        XCTAssertEqual(davPath("", "work"), "work")
+        XCTAssertEqual(davPath("tim", "work"), "tim/work")
+    }
+
     func testSyncCollectionKeepsOnlyDirectChildren() async throws {
         StubURLProtocol.handler = { _ in (207, [:], Data(syncCollection.utf8)) }
         let caldav = CalDAVClient(dav: try makeClient(), username: "tim")

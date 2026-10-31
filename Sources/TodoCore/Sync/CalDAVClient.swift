@@ -2,7 +2,7 @@ import Foundation
 
 /// A calendar in the user's calendar home, with the properties TodoTim syncs (raw values).
 struct RemoteCalendar: Codable, Equatable, Sendable {
-    /// Relative to the DAV root, without trailing slash: "calendars/tim/work".
+    /// Relative to the DAV root, without trailing slash: "calendars/tim/work" on Nextcloud.
     var path: String
     var name: String?
     /// `{http://apple.com/ns/ical/}calendar-color`, e.g. "#DB4035" or "#DB4035FF".
@@ -15,7 +15,7 @@ struct RemoteCalendar: Codable, Equatable, Sendable {
     /// `{DAV:}sync-token` (RFC 6578).
     var syncToken: String?
 
-    /// Last path segment (the calendar's URI on Nextcloud).
+    /// Last path segment (the calendar's URI).
     var uri: String { path.split(separator: "/").last.map(String.init) ?? path }
 }
 
@@ -52,11 +52,14 @@ enum CalendarProperty: String, CaseIterable, Sendable {
     }
 }
 
-/// The CalDAV operations sync needs. `CalDAVClient` implements them against Nextcloud; tests
-/// use an in-memory server. Paths are relative to the DAV root and not percent-encoded.
+/// The CalDAV operations sync needs. `CalDAVClient` implements them over HTTP; tests use an
+/// in-memory server. Paths are relative to the DAV root and not percent-encoded.
 protocol CalDAVServer: Sendable {
-    /// "calendars/<user>".
+    /// The calendar home, relative to the DAV root: "calendars/<user>" on Nextcloud, "<user>" on
+    /// Radicale, "" when the home is the DAV root itself.
     var home: String { get }
+    /// Where the home is, for the sync state (so the next sync needs no discovery).
+    var calendarHome: CalendarHome { get }
     /// The user's own calendars that hold only VTODOs (shared, subscribed and event calendars
     /// are left out).
     func calendars() async throws -> [RemoteCalendar]
@@ -78,8 +81,8 @@ protocol CalDAVServer: Sendable {
     func delete(_ path: String, ifMatch: String?) async throws
 }
 
-/// CalDAV over `WebDAVClient`, for Nextcloud (`docs/caldav.md`). Server data is validated:
-/// paths must be direct children of the calendar home / calendar, and responses are bounded.
+/// CalDAV over `WebDAVClient` (`docs/caldav.md`). Server data is validated: paths must be direct
+/// children of the calendar home / calendar, and responses are bounded.
 final class CalDAVClient: CalDAVServer {
     static let todotimNS = "https://todotim.app/ns"
     private static let caldavNS = "urn:ietf:params:xml:ns:caldav"
@@ -87,13 +90,52 @@ final class CalDAVClient: CalDAVServer {
     let dav: WebDAVClient
     let username: String
     let home: String
+    let calendarHome: CalendarHome
+    /// Decoded path of the user's principal ("remote.php/dav/principals/users/tim"), if discovery
+    /// found it.
+    private let principalPath: String?
     /// Pages of a sync-collection REPORT followed before giving up.
     static let maxPages = 100
 
-    init(dav: WebDAVClient, username: String) {
+    /// A client for `home`, relative to `dav.baseURL` (by default the SabreDAV layout,
+    /// "calendars/<username>").
+    init(dav: WebDAVClient, username: String, home: String? = nil, calendarHome: CalendarHome? = nil) {
+        let home = home ?? "calendars/\(username)"
         self.dav = dav
         self.username = username
-        self.home = "calendars/\(username)"
+        self.home = home
+        self.calendarHome = calendarHome
+            ?? CalendarHome(url: (try? dav.url(for: home, collection: true))?.absoluteString ?? dav.baseURL.absoluteString)
+        principalPath = self.calendarHome.principal.flatMap(URL.init(string:)).flatMap(WebDAVClient.decodedSegments)?
+            .joined(separator: "/")
+    }
+
+    /// A client for the calendar home `home` (from discovery or the sync state) of the server at
+    /// `serverURL`. Requests stay inside the DAV root when the home is inside it, and otherwise
+    /// inside the home itself. A home on another origin is refused.
+    convenience init(serverURL: String, username: String, password: String, home: CalendarHome,
+                     session: URLSession? = nil) throws {
+        let root = try Self.davRoot(serverURL)
+        guard let url = URL(string: home.url).flatMap({ WebDAVClient.canonicalURL($0, collection: true) }) else {
+            throw SyncError.invalidPath(home.url)
+        }
+        guard WebDAVClient.isSameOrigin(url, root) else { throw SyncError.otherServer(WebDAVClient.displayString(url)) }
+        let base = WebDAVClient.isWithin(url, base: root) ? root : url
+        let dav = try WebDAVClient(serverURL: base.absoluteString, username: username, password: password, session: session)
+        guard let path = dav.relativePath(ofHref: url.absoluteString) else { throw SyncError.invalidPath(home.url) }
+        self.init(dav: dav, username: username, home: path, calendarHome: home)
+    }
+
+    /// A client for the calendar home of `serverURL`: `cached` (from the sync state), or else the
+    /// one discovery finds (`CalDAVDiscovery`).
+    static func connect(serverURL: String, username: String, password: String, cached: CalendarHome?,
+                        session: URLSession? = nil) async throws -> CalDAVClient {
+        var home = cached
+        if home == nil {
+            home = try await CalDAVDiscovery.discover(serverURL: serverURL, username: username, password: password,
+                                                      session: session)
+        }
+        return try CalDAVClient(serverURL: serverURL, username: username, password: password, home: home!, session: session)
     }
 
     /// The DAV root for a configured server URL: the URL itself, or, for an old-style files URL
@@ -122,16 +164,18 @@ final class CalDAVClient: CalDAVServer {
         let doc = try await multistatus("PROPFIND", home, collection: true, depth: "1", body: body)
         var out: [RemoteCalendar] = []
         for r in doc.responses {
-            guard let path = dav.relativePath(ofHref: r.href), isChild(path, of: home),
-                  r.properties["DAV:|resourcetype"]?.children.contains("\(Self.caldavNS)|calendar") == true,
+            let types = r.properties["DAV:|resourcetype"]?.children ?? []
+            guard let path = dav.relativePath(ofHref: r.href), Self.isChild(path, of: home),
+                  types.contains("\(Self.caldavNS)|calendar"),
+                  // The scheduling inbox and outbox (RFC 6638) hold invitations, not tasks.
+                  !types.contains("\(Self.caldavNS)|schedule-inbox"), !types.contains("\(Self.caldavNS)|schedule-outbox"),
                   r.properties["\(Self.caldavNS)|supported-calendar-component-set"]?.children == ["\(Self.caldavNS)|comp=VTODO"]
             else { continue }
             // Calendars shared by other users also appear in the home (Nextcloud names them
             // "<uri>_shared_by_<owner>"); only the user's own are synced. Calendars that Nextcloud
             // apps generate (such as Deck boards, "app-generated--…") are read-only.
             if path.split(separator: "/").last?.hasPrefix("app-generated--") == true { continue }
-            if let owner = r.text("http://owncloud.org/ns|owner-principal"),
-               owner.trimmingCharacters(in: CharacterSet(charactersIn: "/")) != "principals/users/\(username)" { continue }
+            if let owner = r.text("http://owncloud.org/ns|owner-principal"), !isOwnPrincipal(owner) { continue }
             func value(_ p: CalendarProperty) -> String? { r.text("\(p.element.ns)|\(p.element.name)") }
             out.append(RemoteCalendar(path: path, name: value(.name), color: value(.color), order: value(.order),
                                       sections: value(.sections), labels: value(.labels),
@@ -172,7 +216,7 @@ final class CalDAVClient: CalDAVServer {
                     if r.status == 507 { more = true }
                     continue
                 }
-                guard isChild(path, of: calendar) else { continue }
+                guard Self.isChild(path, of: calendar) else { continue }
                 if r.status == 404 {
                     result.removed.append(path)
                     if let i = seen.removeValue(forKey: path) { result.changed[i].ics = "" }
@@ -299,9 +343,32 @@ final class CalDAVClient: CalDAVServer {
         }
     }
 
-    private func isChild(_ path: String, of parent: String) -> Bool {
-        path.hasPrefix(parent + "/") && !path.dropFirst(parent.count + 1).contains("/")
+    /// Whether `path` is a direct child of `parent` ("" is the DAV root).
+    static func isChild(_ path: String, of parent: String) -> Bool {
+        let name: Substring
+        if parent.isEmpty {
+            name = Substring(path)
+        } else {
+            guard path.hasPrefix(parent + "/") else { return false }
+            name = path.dropFirst(parent.count + 1)
+        }
+        return !name.isEmpty && !name.contains("/")
     }
+
+    /// Whether a Nextcloud `owner-principal` ("principals/users/tim") is this user: the principal
+    /// named after the username, or the discovered one (the login name can differ from the user id).
+    private func isOwnPrincipal(_ owner: String) -> Bool {
+        let trimmed = owner.trimmingCharacters(in: CharacterSet(charactersIn: "/"))
+        if trimmed == "principals/users/\(username)" { return true }
+        let decoded = trimmed.removingPercentEncoding ?? trimmed
+        guard let principalPath, !decoded.isEmpty else { return false }
+        return principalPath == decoded || principalPath.hasSuffix("/" + decoded)
+    }
+}
+
+/// The path of `child` in the collection `parent`, both relative to the DAV root ("" is the root).
+func davPath(_ parent: String, _ child: String) -> String {
+    parent.isEmpty ? child : "\(parent)/\(child)"
 }
 
 func xmlEscape(_ s: String) -> String {

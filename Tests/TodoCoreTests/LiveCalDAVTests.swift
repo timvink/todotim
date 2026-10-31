@@ -1,11 +1,13 @@
 import XCTest
 @testable import TodoCore
 
-/// Sync against a real Nextcloud. Opt-in, and destructive for the account's task lists: use a
-/// throwaway user.
+/// Sync against a real CalDAV server (Nextcloud, Radicale, …), found by discovery. Opt-in, and
+/// destructive for the account's task lists: use a throwaway user.
 ///
 ///     TODOTIM_LIVE_URL=http://localhost:8080/remote.php/dav/ TODOTIM_LIVE_USER=todotim-test \
 ///     TODOTIM_LIVE_PASSWORD=<app password> [TODOTIM_LIVE_SHARE_WITH=<other user>] swift test --filter LiveCalDAVTests
+///
+/// `TODOTIM_LIVE_SHARE_WITH` needs Nextcloud's sharing.
 @MainActor
 final class LiveCalDAVTests: XCTestCase {
     private var server: CalDAVClient!
@@ -15,7 +17,7 @@ final class LiveCalDAVTests: XCTestCase {
         let env = ProcessInfo.processInfo.environment
         guard let url = env["TODOTIM_LIVE_URL"], let user = env["TODOTIM_LIVE_USER"], let password = env["TODOTIM_LIVE_PASSWORD"]
         else { throw XCTSkip("set TODOTIM_LIVE_URL, TODOTIM_LIVE_USER and TODOTIM_LIVE_PASSWORD to run") }
-        server = CalDAVClient(dav: try WebDAVClient(serverURL: url, username: user, password: password), username: user)
+        server = try await CalDAVClient.connect(serverURL: url, username: user, password: password, cached: nil)
         shareWith = env["TODOTIM_LIVE_SHARE_WITH"].map { [$0] } ?? []
         try await removeAllLists()
     }
@@ -29,7 +31,7 @@ final class LiveCalDAVTests: XCTestCase {
     /// new list at the same path).
     private func removeAllLists() async throws {
         var paths = Set(try await server.calendars().map(\.path))
-        paths.insert("\(server.home)/\(CalDAVSync.inboxURI)")
+        paths.insert(davPath(server.home, CalDAVSync.inboxURI))
         for path in paths {
             try? await server.setProperties(path, [.sections: nil, .labels: nil])
             _ = try await server.dav.send("DELETE", path, collection: true, headers: ["X-NC-CalDAV-No-Trashbin": "1"])
@@ -57,7 +59,7 @@ final class LiveCalDAVTests: XCTestCase {
         return try await server.changes(in: cal, since: nil).changed.first { $0.path == path }
     }
 
-    func testRoundTripWithNextcloud() async throws {
+    func testRoundTrip() async throws {
         let home = server.home
         let a = Device()
         let s = a.store
@@ -81,7 +83,7 @@ final class LiveCalDAVTests: XCTestCase {
         let homeCal = try XCTUnwrap(calendars.first { $0.uri == p.id })
         XCTAssertEqual(homeCal.color.flatMap(ProjectColor.key(hex:)), "green")
         XCTAssertEqual(homeCal.sections.flatMap(PropertyList.decode)?.map(\.name), ["Garden \"front\""])
-        let parentPath = "\(home)/\(p.id)/\(parent.id).ics"
+        let parentPath = davPath(home, "\(p.id)/\(parent.id).ics")
         let parentObject = try await object(parentPath)
         let parentICS = try XCTUnwrap(parentObject?.ics).unfolded
         XCTAssertTrue(parentICS.contains("SUMMARY:Prune roses\\; carefully"))
@@ -118,7 +120,7 @@ final class LiveCalDAVTests: XCTestCase {
 
         // 5. Conflict: another client writes between our listing and our PUT. Nextcloud answers
         //    the PUT with 412; the next pass re-fetches and merges (the other edit is newer).
-        let inboxPath = "\(home)/todotim-inbox/\(inboxTask.id).ics"
+        let inboxPath = davPath(home, "todotim-inbox/\(inboxTask.id).ics")
         let direct: CalDAVServer = server
         let racing = Racing(direct)
         await racing.setBefore(inboxPath) {
@@ -138,9 +140,9 @@ final class LiveCalDAVTests: XCTestCase {
         s.moveTask(inboxTask.id, projectId: other.id, sectionId: nil, parentId: nil)
         s.updateSection(sec.id) { $0.name = "Garden" }
         try await a.sync(server)
-        let moved = try await object("\(home)/\(other.id)/\(inboxTask.id).ics")
+        let moved = try await object(davPath(home, "\(other.id)/\(inboxTask.id).ics"))
         XCTAssertNotNil(moved)
-        let oldPlace = try await object("\(home)/todotim-inbox/\(inboxTask.id).ics")
+        let oldPlace = try await object(davPath(home, "todotim-inbox/\(inboxTask.id).ics"))
         XCTAssertNil(oldPlace)
         let renamed = try await object(parentPath)
         XCTAssertTrue(renamed!.ics.unfolded.contains("X-NAME=Garden;"))
@@ -153,11 +155,11 @@ final class LiveCalDAVTests: XCTestCase {
         let repeating = ["BEGIN:VCALENDAR", "VERSION:2.0", "PRODID:-//Other//EN", "BEGIN:VTODO", "UID:\(rid)",
                          "DTSTAMP:20261020T100000Z", "SUMMARY:Pills", "DTSTART:20261101T070000Z", "DUE:20261101T080000Z",
                          "RRULE:FREQ=DAILY;INTERVAL=2", "END:VTODO", "END:VCALENDAR", ""].joined(separator: "\r\n")
-        _ = try await server.put("\(home)/\(other.id)/\(rid).ics", ics: repeating, ifMatch: nil)
+        _ = try await server.put(davPath(home, "\(other.id)/\(rid).ics"), ics: repeating, ifMatch: nil)
         try await a.sync(server)
         s.toggleComplete(rid)
         try await a.sync(server)
-        let advanced = try await object("\(home)/\(other.id)/\(rid).ics")
+        let advanced = try await object(davPath(home, "\(other.id)/\(rid).ics"))
         XCTAssertTrue(advanced!.ics.contains("DUE:20261103T080000Z"), advanced!.ics)
         XCTAssertTrue(advanced!.ics.contains("DTSTART:20261103T070000Z"))
         XCTAssertFalse(advanced!.ics.contains("STATUS:COMPLETED"))
@@ -165,7 +167,7 @@ final class LiveCalDAVTests: XCTestCase {
         // 8. Deletes: a task, then a whole list.
         s.deleteTask(child.id)
         try await a.sync(server)
-        let deletedChild = try await object("\(home)/\(p.id)/\(child.id).ics")
+        let deletedChild = try await object(davPath(home, "\(p.id)/\(child.id).ics"))
         XCTAssertNil(deletedChild)
         s.deleteProject(other.id)
         try await a.sync(server)
@@ -184,11 +186,12 @@ final class LiveCalDAVTests: XCTestCase {
 /// Passes requests to a real server, running a hook once before the PUT of a given path.
 private actor Racing: CalDAVServer {
     nonisolated let home: String
+    nonisolated let calendarHome: CalendarHome
     let base: CalDAVServer
     private var hooks: [String: @Sendable () async -> Void] = [:]
     private(set) var puts = 0
 
-    init(_ base: CalDAVServer) { self.base = base; home = base.home }
+    init(_ base: CalDAVServer) { self.base = base; home = base.home; calendarHome = base.calendarHome }
 
     func setBefore(_ path: String, _ hook: @escaping @Sendable () async -> Void) { hooks[path] = hook }
 

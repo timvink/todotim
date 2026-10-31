@@ -5,6 +5,10 @@ import Foundation
 public struct CalDAVState: Codable, Equatable, Sendable {
     /// "<DAV root>|<username>". State for another account is discarded.
     public var account: String
+    /// The calendar home the paths below belong to, found by discovery and kept so the next sync
+    /// needs no discovery. nil in a new state, and in one saved before discovery existed (whose
+    /// paths belong to `calendars/<username>/` below the DAV root).
+    public var home: CalendarHome?
     /// Calendars by path, with the sync token up to which their tasks are in `resources`.
     var calendars: [String: RemoteCalendar] = [:]
     /// Calendar objects by path.
@@ -52,7 +56,8 @@ public struct SyncResult: Equatable, Sendable {
 /// every write conditional on the ETag it was based on. A 412 leaves that entity for the next
 /// pass, which re-fetches it and merges again.
 enum CalDAVSync {
-    /// URI of the inbox calendar. Not "inbox": that is the CalDAV scheduling inbox on Nextcloud.
+    /// URI of the inbox calendar. Not "inbox": SabreDAV servers (Nextcloud, Baïkal) keep the CalDAV
+    /// scheduling inbox there.
     static let inboxURI = "todotim-inbox"
 
     static func sync(local: Database, state: CalDAVState, server: CalDAVServer, shareWith: [String] = [],
@@ -384,7 +389,7 @@ private struct Pass {
     private mutating func write(remote: View) async throws {
         let home = server.home
         func calendarPath(_ projectId: EntityID) -> String {
-            remote.calendarOf[projectId]?.path ?? "\(home)/\(projectId == TodoStore.inboxID ? CalDAVSync.inboxURI : projectId)"
+            remote.calendarOf[projectId]?.path ?? davPath(home, projectId == TodoStore.inboxID ? CalDAVSync.inboxURI : projectId)
         }
 
         // 1. Lists: create, then update properties. A list that cannot be created is reported and

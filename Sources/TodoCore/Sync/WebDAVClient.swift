@@ -8,18 +8,24 @@ public struct DAVResponse: Sendable {
     public var status: Int
     public var data: Data
     public var etag: String?
+    /// The `Location` header (of a redirect that was not followed).
+    public var location: String?
 }
 
-/// HTTP client for a Nextcloud-style WebDAV server. `baseURL` is the DAV root, e.g.
+/// HTTP client for a WebDAV server. `baseURL` is the allowed root, e.g. the DAV root
 /// https://host/remote.php/dav/ ; paths passed to the methods are relative to it and are
-/// percent-encoded per segment here. Uses Basic auth (Nextcloud app password). The security
-/// rules live here: https only (except localhost), no redirects outside `baseURL`, capped bodies.
+/// percent-encoded per segment here. Uses Basic auth (an app password where the server has them).
+/// The security rules live here: https only (except localhost), no requests, redirects or hrefs
+/// outside `baseURL`, capped bodies.
 public final class WebDAVClient: @unchecked Sendable {
     public let baseURL: URL
     private let authorization: String
     private let session: URLSession
     /// Largest accepted response body (tests lower it).
     var maxResponseBytes = SyncLimits.maxResponseBytes
+    /// Whether redirects inside `baseURL` are followed. When false, every redirect response is
+    /// returned to the caller (with `location`), which checks the target itself (discovery).
+    var followsRedirects = true
 
     /// Throws `SyncError.invalidURL` if `serverURL` is not an http(s) URL, and
     /// `SyncError.insecureURL` for http:// to anything but localhost.
@@ -66,11 +72,20 @@ public final class WebDAVClient: @unchecked Sendable {
         url.port ?? (url.scheme?.lowercased() == "http" ? 80 : 443)
     }
 
+    /// Whether `a` and `b` have the same origin: scheme, host and port.
+    static func isSameOrigin(_ a: URL, _ b: URL) -> Bool {
+        a.scheme?.lowercased() == b.scheme?.lowercased() && a.host?.lowercased() == b.host?.lowercased()
+            && effectivePort(a) == effectivePort(b)
+    }
+
+    /// The root of `url`'s origin: "scheme://host[:port]/".
+    static func originRoot(of url: URL) -> URL? {
+        URL(string: "/", relativeTo: url)?.absoluteURL
+    }
+
     /// Whether `url` has the scheme, host and port of `base` and a path inside base's path.
     static func isWithin(_ url: URL, base: URL) -> Bool {
-        guard url.scheme?.lowercased() == base.scheme?.lowercased(),
-              url.host?.lowercased() == base.host?.lowercased(),
-              effectivePort(url) == effectivePort(base) else { return false }
+        guard isSameOrigin(url, base) else { return false }
         // Decoded paths: servers may percent-encode differently from the configured URL
         // (e.g. "@" in Nextcloud user names). Dot segments that survive standardization
         // (encoded as %2E) are refused.
@@ -121,7 +136,17 @@ public final class WebDAVClient: @unchecked Sendable {
     /// Any status is returned; callers map errors with `error(status:path:)`.
     public func send(_ method: String, _ path: String, collection: Bool = false, headers: [String: String] = [:],
                      body: Data? = nil) async throws -> DAVResponse {
-        var req = URLRequest(url: try url(for: path, collection: collection))
+        try await send(method, url: try url(for: path, collection: collection), headers: headers, body: body)
+    }
+
+    /// Sends a request to the absolute `url` (no query or fragment), which must be inside
+    /// `baseURL` and have no dot segments; otherwise throws `SyncError.invalidPath` without
+    /// sending anything.
+    func send(_ method: String, url: URL, headers: [String: String] = [:], body: Data? = nil) async throws -> DAVResponse {
+        guard Self.isWithin(url, base: baseURL), url.query == nil, url.fragment == nil, Self.decodedSegments(url) != nil else {
+            throw SyncError.invalidPath(Self.displayString(url))
+        }
+        var req = URLRequest(url: url)
         req.httpMethod = method
         req.setValue(authorization, forHTTPHeaderField: "Authorization")
         req.cachePolicy = .reloadIgnoringLocalCacheData
@@ -130,25 +155,44 @@ public final class WebDAVClient: @unchecked Sendable {
         let (data, response) = try await send(req)
         return DAVResponse(status: response.statusCode, data: data,
                            etag: Self.normalizeETag(response.value(forHTTPHeaderField: "ETag")
-                                                    ?? response.value(forHTTPHeaderField: "OC-ETag")))
+                                                    ?? response.value(forHTTPHeaderField: "OC-ETag")),
+                           location: response.value(forHTTPHeaderField: "Location"))
     }
 
     /// The path of `href` (absolute or relative, percent-encoded, from a multistatus response)
     /// relative to `baseURL`, decoded, without leading or trailing slash. nil when it is outside
     /// the base URL, on another server, or has a segment that decodes to "/", "." or "..".
+    /// Segments are compared decoded: servers may percent-encode differently from the base URL.
     public func relativePath(ofHref href: String) -> String? {
-        guard let url = URL(string: href, relativeTo: baseURL)?.absoluteURL, Self.isWithin(url, base: baseURL) else { return nil }
-        var basePath = baseURL.path(percentEncoded: true)
-        if !basePath.hasSuffix("/") { basePath += "/" }
-        var p = url.path(percentEncoded: true)
-        if !p.hasSuffix("/") { p += "/" }
-        guard p.hasPrefix(basePath) else { return nil }
+        guard let url = URL(string: href, relativeTo: baseURL)?.absoluteURL, Self.isWithin(url, base: baseURL),
+              let base = Self.decodedSegments(baseURL), let segments = Self.decodedSegments(url), segments.starts(with: base)
+        else { return nil }
+        return segments.dropFirst(base.count).joined(separator: "/")
+    }
+
+    /// `url` with its path segments encoded the way requests encode them, so that two spellings
+    /// of the same location compare equal; `collection` adds a trailing slash. nil for a URL with
+    /// dot segments.
+    static func canonicalURL(_ url: URL, collection: Bool) -> URL? {
+        guard let origin = originRoot(of: url), let segments = decodedSegments(url) else { return nil }
+        var encoded: [String] = []
+        for segment in segments {
+            guard let e = segment.addingPercentEncoding(withAllowedCharacters: segmentAllowed) else { return nil }
+            encoded.append(e)
+        }
+        var path = encoded.joined(separator: "/")
+        if collection && !path.isEmpty { path += "/" }
+        return URL(string: origin.absoluteString + path)
+    }
+
+    /// The decoded, non-empty segments of `url`'s path; nil when one decodes to "/", "." or "..".
+    static func decodedSegments(_ url: URL) -> [String]? {
         var segments: [String] = []
-        for raw in p.dropFirst(basePath.count).split(separator: "/") {
+        for raw in url.path(percentEncoded: true).split(separator: "/") {
             guard let s = String(raw).removingPercentEncoding, !s.isEmpty, s != ".", s != "..", !s.contains("/") else { return nil }
             segments.append(s)
         }
-        return segments.joined(separator: "/")
+        return segments
     }
 
     /// Absolute URL string for `path`, for the `Destination` header of MOVE.
@@ -175,7 +219,7 @@ public final class WebDAVClient: @unchecked Sendable {
     /// Sends `req`, reading at most `SyncLimits.maxResponseBytes` of the body (also when the
     /// server sends no or a wrong Content-Length). Redirects outside `baseURL` are refused.
     private func send(_ req: URLRequest) async throws -> (Data, HTTPURLResponse) {
-        let delegate = RedirectGuard(base: baseURL)
+        let delegate = RedirectGuard(base: baseURL, follows: followsRedirects)
         let limit = maxResponseBytes
         do {
             #if canImport(FoundationNetworking)
@@ -228,18 +272,21 @@ public final class WebDAVClient: @unchecked Sendable {
     }
 
     /// Follows only redirects that stay inside the base URL (same scheme, host, port, and a path
-    /// below it); any other redirect is not followed and remembered in `rejectedTarget`.
+    /// below it); any other redirect is not followed and remembered in `rejectedTarget`. With
+    /// `follows` false, no redirect is followed and none is rejected: the caller gets the response.
     final class RedirectGuard: NSObject, URLSessionTaskDelegate, @unchecked Sendable {
         let base: URL
+        let follows: Bool
         private let lock = NSLock()
         private var rejected: String?
 
-        init(base: URL) { self.base = base }
+        init(base: URL, follows: Bool = true) { self.base = base; self.follows = follows }
 
         var rejectedTarget: String? { lock.withLock { rejected } }
 
         func urlSession(_ session: URLSession, task: URLSessionTask, willPerformHTTPRedirection response: HTTPURLResponse,
                         newRequest request: URLRequest) async -> URLRequest? {
+            guard follows else { return nil }
             if let url = request.url, WebDAVClient.isWithin(url, base: base) { return request }
             lock.withLock { rejected = request.url.map(WebDAVClient.displayString) ?? "?" }
             return nil

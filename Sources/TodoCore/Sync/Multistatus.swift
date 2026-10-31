@@ -12,7 +12,12 @@ enum Multistatus {
     struct Property: Equatable, Sendable {
         var text: String = ""
         var children: [String] = []
+        /// Text of the `DAV:href` children (`current-user-principal`, `calendar-home-set`), at most
+        /// `maxHrefs`.
+        var hrefs: [String] = []
     }
+
+    static let maxHrefs = 100
 
     struct Response: Equatable, Sendable {
         var href: String
@@ -133,6 +138,10 @@ enum Multistatus {
                 value.text = text.trimmingCharacters(in: .whitespacesAndNewlines)
                 propstatProps[q] = value
                 current = nil
+                return
+            }
+            if depth == 6, q == "DAV:|href", current != nil, current!.value.hrefs.count < Multistatus.maxHrefs {
+                current!.value.hrefs.append(text.trimmingCharacters(in: .whitespacesAndNewlines))
                 return
             }
             switch (q, depth) {

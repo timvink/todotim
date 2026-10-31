@@ -27,6 +27,9 @@ public enum SyncError: LocalizedError, Equatable, Sendable {
     case invalidPath(String)
     /// The server redirected outside the configured server URL (other scheme, host, port or path).
     case redirectRejected(String)
+    /// Discovery found the principal or calendar home on another origin than the server URL (as
+    /// iCloud does); TodoTim does not follow it.
+    case otherServer(String)
     /// Remote data exceeds a `SyncLimits` bound.
     case limitExceeded(String)
 
@@ -80,6 +83,8 @@ public enum SyncError: LocalizedError, Equatable, Sendable {
             return "Refused to use the unsafe remote path “\(p)”"
         case .redirectRejected(let target):
             return "The server redirected to “\(target)”, outside the configured server URL. Check the server URL in Settings (use the final https:// address)."
+        case .otherServer(let target):
+            return "The server says your calendars are at “\(target)”, on another server. TodoTim only sends your password to the server URL in Settings. If you trust that server, use its address as the server URL."
         case .limitExceeded(let what):
             return "The data on the server is too large to sync safely: \(what)"
         }
