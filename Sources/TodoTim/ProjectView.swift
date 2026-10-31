@@ -364,7 +364,7 @@ struct SectionHeaderView: View {
             .padding(.vertical, 4)
             Hairline().padding(.leading, Theme.gutter)
         }
-        .padding(.top, 14)
+        .padding(.top, 8)
         .contentShape(Rectangle())
         .onHover { h in withAnimation(Theme.hoverAnimation) { hovering = h } }
         .contextMenu { menuItems }
@@ -445,7 +445,7 @@ struct AddSectionGap: View {
                 }
                 .opacity(hovering ? 1 : 0)
                 .padding(.leading, Theme.gutter)
-                .frame(height: 22)
+                .frame(height: 16)
                 .contentShape(Rectangle())
             }
             .buttonStyle(.plain)

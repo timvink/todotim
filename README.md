@@ -1,22 +1,25 @@
 # TodoTim
 
-A fast, native macOS to-do app modelled on [Todoist](https://todoist.com), that keeps your data in your own
-[Nextcloud](https://nextcloud.com), as CalDAV task lists that other task apps can share.
+A fast, calm, native macOS to-do app, driven from the keyboard and dressed in
+[Catppuccin](https://catppuccin.com). Your tasks stay on your own CalDAV server, as standard task lists that other
+task apps can share.
 
-![TodoTim showing a project with sections, tasks and subtasks](docs/screenshot.png)
+![TodoTim showing a project with sections, tasks and sub-tasks](docs/screenshot.png)
 
-TodoTim keeps the parts of Todoist that matter for working through a list: projects, sections, tasks and
-subtasks, all driven from the keyboard. It leaves out Today, Upcoming, the calendar and board views.
+TodoTim began as a [Todoist](https://todoist.com) clone and keeps what matters for working through a list:
+projects, sections, tasks and sub-tasks, labels, and Quick Add in plain language. It leaves out Today, Upcoming,
+the calendar and board views.
 
 ## Features
 
-- Projects with colours, sections, tasks and nested subtasks
+- Catppuccin colours: Mocha in Dark Mode, Latte in Light Mode
+- Projects with colours, sections, tasks and nested sub-tasks
 - Priorities (p1–p4), due dates, labels and descriptions
 - Import from Todoist (File › Import from Todoist…, with your API token)
 - Quick Add with natural language: `Renew passport next friday p1 @errands #Home /Admin`
 - Keyboard shortcuts for almost everything (press `?` in the app)
 - Search, label views, completed-task view, and undo for complete and delete
-- Local-first: works offline, and syncs to Nextcloud over CalDAV in the background
+- Local-first: works offline, and syncs over CalDAV in the background
 - Native SwiftUI app with no third-party dependencies
 
 ## Install

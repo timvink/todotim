@@ -380,9 +380,10 @@ final class AppModel {
         showToast("1 task deleted", undo: restore)
     }
 
-    func indent() { if let id = actionTaskID { store.indentTask(id) } }
-    func outdent() { if let id = actionTaskID { store.outdentTask(id) } }
-    func shift(_ delta: Int) { if let id = actionTaskID { store.shiftTask(id, by: delta) } }
+    // Structural moves animate, so the row glides to its new place.
+    func indent() { if let id = actionTaskID { withAnimation(Theme.motion) { store.indentTask(id) } } }
+    func outdent() { if let id = actionTaskID { withAnimation(Theme.motion) { store.outdentTask(id) } } }
+    func shift(_ delta: Int) { if let id = actionTaskID { withAnimation(Theme.motion) { store.shiftTask(id, by: delta) } } }
 
     func move(_ id: EntityID, toProject pid: EntityID, section sid: EntityID?) {
         guard let t = store.task(id), t.projectId != pid || t.sectionId != sid || t.parentId != nil else { return }
@@ -404,26 +405,29 @@ final class AppModel {
         drag.resumeIfJustReleased()
         defer { drag.end() }
         guard let id = drag.draggingID, let target = target ?? drag.target, store.task(id) != nil else { return false }
-        switch target {
-        case .before(let anchor), .after(let anchor):
-            guard let a = store.task(anchor), !drag.excluded.contains(anchor) else { return false }
-            let sibs = a.parentId.map { store.subtaskIDs(of: $0) }
-                ?? store.taskIDs(projectId: a.projectId, sectionId: a.sectionId)
-            let others = sibs.filter { $0 != id }
-            var index = others.firstIndex(of: anchor)
-            if case .after = target { index = index.map { $0 + 1 } }
-            store.moveTask(id, projectId: a.projectId, sectionId: a.sectionId, parentId: a.parentId, at: index)
-        case .firstChild(let parent):
-            guard let p = store.task(parent), !drag.excluded.contains(parent) else { return false }
-            store.moveTask(id, projectId: p.projectId, sectionId: p.sectionId, parentId: parent, at: 0)
-            // Show where the task went.
-            if p.collapsed { store.updateTask(parent) { $0.collapsed = false } }
-        case .sectionStart(let pid, let sid):
-            store.moveTask(id, projectId: pid, sectionId: sid, parentId: nil, at: 0)
-        case .sectionEnd(let pid, let sid):
-            store.moveTask(id, projectId: pid, sectionId: sid, parentId: nil)
+        // The task slides into the slot as the slot closes.
+        return withAnimation(Theme.motion) { () -> Bool in
+            switch target {
+            case .before(let anchor), .after(let anchor):
+                guard let a = store.task(anchor), !drag.excluded.contains(anchor) else { return false }
+                let sibs = a.parentId.map { store.subtaskIDs(of: $0) }
+                    ?? store.taskIDs(projectId: a.projectId, sectionId: a.sectionId)
+                let others = sibs.filter { $0 != id }
+                var index = others.firstIndex(of: anchor)
+                if case .after = target { index = index.map { $0 + 1 } }
+                store.moveTask(id, projectId: a.projectId, sectionId: a.sectionId, parentId: a.parentId, at: index)
+            case .firstChild(let parent):
+                guard let p = store.task(parent), !drag.excluded.contains(parent) else { return false }
+                store.moveTask(id, projectId: p.projectId, sectionId: p.sectionId, parentId: parent, at: 0)
+                // Show where the task went.
+                if p.collapsed { store.updateTask(parent) { $0.collapsed = false } }
+            case .sectionStart(let pid, let sid):
+                store.moveTask(id, projectId: pid, sectionId: sid, parentId: nil, at: 0)
+            case .sectionEnd(let pid, let sid):
+                store.moveTask(id, projectId: pid, sectionId: sid, parentId: nil)
+            }
+            return true
         }
-        return true
     }
 
     /// Drop handler: appends dragged tasks to a section (or project when `sectionId` is nil).
