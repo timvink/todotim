@@ -144,6 +144,14 @@ final class PerformanceTests: XCTestCase {
 
         time("build rows of one project (\(rows.count) rows)") { _ = buildRows(store, projectId: pid) }
         time("all sidebar counts") { _ = sidebarCounts(store, projectId: pid) }
+        for q in ["r", "re", "review", "Task 4999"] {
+            // Alternate the case so every run scans (the store reuses the result for a repeated query).
+            var flip = false
+            time("search \"\(q)\" (\(store.search(q).count) results)") {
+                flip.toggle()
+                _ = store.search(flip ? q.uppercased() : q)
+            }
+        }
 
         var k = 0
         time("title edit + rows + sidebar counts") {
