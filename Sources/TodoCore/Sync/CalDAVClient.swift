@@ -205,7 +205,7 @@ final class CalDAVClient: CalDAVServer {
         var result = CalendarChanges(syncToken: token, changed: [], removed: [], isFull: token == nil)
         var seen: [String: Int] = [:]
         /// Changed objects reported without their data (Xandikos leaves calendar-data out of
-        /// sync-collection): fetched with calendar-multiget.
+        /// sync-collection, and any server may fail a property): fetched with calendar-multiget.
         var withoutData = Set<String>()
         var finished = false
         // Servers may return results in pages (a 507 response for the collection means "more").
@@ -253,7 +253,7 @@ final class CalDAVClient: CalDAVServer {
                         seen[path] = result.changed.count
                         result.changed.append(res)
                     }
-                } else if r.properties["DAV:|getetag"] != nil {
+                } else {
                     result.removed.removeAll { $0 == path }
                     if let i = seen.removeValue(forKey: path) { result.changed[i].ics = "" }
                     withoutData.insert(path)
@@ -317,7 +317,9 @@ final class CalDAVClient: CalDAVServer {
     }
 
     /// Every object in `calendar`, by a calendar-query REPORT (RFC 4791 §7.8, which every CalDAV
-    /// server has), with no sync token.
+    /// server has), with no sync token. An object listed without its data is fetched by
+    /// calendar-multiget, which fails the listing if it cannot be read: the listing is taken as
+    /// complete, so a missing object would look deleted.
     private func allObjects(in calendar: String) async throws -> CalendarChanges {
         let body = """
         <?xml version="1.0" encoding="utf-8"?>
@@ -333,7 +335,7 @@ final class CalDAVClient: CalDAVServer {
             guard let path = dav.relativePath(ofHref: r.href), Self.isChild(path, of: calendar), seen.insert(path).inserted else { continue }
             if let ics = r.text("\(Self.caldavNS)|calendar-data"), !ics.isEmpty {
                 changed.append(RemoteResource(path: path, etag: WebDAVClient.normalizeETag(r.text("DAV:|getetag")), ics: ics))
-            } else if r.properties["DAV:|getetag"] != nil {
+            } else if r.status != 404 {
                 withoutData.append(path)
             }
         }

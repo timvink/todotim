@@ -292,8 +292,15 @@ private struct Pass {
             }
         }
 
-        // Sections and labels: the same rules, per entry of the calendar's property.
-        db.sections = Self.mergeEntries(local: local.sections, base: base.sections, remote: remote.sections, now: now) { l, b, r in
+        // Sections and labels: the same rules, per entry of the calendar's property. A list without
+        // the sections property (refused by the server, or shared with this user) has only the
+        // sections its tasks name: one that no task names any more was emptied, not deleted.
+        var baseSections = base.sections
+        for (id, s) in base.sections where remote.sections[id] == nil && remote.calendarOf[s.projectId] != nil
+            && !remote.hasSectionsProperty.contains(s.projectId) {
+            baseSections[id] = nil
+        }
+        db.sections = Self.mergeEntries(local: local.sections, base: baseSections, remote: remote.sections, now: now) { l, b, r in
             var s = l
             s.name = l.name != b.name ? l.name : r.name
             s.order = l.order != b.order ? l.order : r.order

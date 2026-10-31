@@ -534,6 +534,27 @@ final class CalDAVSyncTests: XCTestCase {
         XCTAssertEqual(b.store.project(p.id)?.color, "green")
     }
 
+    /// Without the sections property, a list's sections come from its tasks. A section emptied on
+    /// another device was not deleted there, so it stays here too.
+    func testEmptiedSectionSurvivesWithoutTheSectionsProperty() async throws {
+        let server = FakeCalDAVServer(layout: .xandikos)
+        await server.setRefusedProperties([.sections, .labels])
+        let a = Device()
+        let p = a.store.addProject(name: "Home")
+        let sec = a.store.addSection(projectId: p.id, name: "Garden")
+        let t = a.store.addTask(content: "Water plants", projectId: p.id, sectionId: sec.id)
+        try await a.sync(server)
+        let b = Device()
+        try await b.sync(server)
+        b.store.moveTask(t.id, projectId: p.id, sectionId: nil, parentId: nil)
+        try await b.sync(server)
+        try await a.sync(server)
+        try await a.sync(server)
+        XCTAssertNil(a.store.task(t.id)?.sectionId)
+        XCTAssertEqual(a.store.sections(in: p.id).map(\.id), [sec.id])
+        XCTAssertEqual(b.store.sections(in: p.id).map(\.id), [sec.id])
+    }
+
     func testRemoteRenameAndColorAndLabelChanges() async throws {
         let server = FakeCalDAVServer()
         let a = Device()

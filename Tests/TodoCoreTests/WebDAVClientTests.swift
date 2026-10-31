@@ -398,6 +398,47 @@ final class WebDAVClientTests: XCTestCase {
         }
     }
 
+    /// An object listed with failed properties (neither data nor ETag) is fetched with
+    /// calendar-multiget too. If that fails as well, the full listing fails: leaving the object out
+    /// would make its task look deleted.
+    func testObjectWithFailedPropertiesIsFetchedOrFailsTheListing() async throws {
+        let failed = """
+        <d:response><d:href>/remote.php/dav/calendars/tim/work/b.ics</d:href><d:propstat><d:prop><d:getetag/>\
+        <cal:calendar-data/></d:prop><d:status>HTTP/1.1 500 Internal Server Error</d:status></d:propstat></d:response>
+        """
+        let readable = """
+        <d:response><d:href>/remote.php/dav/calendars/tim/work/b.ics</d:href><d:propstat><d:prop><d:getetag>"e-b"</d:getetag>\
+        <cal:calendar-data>BEGIN:VCALENDAR\nBEGIN:VTODO\nUID:b\nEND:VTODO\nEND:VCALENDAR\n</cal:calendar-data></d:prop>\
+        <d:status>HTTP/1.1 200 OK</d:status></d:propstat></d:response>
+        """
+        func multistatus(_ responses: String) -> Data {
+            Data(("<d:multistatus xmlns:d=\"DAV:\" xmlns:cal=\"urn:ietf:params:xml:ns:caldav\">" + responses
+                  + "<d:sync-token>http://example.com/sync/2</d:sync-token></d:multistatus>").utf8)
+        }
+        var hasSyncCollection = true, multigetReads = true
+        StubURLProtocol.handler = { req in
+            let body = Self.body(req) ?? ""
+            if body.contains("sync-collection") { return hasSyncCollection ? (207, [:], multistatus(failed)) : (501, [:], Data()) }
+            if body.contains("calendar-query") { return (207, [:], multistatus(failed)) }
+            return (207, [:], multistatus(multigetReads ? readable : failed))
+        }
+        let caldav = CalDAVClient(dav: try makeClient(), username: "tim")
+        for syncCollection in [true, false] {
+            hasSyncCollection = syncCollection
+            multigetReads = true
+            let changes = try await caldav.changes(in: "calendars/tim/work", since: nil)
+            XCTAssertTrue(changes.isFull)
+            XCTAssertEqual(changes.changed.map(\.path), ["calendars/tim/work/b.ics"], "sync-collection: \(syncCollection)")
+            multigetReads = false
+            do {
+                _ = try await caldav.changes(in: "calendars/tim/work", since: nil)
+                XCTFail("expected badRemoteData, sync-collection: \(syncCollection)")
+            } catch {
+                guard case .badRemoteData? = error as? SyncError else { return XCTFail("\(error)") }
+            }
+        }
+    }
+
     /// A property the server will not store comes back 403; atomic servers fail the rest with 424
     /// (sent again without it), others apply the rest at once (Xandikos).
     func testRefusedOptionalPropertiesAreReportedAndTheRestIsSet() async throws {
