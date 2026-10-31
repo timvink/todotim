@@ -623,10 +623,6 @@ private struct Pass {
         // The base for the next sync: each task on the server as the database now holds it, or,
         // where the write did not happen, the old base (so the local edit is still seen).
         var synced: [EntityID: TodoTask] = [:]
-    /// Objects that were tasks but can no longer be read (malformed, over a limit, or only
-    /// overrides), by path, with the task id they had. Their tasks are left as they are on both
-    /// sides; they are not taken for deleted.
-    var unreadable: [String: EntityID] = [:]
         for id in onServer {
             if pending.contains(id) { synced[id] = baseLocal[id] ?? remote.tasks[id]?.todo.task } else { synced[id] = merged.tasks[id] }
         }
