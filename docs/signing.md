@@ -117,3 +117,22 @@ protection keychain only if you add a provisioning profile for another reason. T
 `kSecAttrAccessible: kSecAttrAccessibleAfterFirstUnlock`, and migrate once: read the legacy item, write it to the
 data protection keychain, then delete the legacy item. Keep ad-hoc local builds on the legacy keychain, or
 they cannot store the password.
+
+## Android APK signing
+
+Android installs an update only when it is signed with the same key as the installed app, so every APK must use
+one long-lived key. The release workflow builds `TodoTim-vX.Y.Z.apk` only when the repository has two secrets;
+without them the release has the macOS app only.
+
+The key is `android/todotim-release.keystore` (PKCS12, alias `todotim`, store and key password equal), with
+`android/keystore.properties` next to it for local release builds. Both are gitignored and backed up in the
+vault (`file-backup:todotim/android/...`). Never replace the key: a new one means uninstalling the app (and
+its unsynced data) on every phone.
+
+Add the secrets once, from `android/`:
+
+    base64 -i todotim-release.keystore | gh secret set ANDROID_KEYSTORE_BASE64
+    sed -n 's/^storePassword=//p' keystore.properties | tr -d '\n' | gh secret set ANDROID_KEYSTORE_PASSWORD
+
+The workflow writes them to a temporary `keystore.properties`, builds with `-PtodotimVersion=X.Y.Z` (version
+name `X.Y.Z`, version code `X*10000 + Y*100 + Z`), and deletes the key file before uploading the APK.

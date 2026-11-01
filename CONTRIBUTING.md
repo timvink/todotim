@@ -35,18 +35,21 @@ Releases are built by GitHub Actions (`.github/workflows/release.yml`) when a ve
        git tag -a v0.2.0 -m "v0.2.0"
        git push origin v0.2.0
 
-4. The `build` job (read-only token) checks that the tag looks like `vX.Y.Z`, runs the tests, builds a
-   universal (Apple silicon + Intel) `TodoTim.app`, and uploads `TodoTim-v0.2.0.zip` plus a SHA-256 checksum
-   as a workflow artifact. The `publish` job (no checkout, no repository code) attests the zip's build
-   provenance and creates the GitHub release with generated notes.
+4. One tag releases both apps with the same version. The `build` job (read-only token) checks that the tag
+   looks like `vX.Y.Z`, runs the tests, builds a universal (Apple silicon + Intel) `TodoTim.app`, and uploads
+   `TodoTim-v0.2.0.zip` plus a SHA-256 checksum as a workflow artifact. The `build-android` job does the same
+   for `TodoTim-v0.2.0.apk` (Android tests, signed release build), or skips it without the signing secrets.
+   The `publish` job (no checkout, no repository code) attests the build provenance of both and creates the
+   GitHub release with generated notes.
 5. Edit the release notes on GitHub if needed.
 
-Users verify a download with `gh attestation verify TodoTim-v0.2.0.zip --repo timvink/todotim`.
+Users verify a download with `gh attestation verify TodoTim-v0.2.0.zip --repo timvink/todotim` (or the `.apk`).
 
 The app is signed with the hardened runtime (`scripts/bundle.sh`). When the repository has the signing
 secrets, the build job signs it with a Developer ID, notarizes and staples it; without them it is ad-hoc signed,
 and on first launch users approve it in **System Settings › Privacy & Security › Open Anyway** (don't tell them
-to remove the quarantine attribute). See [docs/signing.md](docs/signing.md) for the setup.
+to remove the quarantine attribute). A built APK is always signed with the one release key. See
+[docs/signing.md](docs/signing.md) for both setups.
 
 Workflow actions are pinned to full commit SHAs with a `# vX.Y.Z` comment; Dependabot proposes updates.
 
