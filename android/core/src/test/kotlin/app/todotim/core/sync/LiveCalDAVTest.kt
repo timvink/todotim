@@ -49,6 +49,70 @@ class LiveCalDAVTest {
         fun task(id: String) = store.snapshot.value.task(id)
     }
 
+    /** A list deleted and made again at the same path (a server reset): the stored sync token is the old list's. */
+    @Test fun recreatedListStartsOver() = runBlocking {
+        val inboxPath = davPath(client.home, INBOX_CALENDAR)
+        val a = Phone()
+        val old = a.store.addTask("Old")
+        assertTrue(a.sync(client).isComplete)
+        assertNotNull(obj(client, "$inboxPath/${old.id}.ics"))
+        val local = a.store.addTask("Local only")
+
+        LiveServer.wipe(client)
+        client.createCalendar(inboxPath, "Inbox", ProjectColor.hex("charcoal"), "0")
+        val fresh = FakeCalDAVServer.vtodo("UID:fresh", "DTSTAMP:20261020T100000Z", "SUMMARY:Fresh")
+        client.put("$inboxPath/fresh.ics", fresh, null)
+
+        val r = a.sync(client)
+        assertTrue(r.warnings.toString(), r.isComplete)
+        assertEquals(setOf("Fresh", "Local only"), a.store.database.value.tasks.values.map { it.content }.toSet())
+        assertNull(a.task(old.id))
+        assertNotNull(obj(client, "$inboxPath/${local.id}.ics"))
+        assertNotNull(obj(client, "$inboxPath/fresh.ics"))
+        assertEquals(0, a.sync(client).uploaded)
+    }
+
+    /** The controller as the app runs it: a wrong password, then discovery from other forms of the server URL, a
+     *  cached home and the database saved after each sync. */
+    @Test fun controllerWithDiscoveryAndPersistence() = runBlocking {
+        val env = System.getenv()
+        val url = env.getValue("TODOTIM_LIVE_URL")
+        val user = env.getValue("TODOTIM_LIVE_USER")
+        val password = env.getValue("TODOTIM_LIVE_PASSWORD")
+        val dir = kotlin.io.path.createTempDirectory("todotim-live").toFile()
+        try {
+            val persistence = app.todotim.core.store.Persistence(dir)
+            val store = TodoStore()
+            var connects = 0
+            val controller = SyncController(store, persistence, connect = { s, pw, home ->
+                connects++
+                if (home != null) assertEquals(store.database.value.home, home)
+                app.todotim.core.dav.CalDAVClient.connect(s.serverUrl, s.username, pw, home)
+            })
+            val settings = SyncSettings(url, user)
+            try {
+                controller.syncNow(settings, "$password-wrong")
+                org.junit.Assert.fail("a wrong password syncs")
+            } catch (e: app.todotim.core.dav.SyncError.Unauthorized) {
+            }
+            val t = store.addTask("Saved")
+            assertTrue(controller.syncNow(settings, password).isComplete)
+            assertNotNull(store.database.value.home)
+            assertNotNull(obj(client, davPath(client.home, "$INBOX_CALENDAR/${t.id}.ics")))
+            assertEquals(store.database.value, persistence.load())
+            assertTrue(controller.syncNow(settings, password).isComplete)
+
+            // The same account without the trailing slash, and by its calendar home URL: the same tasks.
+            for (other in listOf(url.trimEnd('/'), client.calendarHome.url)) {
+                val s2 = TodoStore()
+                assertTrue(SyncController(s2).syncNow(SyncSettings(other, user), password).isComplete)
+                assertEquals(other, store.database.value.tasks.keys, s2.database.value.tasks.keys)
+            }
+        } finally {
+            dir.deleteRecursively()
+        }
+    }
+
     @Test fun phoneRoundTrip() = runBlocking {
         val home = client.home
         val work = "live-work"

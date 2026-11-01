@@ -11,6 +11,7 @@ set -euo pipefail
 
 : "${TODOTIM_LIVE_URL:?set TODOTIM_LIVE_URL}" "${TODOTIM_LIVE_USER:?set TODOTIM_LIVE_USER}" "${TODOTIM_LIVE_PASSWORD:?set TODOTIM_LIVE_PASSWORD}"
 export TODOTIM_LIVE_URL TODOTIM_LIVE_USER TODOTIM_LIVE_PASSWORD
+export TZ=Europe/Amsterdam # the steps check the dates of timed dues
 
 root="$(cd "$(dirname "$0")/.." && pwd)"
 TODOTIM_CROSS_DIR="$(mktemp -d "${TMPDIR:-/tmp}/todotim-interop.XXXXXX")"
@@ -46,5 +47,13 @@ phone d1 # the phone completes "Gym" and syncs, then completes "Take out bins" w
 mac d2   # the Mac completes "Take out bins" and syncs
 phone d3 # the phone syncs: each repeating task advanced once
 mac d4   # the Mac agrees with the phone on every task
+# Both edit the same tasks and sync, at the same time (each step waits for the other to be ready).
+mac e & mac_pid=$!
+phone e & phone_pid=$!
+wait "$mac_pid" || fail "Mac step e failed"
+wait "$phone_pid" || fail "Phone step e failed"
+mac f1   # the Mac syncs what is left
+phone f2 # the phone too, and then has nothing left to write
+mac f3   # the Mac agrees with the phone, nothing is duplicated
 echo "== Mac and phone agree"
 rm -rf "$TODOTIM_CROSS_DIR"

@@ -35,15 +35,17 @@ class CrossClientLiveTest {
     private val dir = System.getenv("TODOTIM_CROSS_DIR")?.let(::File)
 
     @Test fun step() = runBlocking {
-        assumeTrue("run by scripts/live-interop.sh", step in setOf("b", "d1", "d3") && dir != null)
+        assumeTrue("run by scripts/live-interop.sh", step in setOf("b", "d1", "d3", "e", "f2") && dir != null)
         val client = LiveServer.connect()
         val persistence = Persistence(File(dir, "phone").apply { mkdirs() })
-        val store = TodoStore(persistence.load())
+        val store = TodoStore(persistence.load(), zone = ZONE)
         val ids = readMap("ids.json")
         when (step) {
             "b" -> stepB(client, store, ids)
             "d1" -> stepD1(client, store, ids)
             "d3" -> stepD3(client, store, ids)
+            "e" -> stepE(client, store, ids)
+            "f2" -> stepF2(client, store)
         }
         persistence.save(store.database.value)
     }
@@ -54,7 +56,7 @@ class CrossClientLiveTest {
         }
 
     private suspend fun syncOK(store: TodoStore, client: CalDAVClient): SyncResult {
-        val r = CalDAVSync.sync(store, client)
+        val r = CalDAVSync.sync(store, client, zone = ZONE)
         assertTrue(r.warnings.toString(), r.isComplete)
         assertEquals(emptyList<String>(), r.warnings)
         return r
@@ -62,7 +64,7 @@ class CrossClientLiveTest {
 
     private suspend fun settled(store: TodoStore, client: CalDAVClient) {
         val rec = Recording(client)
-        val r = CalDAVSync.sync(store, rec)
+        val r = CalDAVSync.sync(store, rec, zone = ZONE)
         assertEquals(0, r.uploaded)
         assertEquals(emptyList<String>(), rec.writes)
         assertEquals(0, store.snapshot.value.unsyncedCount)
@@ -86,7 +88,7 @@ class CrossClientLiveTest {
             snap.labels.map { it.name to it.color },
         )
         assertEquals(listOf(ids.getValue("outside"), ids.getValue("weekend")), snap.labels.take(2).map { it.id })
-        assertEquals(15, store.database.value.tasks.size)
+        assertEquals(18, store.database.value.tasks.size)
         with(snap.task(ids.getValue("foreignUid"))!!) {
             assertEquals("Foreign uid", content)
             assertEquals(INBOX_ID, projectId)
@@ -161,6 +163,12 @@ class CrossClientLiveTest {
         store.updateTask(ids.getValue("mum")) { copy(priority = Priority.P4) }
         store.updateTask(ids.getValue("hotel")) { copy(due = null) }
         store.updateTask(ids.getValue("unicode")) { copy(labels = emptyList()) }
+        assertEquals(LocalDate.of(2026, 11, 21), store.snapshot.value.task("late-utc")!!.due)
+        assertEquals(LocalDate.of(2026, 11, 21), store.snapshot.value.task("ny")!!.due)
+        store.updateTask("late-utc") { copy(due = LocalDate.of(2026, 11, 23)) }
+        store.updateTask("ny") { copy(due = LocalDate.of(2026, 11, 22)) }
+        assertTrue(store.snapshot.value.task(ids.getValue("done"))!!.isCompleted)
+        store.reopen(ids.getValue("done"))
         syncOK(store, client)
         settled(store, client)
         File(dir, "phone-ids.json").writeText(
@@ -220,6 +228,37 @@ class CrossClientLiveTest {
             assertEquals(key, rule, t.recurrence)
             assertFalse(key, t.isCompleted)
         }
+        export(store)
+    }
+
+    /** Edits and syncs while the Mac does the same, at the same time (the script runs both steps at once). Syncs may
+     *  stay incomplete here (conflicts); later steps settle. */
+    private suspend fun stepE(client: CalDAVClient, store: TodoStore, ids: Map<String, String>) {
+        File(dir, "ready-phone").writeText("")
+        val deadline = System.currentTimeMillis() + 180_000
+        while (!File(dir, "ready-mac").exists()) {
+            check(System.currentTimeMillis() < deadline) { "the Mac step did not start" }
+            Thread.sleep(50)
+        }
+        for (i in 0 until 12) {
+            store.updateTask(ids.getValue("mum")) { copy(content = "phone $i") }
+            if (i % 3 == 0) store.updateTask(ids.getValue("fence")) { copy(description = "phone $i") }
+            if (i % 4 == 1) store.complete(ids.getValue("water"))
+            if (i == 6) store.addTask("Phone during the race", ids.getValue("home"), sectionId = ids.getValue("garden"))
+            CalDAVSync.sync(store, client, zone = ZONE)
+            Thread.sleep((0L..150L).random())
+        }
+    }
+
+    /** After the race: the phone syncs what is left, then nothing more. */
+    private suspend fun stepF2(client: CalDAVClient, store: TodoStore) {
+        syncOK(store, client)
+        settled(store, client)
+        export(store)
+    }
+
+    /** Writes the tasks, lists, sections and labels for the Mac to compare. */
+    private fun export(store: TodoStore) {
         val tasks = buildJsonObject {
             for (t in store.database.value.tasks.values) {
                 put(t.id, buildJsonObject {
@@ -248,6 +287,9 @@ class CrossClientLiveTest {
     }
 
     companion object {
+        /** The script runs the Mac steps with TZ=Europe/Amsterdam. */
+        val ZONE: java.time.ZoneId = java.time.ZoneId.of("Europe/Amsterdam")
+
         // As in the Swift CrossClientLiveTests.
         val PHONE_TITLE = "Ünïcødé ✅ ".repeat(9)
         const val PHONE_DESCRIPTION = "x;y,z\\\n🙂"

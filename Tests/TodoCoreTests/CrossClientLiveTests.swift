@@ -108,6 +108,9 @@ final class CrossClientLiveTests: XCTestCase {
         case "c": try await stepC()
         case "d2": try await stepD2()
         case "d4": try await stepD4()
+        case "e": try await stepE()
+        case "f1": try await stepF1()
+        case "f3": try await stepF3()
         default: throw XCTSkip("step \(step) is the phone's")
         }
     }
@@ -150,6 +153,8 @@ final class CrossClientLiveTests: XCTestCase {
         let paint = s.addTask(content: "Buy paint", projectId: home.id, parentId: fence.id)
         let trip = s.addTask(content: "Plan trip", projectId: TodoStore.inboxID)
         let hotel = s.addTask(content: "Book hotel", projectId: TodoStore.inboxID, parentId: trip.id, due: DueDate(date: "2026-12-01"))
+        let done = s.addTask(content: "Done already", projectId: TodoStore.inboxID)
+        s.toggleComplete(done.id)
 
         let first = try await mac.sync(server)
         XCTAssertTrue(first.isComplete)
@@ -172,8 +177,17 @@ final class CrossClientLiveTests: XCTestCase {
         let other = ["BEGIN:VCALENDAR", "VERSION:2.0", "PRODID:-//Other//EN", "BEGIN:VTODO", "UID:x@other.example",
                      "DTSTAMP:20261020T100000Z", "LAST-MODIFIED:20261020T100000Z", "SUMMARY:Foreign uid",
                      "DUE;TZID=Europe/Amsterdam:20261120T183000", "END:VTODO", "END:VCALENDAR", ""].joined(separator: "\r\n")
-        _ = try await server.put(davPath(server.home, "\(CalDAVSync.inboxURI)/x-other.ics"), ics: other, ifMatch: nil)
-        let otherList = davPath(server.home, "other.list")
+        _ = try await server.put(davPath(server.home, "\(CalDAVSync.inboxURI)/x other@ex.ics"), ics: other, ifMatch: nil)
+        // DATE-TIME dues that fall on another day here (the script sets TZ=Europe/Amsterdam): in UTC with a DTSTART,
+        // and in New York.
+        for (uid, lines) in [("late-utc", ["DTSTART:20261120T220000Z", "DUE:20261120T233000Z"]),
+                             ("ny", ["DUE;TZID=America/New_York:20261120T200000"])] {
+            let ics = (["BEGIN:VCALENDAR", "VERSION:2.0", "PRODID:-//Other//EN", "BEGIN:VTODO", "UID:\(uid)",
+                        "DTSTAMP:20261020T100000Z", "LAST-MODIFIED:20261020T100000Z", "SUMMARY:Timed \(uid)"]
+                       + lines + ["END:VTODO", "END:VCALENDAR", ""]).joined(separator: "\r\n")
+            _ = try await server.put(davPath(server.home, "\(CalDAVSync.inboxURI)/\(uid).ics"), ics: ics, ifMatch: nil)
+        }
+        let otherList = davPath(server.home, "other list.1")
         _ = try await server.createCalendar(otherList, name: "Other list", color: "#FF0000", order: "5")
         let inOther = ["BEGIN:VCALENDAR", "VERSION:2.0", "PRODID:-//Other//EN", "BEGIN:VTODO", "UID:t1",
                        "DTSTAMP:20261020T100000Z", "LAST-MODIFIED:20261020T100000Z", "SUMMARY:In other list", "END:VTODO",
@@ -186,12 +200,14 @@ final class CrossClientLiveTests: XCTestCase {
         XCTAssertEqual(foreignUid.due, DueDate(date: "2026-11-20"))
         let otherProject = try XCTUnwrap(s.db.projects.values.first { $0.name == "Other list" })
         XCTAssertEqual(s.task("t1")?.projectId, otherProject.id)
+        XCTAssertEqual(s.task("late-utc")?.due, DueDate(date: "2026-11-21"))
+        XCTAssertEqual(s.task("ny")?.due, DueDate(date: "2026-11-21"))
 
         let ids = ["home": home.id, "errands": errands.id, "garden": garden.id, "indoors": indoors.id,
                    "outside": outside.id, "weekend": weekend.id, "prune": prune.id, "shears": shears.id, "water": water.id,
                    "bins": bins.id, "gym": gym.id, "mum": mum.id, "vacuum": vacuum.id, "passport": passport.id,
                    "unicode": unicode.id, "fence": fence.id, "paint": paint.id, "trip": trip.id, "hotel": hotel.id,
-                   "foreignUid": foreignUid.id, "otherList": otherProject.id,
+                   "foreignUid": foreignUid.id, "otherList": otherProject.id, "done": done.id,
                    "foreign": Self.foreign(served)]
         try JSONEncoder().encode(ids).write(to: file("ids.json"))
         try save(mac)
@@ -276,8 +292,22 @@ final class CrossClientLiveTests: XCTestCase {
         let hotelObject = try await object(path(ids["errands"]!, ids["hotel"]!))
         XCTAssertNotNil(hotelObject, "the subtask moved along")
         XCTAssertFalse(pruneICS.contains("DESCRIPTION"), pruneICS)
-        let foreignUidICS = try await need(davPath(server.home, "\(CalDAVSync.inboxURI)/x-other.ics")).ics.unfolded
+        let foreignUidICS = try await need(davPath(server.home, "\(CalDAVSync.inboxURI)/x other@ex.ics")).ics.unfolded
         XCTAssertTrue(foreignUidICS.contains("UID:x@other.example"), foreignUidICS)
+        XCTAssertEqual(s.task("late-utc")?.due, DueDate(date: "2026-11-23"))
+        XCTAssertEqual(s.task("ny")?.due, DueDate(date: "2026-11-22"))
+        let lateICS = try await need(davPath(server.home, "\(CalDAVSync.inboxURI)/late-utc.ics")).ics.unfolded
+        XCTAssertTrue(lateICS.contains("DUE:20261122T233000Z"), lateICS)
+        XCTAssertTrue(lateICS.contains("DTSTART:20261122T220000Z"), lateICS)
+        let nyICS = try await need(davPath(server.home, "\(CalDAVSync.inboxURI)/ny.ics")).ics.unfolded
+        XCTAssertTrue(nyICS.contains("DUE;TZID=America/New_York:20261121T200000"), nyICS)
+        let inboxObjects = try await server.changes(in: davPath(server.home, CalDAVSync.inboxURI), since: nil).changed
+        XCTAssertEqual(inboxObjects.filter { $0.ics.contains("UID:x@other.example") }.count, 1, "edited in place")
+        XCTAssertEqual(task("done")?.isCompleted, false, "reopened on the phone")
+        let doneICS = try await need(path(TodoStore.inboxID, ids["done"]!)).ics.unfolded
+        XCTAssertFalse(doneICS.contains("COMPLETED:"), doneICS)
+        XCTAssertFalse(doneICS.contains("PERCENT-COMPLETE"), doneICS)
+        XCTAssertTrue(doneICS.contains("STATUS:NEEDS-ACTION"), doneICS)
         XCTAssertTrue(foreignUidICS.contains("DUE;TZID=Europe/Amsterdam:20261120T183000"), foreignUidICS)
         let hotelICS = try await need(path(ids["errands"]!, ids["hotel"]!)).ics.unfolded
         XCTAssertFalse(hotelICS.contains("DUE"), hotelICS)
@@ -371,6 +401,57 @@ final class CrossClientLiveTests: XCTestCase {
         let sweepLine = try await sectionLine(phoneIds["sweep"]!)
         XCTAssertEqual(sweepLine, "X-TODOTIM-SECTION;X-NAME=Shed;X-ORDER=\(VTodo.format(shed.order)):\(shed.id)")
 
+        try compareWithPhone(s)
+    }
+
+    /// Edits and syncs while the phone does the same, at the same time (the script runs both steps at once).
+    private func stepE() async throws {
+        let ids = try readJSON("ids.json")
+        let mac = try load()
+        let s = mac.store
+        try Data().write(to: file("ready-mac"))
+        let deadline = Date().addingTimeInterval(180)
+        while !FileManager.default.fileExists(atPath: file("ready-phone").path) {
+            guard Date() < deadline else { return XCTFail("the phone step did not start") }
+            try await Task.sleep(nanoseconds: 50_000_000)
+        }
+        for i in 0..<12 {
+            s.updateTask(ids["mum"]!) { $0.content = "mac \(i)" }
+            if i % 2 == 0 { s.updateTask(ids["fence"]!) { $0.priority = $0.priority == .p1 ? .p4 : .p1 } }
+            if i % 4 == 0 { s.toggleComplete(ids["water"]!) }
+            if i == 5 { s.addTask(content: "Mac during the race", projectId: ids["home"]!, sectionId: ids["shed"]) }
+            _ = try await mac.sync(server)
+            try await Task.sleep(nanoseconds: UInt64.random(in: 0...150_000_000))
+        }
+        try save(mac)
+    }
+
+    /// After the race: the Mac syncs what is left.
+    private func stepF1() async throws {
+        let mac = try load()
+        let r = try await mac.sync(server)
+        XCTAssertTrue(r.isComplete, "\(r.warnings)")
+        try save(mac)
+    }
+
+    /// The Mac agrees with the phone, with nothing left to write, and the race left no duplicates.
+    private func stepF3() async throws {
+        let mac = try load()
+        let r = try await mac.sync(server)
+        XCTAssertTrue(r.isComplete)
+        XCTAssertEqual(r.writes, 0)
+        let s = mac.store
+        let live = s.db.tasks.values.filter { !$0.deleted }
+        XCTAssertEqual(live.filter { $0.content == "Mac during the race" }.count, 1)
+        XCTAssertEqual(live.filter { $0.content == "Phone during the race" }.count, 1)
+        var objects = 0
+        for cal in try await server.calendars() { objects += try await server.changes(in: cal.path, since: nil).changed.count }
+        XCTAssertEqual(objects, live.count, "one object per task")
+        try compareWithPhone(s)
+    }
+
+    /// The Mac's tasks, lists, sections and labels equal the phone's (`phone-tasks.json`, `phone-meta.json`).
+    private func compareWithPhone(_ s: TodoStore) throws {
         struct PhoneTask: Decodable, Equatable {
             var projectId: String, sectionId: String?, parentId: String?, content: String, description: String
             var priority: Int, due: String?, labels: [String], isCompleted: Bool, recurrence: String?, order: Double

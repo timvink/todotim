@@ -124,3 +124,8 @@ root; both the Swift tests and the Kotlin tests check against it, so a contract 
 
 Needs JDK 21 (`JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home` on the Mac) and an
 Android SDK in `android/local.properties` (`sdk.dir=…`).
+
+Live tests (same env vars and throwaway account as the Swift live test): the phone's sync alone,
+`./gradlew :core:test --tests app.todotim.core.sync.LiveCalDAVTest`; the Mac and the phone taking turns on one
+account and checking each other's changes (incl. both syncing at once), `scripts/live-interop.sh` (Swift
+`CrossClientLiveTests` + Kotlin `CrossClientLiveTest`; `SWIFT_SCRATCH` sets the Swift scratch path).
