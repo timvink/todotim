@@ -1,0 +1,23 @@
+{
+  "task": {
+    "id": "m1",
+    "projectId": "inbox",
+    "sectionId": null,
+    "parentId": null,
+    "content": "Buy milk",
+    "description": "",
+    "priority": 4,
+    "due": null,
+    "labels": [],
+    "isCompleted": false,
+    "completedAt": null,
+    "order": 1,
+    "collapsed": false,
+    "recurrence": null,
+    "createdAt": "2026-11-01T09:30:00Z",
+    "updatedAt": "2026-11-01T09:30:00Z"
+  },
+  "uid": "m1",
+  "parentUid": null,
+  "section": null
+}

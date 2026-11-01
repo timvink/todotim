@@ -1,0 +1,21 @@
+{
+  "id": "fold-1",
+  "uid": "fold-1",
+  "projectId": "p",
+  "sectionId": null,
+  "sectionName": null,
+  "sectionOrder": null,
+  "parentId": null,
+  "content": "Long line that is folded acrossthree lines éé",
+  "description": "a\nb, c; d\\ e\nf",
+  "priority": 4,
+  "due": "2026-11-04",
+  "labels": [],
+  "isCompleted": false,
+  "completedAt": null,
+  "order": 814183200,
+  "collapsed": false,
+  "recurrence": null,
+  "createdAt": "2026-10-20T10:00:00Z",
+  "updatedAt": "2026-10-20T10:00:00Z"
+}

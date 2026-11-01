@@ -1,0 +1,25 @@
+{
+  "id": "self",
+  "uid": "self",
+  "projectId": "p",
+  "sectionId": null,
+  "sectionName": null,
+  "sectionOrder": null,
+  "parentId": null,
+  "content": "",
+  "description": "",
+  "priority": 1,
+  "due": null,
+  "labels": [
+    "a,b",
+    "c",
+    "d"
+  ],
+  "isCompleted": true,
+  "completedAt": "2026-10-20T10:00:00Z",
+  "order": 814183200,
+  "collapsed": false,
+  "recurrence": null,
+  "createdAt": "2026-10-20T10:00:00Z",
+  "updatedAt": "2026-10-20T10:00:00Z"
+}

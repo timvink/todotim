@@ -1,0 +1,21 @@
+{
+  "id": "done",
+  "uid": "done",
+  "projectId": "p",
+  "sectionId": null,
+  "sectionName": null,
+  "sectionOrder": null,
+  "parentId": null,
+  "content": "",
+  "description": "",
+  "priority": 4,
+  "due": null,
+  "labels": [],
+  "isCompleted": true,
+  "completedAt": "2026-11-01T12:00:00Z",
+  "order": 2.5,
+  "collapsed": false,
+  "recurrence": "FREQ=WEEKLY;INTERVAL=2",
+  "createdAt": "1970-01-01T00:00:00Z",
+  "updatedAt": "1970-01-01T00:00:00Z"
+}

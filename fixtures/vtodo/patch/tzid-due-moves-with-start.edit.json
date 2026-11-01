@@ -1,0 +1,6 @@
+{
+  "set": {
+    "due": "2026-11-08",
+    "recurrence": "FREQ=WEEKLY;COUNT=2"
+  }
+}

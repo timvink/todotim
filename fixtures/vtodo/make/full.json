@@ -1,0 +1,30 @@
+{
+  "task": {
+    "id": "t1",
+    "projectId": "p",
+    "sectionId": "s1",
+    "parentId": "t0",
+    "content": "Title; with, commas\\",
+    "description": "Line 1\nLine 2",
+    "priority": 3,
+    "due": "2026-11-03",
+    "labels": [
+      "a,b",
+      "c"
+    ],
+    "isCompleted": true,
+    "completedAt": "2026-09-21T14:14:20Z",
+    "order": 0.25,
+    "collapsed": true,
+    "recurrence": "FREQ=DAILY",
+    "createdAt": "2026-09-21T14:13:20Z",
+    "updatedAt": "2026-09-21T14:14:20Z"
+  },
+  "uid": "t1",
+  "parentUid": "t0",
+  "section": {
+    "id": "s1",
+    "name": "Name, with: \"quotes\"",
+    "order": 1.5
+  }
+}
