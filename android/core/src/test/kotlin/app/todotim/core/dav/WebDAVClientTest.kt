@@ -122,6 +122,12 @@ class WebDAVClientTest {
         assertNull(Multistatus.parse("<html><body>Nextcloud</body></html>".toByteArray()))
         assertNull(Multistatus.parse("not xml".toByteArray()))
         assertNull(Multistatus.parse("<d:multistatus xmlns:d=\"DAV:\"><d:response>".toByteArray()))
+        assertNull(Multistatus.parse("<d:multistatus xmlns:d=\"DAV:\">".toByteArray()))
+        // Nothing but whitespace, comments and processing instructions may follow the root element.
+        for (trailing in listOf("<extra/>", "text", "<d:multistatus xmlns:d=\"DAV:\"/>", "<a>")) {
+            assertNull(trailing, Multistatus.parse("<d:multistatus xmlns:d=\"DAV:\"/>$trailing".toByteArray()))
+        }
+        assertEquals(0, Multistatus.parse("<d:multistatus xmlns:d=\"DAV:\"/>\n<!-- c --><?pi x?> \n".toByteArray())!!.responses.size)
     }
 
     @Test fun parserRefusesDTDAndEntitiesAndCapsEntries() {
@@ -235,9 +241,33 @@ class WebDAVClientTest {
             "/remote.php/other/x.ics", "/remote.php/dav/../x",
             "/remote.php/dav/calendars/tim/%2E%2E/x", "/remote.php/dav/calendars/tim/%2e/x",
             "/remote.php/dav/calendars/tim/a%2Fb.ics",
+            // Empty interior segments are not collapsed.
+            "/remote.php/dav/calendars/tim/work//a.ics", "/remote.php//dav/calendars/tim/a.ics",
+            // OkHttp reads "\" as "/": a backslash, raw or encoded, is refused.
+            "/remote.php/dav/a/..\\calendars/tim/a.ics", "/remote.php/dav/calendars\\tim/a.ics",
+            "/remote.php/dav/calendars/tim/a%5Cb.ics", "/remote.php/dav/a/%2E%2E%5Ccalendars/x.ics",
         )) {
             assertNull(bad, client.relativePath(bad))
         }
+    }
+
+    @Test fun emptySegmentsAndBackslashesAreRefused() {
+        val base = "https://host/dav/tim/".toUrl()
+        assertTrue(WebDAVClient.isWithin("https://host/dav/tim/a.ics".toUrl(), base))
+        assertFalse(WebDAVClient.isWithin("https://host/dav//tim/a.ics".toUrl(), base))
+        assertFalse(WebDAVClient.isWithin("https://host/dav/tim//a.ics".toUrl(), base))
+        assertFalse(WebDAVClient.isWithin("https://host/dav/tim/a.ics".toUrl(), "https://host/dav//tim/".toUrl()))
+        for (bad in listOf("https://host/dav//tim/", "https://host/dav\\tim/", "https://host/dav/a/..\\tim/", "https://host/dav/%5C/")) {
+            try {
+                WebDAVClient.normalizedBaseURL(bad)
+                fail("accepted $bad")
+            } catch (e: SyncError.InvalidURL) {
+            }
+        }
+        for (bad in listOf("/dav/tim//a.ics", "/dav/a/..\\tim/a.ics", "\\\\evil.example.com/dav/", "/dav/tim/%5c")) {
+            assertNull(bad, WebDAVClient.resolveHref(bad, base))
+        }
+        assertEquals("https://host/dav/tim/a.ics", WebDAVClient.resolveHref("a.ics", base).toString())
     }
 
     @Test fun pathsAreComparedDecodedAndHomeCanBeTheRoot() {
@@ -361,6 +391,12 @@ class WebDAVClientTest {
         )
         assertEquals(listOf(PropertyList.Entry("l1", "A & B", 1.0)), calendars[0].labelEntries())
         assertNull(calendars[0].sectionEntries())
+        // An unreadable listing fails instead of looking like an empty home.
+        for (bad in listOf("""<d:multistatus xmlns:d="DAV:"/><extra/>""", """<d:multistatus xmlns:d="DAV:">""")) {
+            server.handler = { Reply(207, body = bad) }
+            assertFails<SyncError.NotCalDAV> { caldav().calendars() }
+        }
+        server.handler = { Reply(207, body = CALENDAR_HOME) }
         val req = server.requests.first()
         assertEquals("PROPFIND", req.method)
         assertEquals("1", req.header("Depth"))

@@ -374,10 +374,13 @@ object ICalendar {
 
     internal fun basicDate(year: Int, month: Int, day: Int) = String.format(Locale.ROOT, "%04d%02d%02d", year, month, day)
 
-    /** Swift `TimeZone(identifier:)`: a region id or UTC/GMT; not offsets like `+01:00`. */
+    /**
+     * Swift `TimeZone(identifier:)`: a region id, UTC/GMT, or an abbreviation Foundation also knows (`EST`, `PST`,
+     * via [ZoneId.SHORT_IDS]); not offsets like `+01:00`.
+     */
     internal fun zoneOrNull(id: String): ZoneId? {
         if (id.isEmpty() || id[0] == '+' || id[0] == '-' || id == "Z") return null
-        return try { ZoneId.of(id) } catch (_: DateTimeException) { null }
+        return try { ZoneId.of(id, ZoneId.SHORT_IDS) } catch (_: DateTimeException) { null }
     }
 }
 

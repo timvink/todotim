@@ -273,7 +273,7 @@ class WebDAVClient(
             if (!s.contains("://") || hasDotSegment(s)) throw SyncError.InvalidURL(string)
             val url = s.toHttpUrlOrNull() ?: throw SyncError.InvalidURL(string)
             if (url.host.isEmpty() || url.username.isNotEmpty() || url.password.isNotEmpty() ||
-                url.query != null || url.fragment != null
+                url.query != null || url.fragment != null || decodedSegments(url) == null
             ) {
                 throw SyncError.InvalidURL(string)
             }
@@ -299,12 +299,19 @@ class WebDAVClient(
             return segments.size >= baseSegments.size && segments.subList(0, baseSegments.size) == baseSegments
         }
 
-        /** The decoded, non-empty segments of [url]'s path; null when one decodes to "/", "." or "..". */
+        /**
+         * The decoded segments of [url]'s path, without the empty one a trailing slash adds; null when one decodes
+         * to "/", "\", "." or "..", or an inner one is empty (`/dav//tim/` is not `/dav/tim/`).
+         */
         fun decodedSegments(url: HttpUrl): List<String>? {
             val out = ArrayList<String>()
-            for (s in url.pathSegments) {
-                if (s.isEmpty()) continue
-                if (s == "." || s == ".." || s.contains('/')) return null
+            val raw = url.pathSegments
+            for ((i, s) in raw.withIndex()) {
+                if (s.isEmpty()) {
+                    if (i == raw.size - 1) continue
+                    return null
+                }
+                if (s == "." || s == ".." || s.contains('/') || s.contains('\\')) return null
                 out.add(s)
             }
             return out
@@ -337,9 +344,11 @@ class WebDAVClient(
 
         /**
          * Whether the path of the raw URL or reference [s] has a segment that is, or percent-decodes to, "." or
-         * "..". OkHttp resolves such segments silently (also `%2E%2E`), so they are refused before parsing.
+         * "..", or that contains a backslash (raw or `%5C`). OkHttp resolves dot segments silently (also `%2E%2E`)
+         * and reads "\" as "/", so such references are refused before parsing.
          */
         internal fun hasDotSegment(s: String): Boolean {
+            if (s.contains('\\')) return true
             var rest = s.substringBefore('#').substringBefore('?')
             val scheme = rest.indexOf("://")
             if (scheme >= 0 && rest.substring(0, scheme).all { it.isLetterOrDigit() || it in "+-." }) {
@@ -351,7 +360,7 @@ class WebDAVClient(
             }
             return rest.split('/').any { segment ->
                 val decoded = percentDecode(segment) ?: return true
-                decoded == "." || decoded == ".."
+                decoded == "." || decoded == ".." || decoded.contains('\\')
             }
         }
 
