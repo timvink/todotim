@@ -33,7 +33,7 @@ import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.unit.dp
 import app.todotim.android.R
-import app.todotim.android.data.TodoSnapshot
+import app.todotim.core.store.Snapshot
 import app.todotim.android.ui.theme.todoColors
 import app.todotim.core.EntityID
 import app.todotim.core.Label
@@ -60,24 +60,24 @@ fun PriorityMenu(expanded: Boolean, current: Priority, onPick: (Priority) -> Uni
 @Composable
 fun ProjectSectionMenu(
     expanded: Boolean,
-    snapshot: TodoSnapshot,
+    snapshot: Snapshot,
     currentProject: EntityID,
     currentSection: EntityID?,
     onPick: (projectId: EntityID, sectionId: EntityID?) -> Unit,
     onDismiss: () -> Unit,
 ) {
     DropdownMenu(expanded = expanded, onDismissRequest = onDismiss, modifier = Modifier.heightIn(max = 420.dp)) {
-        snapshot.projects.sortedWith(compareBy({ !it.isInbox }, { it.order })).forEach { p ->
+        snapshot.projects.forEach { p ->
             DropdownMenuItem(
                 text = { Text(p.name) },
                 leadingIcon = {
                     if (p.isInbox) Icon(painterResource(R.drawable.ic_inbox), null, Modifier.size(18.dp), tint = todoColors.p3)
-                    else Text("#", color = Palette.color(p.color))
+                    else Text("#", color = paletteColor(p.color))
                 },
                 trailingIcon = { if (p.id == currentProject && currentSection == null) Icon(Icons.Filled.Check, null) },
                 onClick = { onPick(p.id, null); onDismiss() },
             )
-            snapshot.sections.filter { it.projectId == p.id }.sortedBy { it.order }.forEach { s ->
+            snapshot.sections(p.id).forEach { s ->
                 DropdownMenuItem(
                     text = { Text(s.name, color = todoColors.secondaryText) },
                     leadingIcon = { Text("/", color = todoColors.secondaryText) },
@@ -90,7 +90,10 @@ fun ProjectSectionMenu(
     }
 }
 
-/** Checklist of labels plus a field to add a new one; [onDone] gets the chosen label names. */
+/**
+ * Checklist of labels plus a field to add a new one; [onDone] gets the chosen label names. A new name needs no
+ * label entry: it is saved on the task, and the snapshot lists every label name a task uses.
+ */
 @Composable
 fun LabelsDialog(labels: List<Label>, selected: List<String>, onDone: (List<String>) -> Unit, onDismiss: () -> Unit) {
     val chosen = remember { mutableStateListOf<String>().apply { addAll(selected) } }
@@ -116,7 +119,7 @@ fun LabelsDialog(labels: List<Label>, selected: List<String>, onDone: (List<Stri
                     ) {
                         Checkbox(checked = name in chosen, onCheckedChange = null, modifier = Modifier.padding(12.dp))
                         Icon(painterResource(R.drawable.ic_label), null, Modifier.size(16.dp),
-                            tint = Palette.color(labels.firstOrNull { it.name == name }?.color ?: "charcoal"))
+                            tint = paletteColor(labels.firstOrNull { it.name == name }?.color ?: "charcoal"))
                         Text(name, Modifier.padding(start = 8.dp))
                     }
                 }

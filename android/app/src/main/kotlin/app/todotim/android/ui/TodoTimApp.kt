@@ -24,6 +24,7 @@ import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.SnackbarResult
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -37,31 +38,44 @@ import androidx.compose.ui.unit.dp
 import app.todotim.android.AppViewModel
 import app.todotim.android.R
 import app.todotim.android.Screen
+import app.todotim.android.data.SyncManager
+import app.todotim.android.data.SyncSettingsStore
+import app.todotim.android.data.edit
 import app.todotim.core.EntityID
 import app.todotim.core.INBOX_ID
 import app.todotim.core.TodoTask
+import app.todotim.core.store.TodoStore
 import kotlinx.coroutines.launch
 import java.time.LocalDate
 
 /** Root: bottom navigation (Inbox / Search / Browse), FAB, the current screen and the sheets. */
 @Composable
-fun TodoTimApp(vm: AppViewModel) {
-    val snapshot by vm.repository.snapshot.collectAsState()
-    val syncStatus by vm.repository.syncStatus.collectAsState()
-    val settings by vm.settingsStore.settings.collectAsState()
+fun TodoTimApp(vm: AppViewModel, store: TodoStore, sync: SyncManager, settingsStore: SyncSettingsStore) {
+    val snapshot by store.snapshot.collectAsState()
+    val syncStatus by sync.status.collectAsState()
+    val settings by settingsStore.settings.collectAsState()
     val today = LocalDate.now()
     val scope = rememberCoroutineScope()
     val snackbar = remember { SnackbarHostState() }
     var rescheduleId by remember { mutableStateOf<EntityID?>(null) }
+    val labelColors = remember(snapshot) { snapshot.labels.associate { it.name to paletteColor(it.color) } }
 
     BackHandler(enabled = vm.canGoBack) { vm.back() }
 
+    // Sync failures as a snackbar (successes stay quiet; Settings shows the status).
+    LaunchedEffect(sync) {
+        sync.errors.collect { message ->
+            snackbar.currentSnackbarData?.dismiss()
+            snackbar.showSnackbar(message, duration = SnackbarDuration.Long)
+        }
+    }
+
     fun toggle(task: TodoTask) {
         if (task.isCompleted) {
-            vm.repository.reopen(task.id)
+            store.reopen(task.id)
             return
         }
-        val undo = vm.complete(task.id)
+        val undo = vm.complete(store, task.id)
         val message = if (task.recurrence != null) "Moved to the next date" else "Completed"
         scope.launch {
             snackbar.currentSnackbarData?.dismiss()
@@ -73,7 +87,7 @@ fun TodoTimApp(vm: AppViewModel) {
     val rowActions = TaskRowActions(
         onToggle = { toggle(it.task) },
         onOpen = { vm.detailTaskId = it.task.id },
-        onToggleCollapsed = { vm.repository.toggleCollapsed(it.task.id) },
+        onToggleCollapsed = { item -> store.setCollapsed(item.task.id, !item.task.collapsed) },
         onReschedule = { rescheduleId = it.task.id },
     )
     val listState = ListScreenState(
@@ -81,11 +95,11 @@ fun TodoTimApp(vm: AppViewModel) {
         showCompleted = vm.showCompleted,
         isRefreshing = syncStatus.isSyncing,
         canGoBack = vm.canGoBack,
-        labelColor = { name -> Palette.color(snapshot.labelsByName[name]?.color ?: "charcoal") },
+        labelColor = { name -> labelColors[name] ?: paletteColor("charcoal") },
     )
     val listCallbacks = ListScreenCallbacks(
         rows = rowActions,
-        onRefresh = vm::sync,
+        onRefresh = { sync.launchSync(manual = true) },
         onToggleShowCompleted = { vm.showCompleted = !vm.showCompleted },
         onBack = vm::back,
     )
@@ -111,19 +125,21 @@ fun TodoTimApp(vm: AppViewModel) {
         Box(Modifier.fillMaxSize().padding(inner).consumeWindowInsets(inner)) {
             when (screen) {
                 Screen.Inbox -> TaskListScreen(
-                    title = snapshot.projectsById[INBOX_ID]?.name ?: "Inbox",
-                    items = TaskLists.project(snapshot, INBOX_ID, vm.showCompleted),
+                    title = snapshot.inbox.name,
+                    items = remember(snapshot, vm.showCompleted) { TaskLists.project(snapshot, INBOX_ID, vm.showCompleted) },
                     state = listState, callbacks = listCallbacks,
                     emptyTitle = "Your inbox is empty", emptyText = "Tap + to add a task.",
                 )
                 is Screen.ProjectTasks -> TaskListScreen(
-                    title = snapshot.projectsById[screen.projectId]?.name ?: "Project",
-                    items = TaskLists.project(snapshot, screen.projectId, vm.showCompleted),
+                    title = snapshot.project(screen.projectId)?.name ?: "Project",
+                    items = remember(snapshot, screen, vm.showCompleted) {
+                        TaskLists.project(snapshot, screen.projectId, vm.showCompleted)
+                    },
                     state = listState, callbacks = listCallbacks,
                 )
                 is Screen.LabelTasks -> TaskListScreen(
                     title = "@${screen.label}",
-                    items = TaskLists.label(snapshot, screen.label, vm.showCompleted),
+                    items = remember(snapshot, screen) { TaskLists.label(snapshot, screen.label) },
                     state = listState, callbacks = listCallbacks,
                     emptyTitle = "No tasks", emptyText = "No open task has this label.",
                 )
@@ -135,9 +151,17 @@ fun TodoTimApp(vm: AppViewModel) {
                     onOpenSettings = { vm.open(Screen.Settings) },
                 )
                 Screen.Settings -> SettingsScreen(
-                    settings, syncStatus,
-                    onSave = vm.settingsStore::save,
-                    onSyncNow = vm::sync,
+                    settings, syncStatus, lastSyncedAt = snapshot.lastSyncAt, unsyncedCount = snapshot.unsyncedCount,
+                    onSave = { url, user, password ->
+                        try {
+                            settingsStore.save(url, user, password)
+                            sync.launchSync(manual = true)
+                            null
+                        } catch (e: IllegalArgumentException) {
+                            e.message
+                        }
+                    },
+                    onSyncNow = { sync.launchSync(manual = true) },
                     onBack = vm::back,
                 )
             }
@@ -146,7 +170,7 @@ fun TodoTimApp(vm: AppViewModel) {
 
     vm.detailTaskId?.let { id ->
         TaskDetailSheet(
-            taskId = id, snapshot = snapshot, repository = vm.repository, today = today,
+            taskId = id, snapshot = snapshot, store = store, today = today,
             onComplete = ::toggle,
             onOpenTask = { vm.detailTaskId = it },
             onDismiss = { vm.detailTaskId = null },
@@ -154,15 +178,14 @@ fun TodoTimApp(vm: AppViewModel) {
     }
     vm.quickAdd?.let { defaults ->
         QuickAddSheet(
-            defaults = defaults, snapshot = snapshot, parser = vm.parser, today = today,
-            onAdd = { vm.repository.addTask(it) },
+            defaults = defaults, snapshot = snapshot, store = store, today = today,
             onDismiss = { vm.quickAdd = null },
         )
     }
     rescheduleId?.let { id ->
         RescheduleSheet(
-            current = snapshot.tasksById[id]?.due, today = today,
-            onPick = { vm.repository.reschedule(id, it) },
+            current = snapshot.task(id)?.due, today = today,
+            onPick = { due -> store.edit(id) { it.copy(due = due) } },
             onDismiss = { rescheduleId = null },
         )
     }

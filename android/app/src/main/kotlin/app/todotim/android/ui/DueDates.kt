@@ -12,10 +12,11 @@ import java.time.temporal.ChronoUnit
 import java.time.temporal.TemporalAdjusters
 import java.util.Locale
 
-/** Todoist-style due-date wording and colours. Due dates are local calendar dates. */
+/**
+ * Due-date colours and date-picker helpers. Due dates are local calendar dates; their labels come from core
+ * `DueDateFormatting` (shared with the Mac app).
+ */
 object DueDates {
-    private val sameYear = DateTimeFormatter.ofPattern("d MMM", Locale.ENGLISH)
-    private val otherYear = DateTimeFormatter.ofPattern("d MMM yyyy", Locale.ENGLISH)
     private val weekdayDate = DateTimeFormatter.ofPattern("EEE d MMM", Locale.ENGLISH)
 
     enum class Kind { Overdue, Today, Tomorrow, ThisWeek, Later }
@@ -31,21 +32,6 @@ object DueDates {
         }
     }
 
-    /** "Today", "Tomorrow", "Yesterday", "Friday" (within a week), "12 Nov", "12 Nov 2027". */
-    fun label(due: LocalDate, today: LocalDate): String {
-        val days = ChronoUnit.DAYS.between(today, due)
-        return when {
-            days == 0L -> "Today"
-            days == 1L -> "Tomorrow"
-            days == -1L -> "Yesterday"
-            days in 2..6 -> weekday(due)
-            due.year == today.year -> due.format(sameYear)
-            else -> due.format(otherYear)
-        }
-    }
-
-    fun weekday(date: LocalDate): String = date.dayOfWeek.getDisplayName(TextStyle.FULL, Locale.ENGLISH)
-
     fun shortWeekday(date: LocalDate): String = date.dayOfWeek.getDisplayName(TextStyle.SHORT, Locale.ENGLISH)
 
     /** "Mon 9 Nov". */
@@ -58,17 +44,6 @@ object DueDates {
     fun toPickerMillis(date: LocalDate): Long = date.atStartOfDay(ZoneOffset.UTC).toInstant().toEpochMilli()
 
     fun fromPickerMillis(millis: Long): LocalDate = LocalDate.ofEpochDay(Math.floorDiv(millis, 86_400_000L))
-
-    /** "every day", "every 2 weeks", … for the simple RRULEs; the raw rule otherwise. */
-    fun describeRecurrence(rule: String): String {
-        val parts = rule.split(';').mapNotNull { p -> p.split('=', limit = 2).takeIf { it.size == 2 }?.let { it[0].uppercase() to it[1] } }.toMap()
-        val unit = when (parts["FREQ"]?.uppercase()) {
-            "DAILY" -> "day"; "WEEKLY" -> "week"; "MONTHLY" -> "month"; "YEARLY" -> "year"; else -> return rule
-        }
-        if (parts.keys.any { it !in setOf("FREQ", "INTERVAL") }) return rule
-        val n = parts["INTERVAL"]?.toIntOrNull() ?: 1
-        return if (n <= 1) "every $unit" else "every $n ${unit}s"
-    }
 }
 
 @Composable

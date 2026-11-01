@@ -36,6 +36,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import app.todotim.android.R
+import app.todotim.core.parsing.DueDateFormatting
 import app.todotim.android.ui.theme.todoColors
 import java.time.LocalDate
 
@@ -54,7 +55,7 @@ fun RescheduleSheet(current: LocalDate?, today: LocalDate, onPick: (LocalDate?) 
     ModalBottomSheet(onDismissRequest = onDismiss, sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)) {
         Column(Modifier.padding(bottom = 16.dp)) {
             Text(
-                current?.let { DueDates.label(it, today) } ?: "No date",
+                current?.let { DueDateFormatting.displayString(it, today) } ?: "No date",
                 fontWeight = FontWeight.Bold,
                 fontSize = 16.sp,
                 color = current?.let { dueColor(it, today) } ?: MaterialTheme.colorScheme.onSurface,

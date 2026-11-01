@@ -19,6 +19,7 @@ import androidx.compose.material3.TextFieldDefaults
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.remember
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
@@ -26,16 +27,15 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.dp
-import app.todotim.android.data.SampleData
-import app.todotim.android.data.TodoSnapshot
+import app.todotim.core.store.Snapshot
 import app.todotim.android.ui.theme.TodoTimTheme
 import java.time.LocalDate
 
 /** Search open tasks by title and description; results grouped by project. */
 @Composable
-fun SearchScreen(snapshot: TodoSnapshot, state: ListScreenState, callbacks: ListScreenCallbacks) {
+fun SearchScreen(snapshot: Snapshot, state: ListScreenState, callbacks: ListScreenCallbacks) {
     var query by rememberSaveable { mutableStateOf("") }
-    val results = TaskLists.search(snapshot, query)
+    val results = remember(snapshot, query) { TaskLists.search(snapshot, query) }
     Column(Modifier.fillMaxSize()) {
         TextField(
             value = query,
@@ -76,7 +76,7 @@ private fun SearchPreview() {
     val today = LocalDate.of(2026, 11, 2)
     TodoTimTheme(darkTheme = false) {
         SearchScreen(
-            SampleData.snapshot(today),
+            PreviewData.snapshot(today),
             ListScreenState(today, false, false, false) { Color.Gray },
             ListScreenCallbacks(TaskRowActions({}, {}, {}, {}), {}, {}, {}),
         )

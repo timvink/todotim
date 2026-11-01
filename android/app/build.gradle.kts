@@ -1,3 +1,5 @@
+import java.util.Properties
+
 plugins {
     alias(libs.plugins.android.application)
     alias(libs.plugins.kotlin.compose)
@@ -16,8 +18,25 @@ android {
         versionName = "0.1.0"
     }
 
+    // Release signing from android/keystore.properties (gitignored: storeFile, storePassword, keyAlias,
+    // keyPassword; storeFile relative to android/). Without it, release builds are signed with the debug key.
+    val keystoreProperties = rootProject.file("keystore.properties").takeIf { it.isFile }?.let { file ->
+        Properties().apply { file.inputStream().use(::load) }
+    }
+    signingConfigs {
+        if (keystoreProperties != null) {
+            create("release") {
+                storeFile = rootProject.file(keystoreProperties.getProperty("storeFile"))
+                storePassword = keystoreProperties.getProperty("storePassword")
+                keyAlias = keystoreProperties.getProperty("keyAlias")
+                keyPassword = keystoreProperties.getProperty("keyPassword")
+            }
+        }
+    }
+
     buildTypes {
         release {
+            signingConfig = signingConfigs.findByName("release") ?: signingConfigs.getByName("debug")
             isMinifyEnabled = true
             isShrinkResources = true
             proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro")
@@ -43,4 +62,5 @@ dependencies {
     implementation(libs.work.runtime)
     debugImplementation(libs.compose.ui.tooling)
     testImplementation(libs.junit)
+    testImplementation(libs.coroutines.test)
 }

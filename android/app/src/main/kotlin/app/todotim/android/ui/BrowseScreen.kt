@@ -32,8 +32,7 @@ import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import app.todotim.android.R
-import app.todotim.android.data.SampleData
-import app.todotim.android.data.TodoSnapshot
+import app.todotim.core.store.Snapshot
 import app.todotim.android.ui.theme.TodoTimTheme
 import app.todotim.android.ui.theme.todoColors
 import app.todotim.core.Label
@@ -43,15 +42,13 @@ import app.todotim.core.Project
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun BrowseScreen(
-    snapshot: TodoSnapshot,
+    snapshot: Snapshot,
     onOpenProject: (Project) -> Unit,
     onOpenLabel: (Label) -> Unit,
     onOpenSettings: () -> Unit,
 ) {
-    val projects = snapshot.projects.sortedWith(compareBy({ !it.isInbox }, { it.order }))
+    val projects = snapshot.projects
     val inbox = projects.firstOrNull { it.isInbox }
-    val counts = TaskLists.openCounts(snapshot)
-    val labelCounts = TaskLists.labelCounts(snapshot)
     Column(Modifier.fillMaxSize()) {
         TopAppBar(
             title = { Text("Browse", fontWeight = FontWeight.Bold, fontSize = 24.sp) },
@@ -63,23 +60,23 @@ fun BrowseScreen(
                 item(key = "inbox") {
                     BrowseRow(
                         icon = { Icon(painterResource(R.drawable.ic_inbox), null, Modifier.size(20.dp), tint = todoColors.p3) },
-                        title = p.name, count = counts[p.id] ?: 0, onClick = { onOpenProject(p) },
+                        title = p.name, count = snapshot.openCount(p.id), onClick = { onOpenProject(p) },
                     )
                 }
             }
             item(key = "projects-header") { BrowseHeader("My projects") }
             items(projects.filterNot { it.isInbox }, key = { "p-${it.id}" }) { p ->
                 BrowseRow(
-                    icon = { HashIcon(Palette.color(p.color)) },
-                    title = p.name, count = counts[p.id] ?: 0, onClick = { onOpenProject(p) },
+                    icon = { HashIcon(paletteColor(p.color)) },
+                    title = p.name, count = snapshot.openCount(p.id), onClick = { onOpenProject(p) },
                 )
             }
             if (snapshot.labels.isNotEmpty()) {
                 item(key = "labels-header") { BrowseHeader("Labels") }
-                items(snapshot.labels.sortedBy { it.order }, key = { "l-${it.id}" }) { l ->
+                items(snapshot.labels, key = { "l-${it.id}" }) { l ->
                     BrowseRow(
-                        icon = { Icon(painterResource(R.drawable.ic_label), null, Modifier.size(20.dp), tint = Palette.color(l.color)) },
-                        title = l.name, count = labelCounts[l.name] ?: 0, onClick = { onOpenLabel(l) },
+                        icon = { Icon(painterResource(R.drawable.ic_label), null, Modifier.size(20.dp), tint = paletteColor(l.color)) },
+                        title = l.name, count = snapshot.openLabelCount(l.name), onClick = { onOpenLabel(l) },
                     )
                 }
             }
@@ -120,5 +117,5 @@ private fun BrowseRow(icon: @Composable () -> Unit, title: String, count: Int, o
 @Preview(showBackground = true, heightDp = 700)
 @Composable
 private fun BrowsePreview() {
-    TodoTimTheme(darkTheme = false) { BrowseScreen(SampleData.snapshot(), {}, {}, {}) }
+    TodoTimTheme(darkTheme = false) { BrowseScreen(PreviewData.snapshot(), {}, {}, {}) }
 }

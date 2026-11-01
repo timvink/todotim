@@ -42,7 +42,7 @@ import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import app.todotim.android.R
-import app.todotim.android.data.SampleData
+import app.todotim.core.parsing.DueDateFormatting
 import app.todotim.android.ui.theme.TodoTimTheme
 import app.todotim.android.ui.theme.todoColors
 import app.todotim.core.Priority
@@ -185,7 +185,7 @@ private fun MetaLine(item: ListItem.TaskItem, today: LocalDate, labelColor: (Str
         ) {
             task.due?.let { due ->
                 val color = dueColor(due, today)
-                Chip(R.drawable.ic_calendar, DueDates.label(due, today), color)
+                Chip(R.drawable.ic_calendar, DueDateFormatting.displayString(due, today), color)
                 if (task.recurrence != null) Icon(painterResource(R.drawable.ic_repeat), "Repeats", Modifier.size(14.dp), tint = color)
             }
             if (task.due == null && task.recurrence != null) {
@@ -218,7 +218,7 @@ fun ProjectTag(project: Project) {
         if (project.isInbox) {
             Icon(painterResource(R.drawable.ic_inbox), null, Modifier.size(13.dp), tint = todoColors.p3)
         } else {
-            Text("#", color = Palette.color(project.color), fontSize = 14.sp, fontWeight = FontWeight.Medium)
+            Text("#", color = paletteColor(project.color), fontSize = 14.sp, fontWeight = FontWeight.Medium)
         }
     }
 }
@@ -232,7 +232,7 @@ fun GroupHeader(header: ListItem.Header) {
             verticalAlignment = Alignment.CenterVertically,
         ) {
             header.project?.let {
-                Text("#", color = Palette.color(it.color), fontWeight = FontWeight.Bold, fontSize = 16.sp)
+                Text("#", color = paletteColor(it.color), fontWeight = FontWeight.Bold, fontSize = 16.sp)
                 Spacer(Modifier.width(6.dp))
             }
             Text(header.title, fontWeight = FontWeight.Bold, fontSize = 16.sp, modifier = Modifier.weight(1f, fill = false))
@@ -251,10 +251,10 @@ private val previewActions = TaskRowActions({}, {}, {}, {})
 @Composable
 private fun TaskRowsPreview() {
     TodoTimTheme(darkTheme = false) {
-        val s = SampleData.snapshot(LocalDate.of(2026, 11, 2))
+        val s = PreviewData.snapshot(LocalDate.of(2026, 11, 2))
         Column {
-            TaskLists.label(s, "calls", showCompleted = false).filterIsInstance<ListItem.TaskItem>().forEach {
-                TaskRow(it, LocalDate.of(2026, 11, 2), previewActions) { name -> Palette.color(s.labelsByName[name]?.color ?: "charcoal") }
+            TaskLists.label(s, "calls").filterIsInstance<ListItem.TaskItem>().forEach {
+                TaskRow(it, LocalDate.of(2026, 11, 2), previewActions) { name -> paletteColor(s.labels.firstOrNull { it.name == name }?.color ?: "charcoal") }
             }
         }
     }
@@ -264,7 +264,7 @@ private fun TaskRowsPreview() {
 @Composable
 private fun TaskRowsDarkPreview() {
     TodoTimTheme(darkTheme = true) {
-        val s = SampleData.snapshot(LocalDate.of(2026, 11, 2))
+        val s = PreviewData.snapshot(LocalDate.of(2026, 11, 2))
         Column {
             TaskLists.project(s, "inbox", showCompleted = true).take(6).forEach {
                 when (it) {
