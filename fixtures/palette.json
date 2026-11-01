@@ -1,0 +1,288 @@
+{
+  "entries": [
+    {
+      "key": "berry_red",
+      "name": "Berry Red",
+      "hex": "#B8255F"
+    },
+    {
+      "key": "red",
+      "name": "Red",
+      "hex": "#DB4035"
+    },
+    {
+      "key": "orange",
+      "name": "Orange",
+      "hex": "#FF9933"
+    },
+    {
+      "key": "yellow",
+      "name": "Yellow",
+      "hex": "#FAD000"
+    },
+    {
+      "key": "olive_green",
+      "name": "Olive Green",
+      "hex": "#AFB83B"
+    },
+    {
+      "key": "lime_green",
+      "name": "Lime Green",
+      "hex": "#7ECC49"
+    },
+    {
+      "key": "green",
+      "name": "Green",
+      "hex": "#299438"
+    },
+    {
+      "key": "mint_green",
+      "name": "Mint Green",
+      "hex": "#6ACCBC"
+    },
+    {
+      "key": "teal",
+      "name": "Teal",
+      "hex": "#158FAD"
+    },
+    {
+      "key": "sky_blue",
+      "name": "Sky Blue",
+      "hex": "#14AAF5"
+    },
+    {
+      "key": "light_blue",
+      "name": "Light Blue",
+      "hex": "#96C3EB"
+    },
+    {
+      "key": "blue",
+      "name": "Blue",
+      "hex": "#4073FF"
+    },
+    {
+      "key": "grape",
+      "name": "Grape",
+      "hex": "#884DFF"
+    },
+    {
+      "key": "violet",
+      "name": "Violet",
+      "hex": "#AF38EB"
+    },
+    {
+      "key": "lavender",
+      "name": "Lavender",
+      "hex": "#EB96EB"
+    },
+    {
+      "key": "magenta",
+      "name": "Magenta",
+      "hex": "#E05194"
+    },
+    {
+      "key": "salmon",
+      "name": "Salmon",
+      "hex": "#FF8D85"
+    },
+    {
+      "key": "charcoal",
+      "name": "Charcoal",
+      "hex": "#808080"
+    },
+    {
+      "key": "grey",
+      "name": "Grey",
+      "hex": "#B8B8B8"
+    },
+    {
+      "key": "taupe",
+      "name": "Taupe",
+      "hex": "#CCAC93"
+    }
+  ],
+  "lookup": [
+    {
+      "input": "red",
+      "key": "red",
+      "hex": "#DB4035"
+    },
+    {
+      "input": "Red",
+      "key": "red",
+      "hex": "#DB4035"
+    },
+    {
+      "input": "Olive Green",
+      "key": "olive_green",
+      "hex": "#AFB83B"
+    },
+    {
+      "input": "olive green",
+      "key": "olive_green",
+      "hex": "#AFB83B"
+    },
+    {
+      "input": "olive_green",
+      "key": "olive_green",
+      "hex": "#AFB83B"
+    },
+    {
+      "input": "olivegreen",
+      "key": "olive_green",
+      "hex": "#AFB83B"
+    },
+    {
+      "input": "OliveGreen",
+      "key": "olive_green",
+      "hex": "#AFB83B"
+    },
+    {
+      "input": "Berry_Red",
+      "key": "berry_red",
+      "hex": "#B8255F"
+    },
+    {
+      "input": "mint",
+      "key": "mint_green",
+      "hex": "#6ACCBC"
+    },
+    {
+      "input": "MINT",
+      "key": "mint_green",
+      "hex": "#6ACCBC"
+    },
+    {
+      "input": "Mint Green",
+      "key": "mint_green",
+      "hex": "#6ACCBC"
+    },
+    {
+      "input": "unknown",
+      "key": "charcoal",
+      "hex": "#808080"
+    },
+    {
+      "input": "",
+      "key": "charcoal",
+      "hex": "#808080"
+    },
+    {
+      "input": "sky-blue",
+      "key": "charcoal",
+      "hex": "#808080"
+    },
+    {
+      "input": "grey",
+      "key": "grey",
+      "hex": "#B8B8B8"
+    },
+    {
+      "input": "LIGHT BLUE",
+      "key": "light_blue",
+      "hex": "#96C3EB"
+    }
+  ],
+  "nearest": [
+    {
+      "hex": "#DB4035",
+      "key": "red"
+    },
+    {
+      "hex": "#db4035ff",
+      "key": "red"
+    },
+    {
+      "hex": "#4174FE",
+      "key": "blue"
+    },
+    {
+      "hex": " #299438 ",
+      "key": "green"
+    },
+    {
+      "hex": "#000000",
+      "key": "berry_red"
+    },
+    {
+      "hex": "#FFFFFF",
+      "key": "light_blue"
+    },
+    {
+      "hex": "#FF0000",
+      "key": "red"
+    },
+    {
+      "hex": "#00FF00",
+      "key": "lime_green"
+    },
+    {
+      "hex": "#0000FF",
+      "key": "grape"
+    },
+    {
+      "hex": "#808080",
+      "key": "charcoal"
+    },
+    {
+      "hex": "#B8255F",
+      "key": "berry_red"
+    },
+    {
+      "hex": "#CCAC93",
+      "key": "taupe"
+    },
+    {
+      "hex": "#ff8d8580",
+      "key": "salmon"
+    },
+    {
+      "hex": "#123456",
+      "key": "green"
+    },
+    {
+      "hex": "#abcdef",
+      "key": "light_blue"
+    },
+    {
+      "hex": "#FFA500",
+      "key": "yellow"
+    },
+    {
+      "hex": "#800080",
+      "key": "berry_red"
+    },
+    {
+      "hex": "#12345",
+      "key": null
+    },
+    {
+      "hex": "red",
+      "key": null
+    },
+    {
+      "hex": "#GGGGGG",
+      "key": null
+    },
+    {
+      "hex": "#1234567",
+      "key": null
+    },
+    {
+      "hex": "",
+      "key": null
+    },
+    {
+      "hex": "#",
+      "key": null
+    },
+    {
+      "hex": "299438",
+      "key": null
+    },
+    {
+      "hex": "#12345678",
+      "key": "green"
+    }
+  ]
+}

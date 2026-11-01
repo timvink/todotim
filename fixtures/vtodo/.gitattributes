@@ -1,0 +1,2 @@
+# Golden files compare bytes: keep CRLF and LF line endings exactly as written.
+* -text

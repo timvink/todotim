@@ -1,0 +1,21 @@
+{
+  "id": "float",
+  "uid": "float",
+  "projectId": "p",
+  "sectionId": null,
+  "sectionName": null,
+  "sectionOrder": null,
+  "parentId": null,
+  "content": "",
+  "description": "",
+  "priority": 4,
+  "due": "2026-11-03",
+  "labels": [],
+  "isCompleted": false,
+  "completedAt": null,
+  "order": 815281445,
+  "collapsed": false,
+  "recurrence": null,
+  "createdAt": "2026-11-02T03:04:05Z",
+  "updatedAt": "2026-11-02T03:04:05Z"
+}

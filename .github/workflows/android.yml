@@ -1,0 +1,28 @@
+name: Android
+
+on:
+  push:
+    branches: [main]
+    paths: ["android/**", "fixtures/**", "docs/caldav.md", ".github/workflows/android.yml"]
+  pull_request:
+    paths: ["android/**", "fixtures/**", "docs/caldav.md", ".github/workflows/android.yml"]
+
+permissions:
+  contents: read
+
+jobs:
+  test-and-build:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: android
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      # The runner image ships JDK 21 and an Android SDK (ANDROID_HOME).
+      - name: Test and build
+        run: |
+          export JAVA_HOME="$JAVA_HOME_21_X64"
+          echo "sdk.dir=$ANDROID_HOME" > local.properties
+          ./gradlew --no-daemon :core:test :app:testDebugUnitTest :app:assembleDebug

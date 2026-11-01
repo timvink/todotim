@@ -108,3 +108,33 @@ Performance benchmarks: `swift test -c release -Xswiftc -enable-testing --filter
 In the app: `scripts/perf-launch.sh DATA_DIR` (launch timing, medians) and `scripts/perf.sh` (scripted interactions).
 Password is stored in the Keychain under `SyncSettings.credentialAccount` (`user@host[:port]`); the settings in
 UserDefaults. `~/.todotim.toml` is only read when owned by the user and not group/world-writable (`AppConfig.load`).
+
+## Android app (`android/`)
+
+Kotlin + Jetpack Compose companion app (sideloaded, single user), Gradle rooted at `android/`. It follows
+the same contract ([docs/caldav.md](docs/caldav.md)). Shared golden data lives in `fixtures/` at the repo
+root; both the Swift tests and the Kotlin tests check against it, so a contract change updates both.
+
+- `android/core` — pure Kotlin/JVM (no Android APIs): models, iCalendar, VTODO mapping, recurrence,
+  quick add, CalDAV client, sync, store. Package `app.todotim.core`.
+- `android/app` — Compose UI, WorkManager background sync, credentials. Package `app.todotim.android`.
+  The UI reads core's `Snapshot` and mutates core's `TodoStore` directly (no repository layer); edit tasks
+  with `store.edit(id) { it.copy(…) }`, which hands over the stored task, never a display-repaired snapshot
+  copy. `TodoTimApplication` owns one `AppGraph`: the store (loaded off the main thread from
+  `filesDir/todotim/db.json`), persistence, `SyncSettingsStore` (URL and username in SharedPreferences, the
+  password AES-GCM-encrypted with an Android Keystore key) and the one `SyncManager` that the UI (start,
+  resume after 1 min, pull-to-refresh, 3 s after edits) and the 15-minute `SyncWorker` share.
+
+    cd android && ./gradlew :core:test            # JVM tests, incl. fixtures
+    cd android && ./gradlew :app:testDebugUnitTest :app:assembleDebug :app:assembleRelease
+
+Release builds are minified (R8) and signed with `android/keystore.properties` (gitignored; `storeFile`
+relative to `android/`, `storePassword`, `keyAlias`, `keyPassword`) when present, else with the debug key.
+
+Needs JDK 21 (`JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home` on the Mac) and an
+Android SDK in `android/local.properties` (`sdk.dir=…`).
+
+Live tests (same env vars and throwaway account as the Swift live test): the phone's sync alone,
+`./gradlew :core:test --tests app.todotim.core.sync.LiveCalDAVTest`; the Mac and the phone taking turns on one
+account and checking each other's changes (incl. both syncing at once), `scripts/live-interop.sh` (Swift
+`CrossClientLiveTests` + Kotlin `CrossClientLiveTest`; `SWIFT_SCRATCH` sets the Swift scratch path).

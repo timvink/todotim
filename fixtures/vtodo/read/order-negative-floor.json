@@ -1,0 +1,21 @@
+{
+  "id": "o2",
+  "uid": "o2",
+  "projectId": "p",
+  "sectionId": null,
+  "sectionName": null,
+  "sectionOrder": null,
+  "parentId": null,
+  "content": "",
+  "description": "",
+  "priority": 4,
+  "due": null,
+  "labels": [],
+  "isCompleted": false,
+  "completedAt": null,
+  "order": -0.5,
+  "collapsed": false,
+  "recurrence": null,
+  "createdAt": "1970-01-01T00:00:00Z",
+  "updatedAt": "1970-01-01T00:00:00Z"
+}
