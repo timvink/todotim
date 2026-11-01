@@ -75,7 +75,8 @@ object Multistatus {
         } catch (e: IllegalArgumentException) {
             return null
         }
-        // A truncated document (unclosed elements) is not a multistatus either.
+        // A truncated document (unclosed elements) is not a multistatus either. Content after the root element
+        // is refused while parsing (kxml2 accepts it).
         if (!state.sawMultistatus || !state.isClosed) return null
         return Document(state.responses, state.syncToken)
     }
@@ -114,6 +115,9 @@ object Multistatus {
         /** Whether every element was closed. */
         val isClosed: Boolean get() = path.isEmpty()
 
+        /** Whether the root element has ended: after it, only whitespace, comments and PIs may follow. */
+        private var rootEnded = false
+
         /** The property being read (a direct child of `prop`). */
         private var current: PropertyBuilder? = null
 
@@ -134,6 +138,10 @@ object Multistatus {
         }
 
         private fun append(s: String) {
+            if (path.isEmpty()) {
+                if (s.isNotBlank()) throw XmlPullParserException("text outside the root element")
+                return
+            }
             text.append(s)
             textBytes += utf8Length(s)
             if (textBytes > MAX_TEXT_LENGTH) throw Failure.TextTooLong()
@@ -147,6 +155,7 @@ object Multistatus {
         private fun qname(p: XmlPullParser) = "${p.namespace ?: ""}|${p.name}"
 
         private fun start(p: XmlPullParser) {
+            if (rootEnded) throw XmlPullParserException("an element after the root element")
             val q = qname(p)
             path.add(q)
             resetText()
@@ -206,6 +215,7 @@ object Multistatus {
                 }
             } finally {
                 path.removeAt(path.size - 1)
+                if (path.isEmpty()) rootEnded = true
                 resetText()
             }
         }

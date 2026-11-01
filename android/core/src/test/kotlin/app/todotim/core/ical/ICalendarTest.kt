@@ -111,4 +111,45 @@ class ICalendarTest {
         assertEquals("a^b\n\"^x^", ICalendar.decodeParam("a^^b^n^'^x^"))
         assertEquals("X;P=\"\":v", ICalendar.line(ICalProperty("X", listOf(ICalParam("P", "")), "v")))
     }
+
+    @Test fun numbersParseLikeSwift() {
+        for ((s, v) in listOf(
+            "1" to 1.0, "-1.5" to -1.5, "+.5" to 0.5, "1." to 1.0, "1e3" to 1000.0, "1.5E-2" to 0.015,
+            "0x1p4" to 16.0, "0X.8" to 0.5, "-0x1.8" to -1.5, "0x1P-1" to 0.5, "0x1." to 1.0,
+            "inf" to Double.POSITIVE_INFINITY, "-Infinity" to Double.NEGATIVE_INFINITY,
+        )) {
+            assertEquals(s, v, parseDouble(s)!!, 0.0)
+        }
+        assertTrue(parseDouble("nan")!!.isNaN())
+        for (bad in listOf("", "+", ".", "e5", "1e", "1e+", "1x", " 1", "1 ", "0x", "0x.", "0xg", "0x1p", "1.2.3", "--1", "1_0", "١")) {
+            assertNull(bad, parseDouble(bad))
+        }
+        assertEquals(42L, parseLong("+42"))
+        assertEquals(-7L, parseLong("-7"))
+        for (bad in listOf("", "-", "1.0", "１", "99999999999999999999")) assertNull(bad, parseLong(bad))
+    }
+
+    /** A long almost-number must not make the parser backtrack (a regex took seconds for this). */
+    @Test fun longInvalidNumbersParseInLinearTime() {
+        val digits = "1".repeat(20_000)
+        val start = System.nanoTime()
+        for (s in listOf(digits + "x", "0x" + digits + "x", digits + "." + digits + "x", digits + "e" + digits + "x")) {
+            assertNull(parseDouble(s))
+        }
+        val ics = "BEGIN:VCALENDAR\r\nBEGIN:VTODO\r\nUID:a\r\nSUMMARY:x\r\nX-TODOTIM-ORDER:${digits}x\r\n" +
+            "END:VTODO\r\nEND:VCALENDAR\r\n"
+        VTodo.read(ics, "inbox", amsterdam)
+        val millis = (System.nanoTime() - start) / 1_000_000
+        assertTrue("took $millis ms", millis < 500)
+    }
+
+    /** Foundation's `TimeZone(identifier:)` knows abbreviations such as EST; unknown ids stay floating. */
+    @Test fun tzidAbbreviationsAreResolved() {
+        val p = ICalProperty("DUE", listOf(ICalParam("TZID", "EST")), "20261103T230000")
+        assertEquals(LocalDate.parse("2026-11-04"), DateValue.of(p)!!.localDate(amsterdam))
+        assertEquals(1_793_764_800_000, ICalendar.instant(p, amsterdam))
+        val unknown = ICalProperty("DUE", listOf(ICalParam("TZID", "Nowhere/Special")), "20261103T230000")
+        assertEquals(LocalDate.parse("2026-11-03"), DateValue.of(unknown)!!.localDate(amsterdam))
+        assertEquals(1_793_743_200_000, ICalendar.instant(unknown, amsterdam))
+    }
 }

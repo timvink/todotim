@@ -51,17 +51,60 @@ private val INTEGER = Regex("[+-]?[0-9]+")
 /** Swift `Int64(s)`: ASCII digits with an optional sign, nil on overflow. */
 internal fun parseLong(s: String): Long? = if (INTEGER.matches(s)) s.toLongOrNull() else null
 
-private val DECIMAL = Regex("[+-]?([0-9]+\\.?[0-9]*|\\.[0-9]+)([eE][+-]?[0-9]+)?")
-private val HEX = Regex("([+-]?)0[xX]([0-9a-fA-F]+\\.?[0-9a-fA-F]*|\\.[0-9a-fA-F]+)([pP][+-]?[0-9]+)?")
-
 /** Swift `Double(s)` (strtod syntax, no surrounding whitespace). Infinity and NaN spellings give non-finite values. */
 internal fun parseDouble(s: String): Double? {
-    if (DECIMAL.matches(s)) return s.toDouble()
-    HEX.matchEntire(s)?.let { m -> return (if (m.groupValues[3].isEmpty()) "${s}p0" else s).toDouble() }
+    // Scanned by hand: a regex with optional parts backtracks quadratically on a long almost-number.
+    when (scanNumber(s)) {
+        NumberSyntax.DECIMAL, NumberSyntax.HEX -> return s.toDouble()
+        NumberSyntax.HEX_WITHOUT_EXPONENT -> return "${s}p0".toDouble()
+        null -> {}
+    }
     return when (s.lowercase().removePrefix("+").removePrefix("-")) {
         "inf", "infinity" -> if (s.startsWith("-")) Double.NEGATIVE_INFINITY else Double.POSITIVE_INFINITY
         "nan" -> Double.NaN
         else -> null
+    }
+}
+
+private enum class NumberSyntax { DECIMAL, HEX, HEX_WITHOUT_EXPONENT }
+
+/**
+ * The strtod syntax of [s], in one pass: `[+-]?(digits[.digits]|.digits)([eE][+-]?digits)?` or
+ * `[+-]?0[xX](hexdigits[.hexdigits]|.hexdigits)([pP][+-]?digits)?` (ASCII digits); null otherwise.
+ */
+private fun scanNumber(s: String): NumberSyntax? {
+    fun digits(from: Int, hex: Boolean): Int {
+        var i = from
+        while (i < s.length && (s[i] in '0'..'9' || hex && (s[i] in 'a'..'f' || s[i] in 'A'..'F'))) i++
+        return i
+    }
+    fun sign(at: Int) = if (at < s.length && (s[at] == '+' || s[at] == '-')) at + 1 else at
+    var i = sign(0)
+    val hex = i + 1 < s.length && s[i] == '0' && (s[i + 1] == 'x' || s[i + 1] == 'X')
+    if (hex) i += 2
+    var end = digits(i, hex)
+    var mantissaDigits = end - i
+    i = end
+    if (i < s.length && s[i] == '.') {
+        end = digits(i + 1, hex)
+        mantissaDigits += end - i - 1
+        i = end
+    }
+    if (mantissaDigits == 0) return null
+    val exponentMarks = if (hex) "pP" else "eE"
+    var hasExponent = false
+    if (i < s.length && s[i] in exponentMarks) {
+        val from = sign(i + 1)
+        end = digits(from, hex = false)
+        if (end == from) return null
+        i = end
+        hasExponent = true
+    }
+    if (i != s.length) return null
+    return when {
+        !hex -> NumberSyntax.DECIMAL
+        hasExponent -> NumberSyntax.HEX
+        else -> NumberSyntax.HEX_WITHOUT_EXPONENT
     }
 }
 
