@@ -43,6 +43,8 @@ class Persistence(
 
     private val writeLock = Mutex()
     @Volatile private var lastSaved: Database? = null
+    /** The store [attach] and [flush] save; [save] writes its newest database, so writes never go back in time. */
+    @Volatile private var source: TodoStore? = null
 
     /**
      * The stored database; an empty one when there is none. A corrupt file is moved aside ([movedAside]).
@@ -74,19 +76,30 @@ class Persistence(
 
     /** Saves [store]'s database [debounceMillis] after each burst of changes, in [scope], until the scope ends. */
     @OptIn(FlowPreview::class)
-    fun attach(store: TodoStore, scope: CoroutineScope): Job = scope.launch(dispatcher) {
-        store.database.debounce(debounceMillis).collect { save(it) }
+    fun attach(store: TodoStore, scope: CoroutineScope): Job {
+        source = store
+        return scope.launch(dispatcher) {
+            store.database.debounce(debounceMillis).collect { save(it) }
+        }
     }
 
     /** Saves [store]'s current database now, unless it is already saved. */
-    suspend fun flush(store: TodoStore) = save(store.database.value)
+    suspend fun flush(store: TodoStore) {
+        source = store
+        save(store.database.value)
+    }
 
-    /** Writes [db] atomically, unless it is the database last written. */
+    /**
+     * Writes [db] atomically, unless it is the database last written. After [attach] or [flush], the store's
+     * current database is written instead (read under the write lock), so a save that captured [db] and then
+     * waited never overwrites a newer database another save already wrote.
+     */
     suspend fun save(db: Database) = withContext(dispatcher) {
         writeLock.withLock {
-            if (db == lastSaved) return@withLock
-            write(db)
-            lastSaved = db
+            val latest = source?.database?.value ?: db
+            if (latest == lastSaved) return@withLock
+            write(latest)
+            lastSaved = latest
         }
     }
 

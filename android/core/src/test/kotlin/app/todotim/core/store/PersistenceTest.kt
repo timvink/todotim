@@ -76,4 +76,16 @@ class PersistenceTest {
         assertEquals(2, Persistence(dir).load().tasks.size)
         job.cancel()
     }
+
+    @Test fun aStaleSaveNeverOverwritesANewerWrite() = runTest {
+        val dir = tmp.newFolder()
+        val store = TodoStore()
+        val persistence = Persistence(dir, dispatcher = Dispatchers.Unconfined)
+        store.addTask("A")
+        val older = store.database.value // what a debounced save captured
+        store.addTask("B")
+        persistence.flush(store)
+        persistence.save(older) // the debounced save resumes late
+        assertEquals(store.database.value, Persistence(dir).load())
+    }
 }

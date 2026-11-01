@@ -4,8 +4,10 @@ import app.todotim.core.EntityID
 import app.todotim.core.INBOX_ID
 import app.todotim.core.Priority
 import app.todotim.core.Recurrence
+import app.todotim.core.SyncLimits
 import app.todotim.core.TodoTask
 import app.todotim.core.dav.CalendarHome
+import app.todotim.core.ical.VTodo
 import app.todotim.core.newID
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -61,7 +63,7 @@ class TodoStore(
         afterId: EntityID? = null,
     ): TodoTask = mutate { tx ->
         val parent = parentId?.let { tx.tasks[it] }
-        val root = parent?.let { tx.root(it) }
+        val root = parent?.let { tx.shownRoot(it.id) }
         var pid = root?.projectId ?: projectId
         if (pid !in tx.db.projects) pid = INBOX_ID
         val sid = if (root != null) root.sectionId else sectionId?.takeIf { tx.db.sections[it]?.projectId == pid }
@@ -73,8 +75,9 @@ class TodoStore(
             description = description, priority = priority, due = due, labels = labels.distinct(), order = order,
             recurrence = recurrence?.takeIf { it.isNotBlank() }, createdAt = now, updatedAt = now,
         )
-        tx.tasks[t.id] = t
-        t
+        val stored = limited(t)
+        tx.tasks[t.id] = stored
+        stored
     }
 
     /**
@@ -112,37 +115,42 @@ class TodoStore(
             }
         }
         val now = tx.now
-        for (did in listOf(id) + tx.descendants(id)) {
+        for (did in listOf(id) + tx.snapshot.descendantIds(id)) {
             val d = tx.tasks[did] ?: continue
             if (!d.isCompleted) tx.put(d.copy(isCompleted = true, completedAt = now))
         }
     }
 
-    /** Reopens a task and its completed ancestors (so it is visible again). Subtasks stay as they are. */
+    /** Reopens a task and its completed (displayed) ancestors, so it is visible again. Subtasks stay as they are. */
     fun reopen(id: EntityID) = mutate { tx ->
         var cur: EntityID? = id
         val seen = HashSet<EntityID>()
         while (cur != null && seen.add(cur)) {
             val t = tx.tasks[cur] ?: break
             if (t.isCompleted) tx.put(t.copy(isCompleted = false, completedAt = null))
-            cur = t.parentId
+            cur = tx.snapshot.task(cur)?.parentId
         }
     }
 
-    /** Deletes a task and its subtasks. Synced ones are deleted on the server by the next sync. */
+    /**
+     * Deletes a task and its subtasks as shown ([Snapshot]): a task that names it as parent but is shown elsewhere
+     * stays. Synced ones are deleted on the server by the next sync.
+     */
     fun delete(id: EntityID) = mutate { tx ->
         if (id !in tx.tasks) return@mutate
-        for (did in listOf(id) + tx.descendants(id)) tx.remove(did)
+        for (did in listOf(id) + tx.snapshot.descendantIds(id)) tx.remove(did)
     }
 
     /**
      * Moves a task with its subtasks to the end of a new place. With [parentId] the task becomes a subtask and takes
-     * the parent's project and section; a task never moves below itself. Subtasks follow the project and section.
+     * the parent's project and section; a task never moves below itself. Its shown subtasks follow the project and
+     * section; tasks that name it as parent but are shown elsewhere stay where they are.
      */
     fun moveTask(id: EntityID, projectId: EntityID, sectionId: EntityID? = null, parentId: EntityID? = null) = mutate { tx ->
         val t = tx.tasks[id] ?: return@mutate
-        val descendants = tx.descendants(id)
-        if (parentId != null && (parentId == id || parentId in descendants)) return@mutate
+        // Raw descendants refuse cycles; only the shown subtasks move along.
+        if (parentId != null && (parentId == id || parentId in tx.descendants(id))) return@mutate
+        val descendants = tx.snapshot.descendantIds(id)
         val parent = parentId?.let { tx.tasks[it] }
         val pid = parent?.projectId ?: projectId
         if (pid !in tx.db.projects) return@mutate
@@ -191,12 +199,20 @@ class TodoStore(
     }
 
     /**
-     * Records the calendar home. A home other than the stored one makes the next sync read every calendar again
-     * (tasks are matched by id; nothing is deleted on the server).
+     * Records the calendar home. A home other than the stored one makes the next sync start from scratch
+     * (docs/caldav.md): the shadows and pending deletes (paths in the old home) are dropped and every calendar is
+     * read again, so tasks are matched by id in the new home (local edits kept, last writer wins), tasks it does
+     * not have are uploaded as new, and nothing is deleted there.
      */
     fun setHome(home: CalendarHome) = mutate { tx ->
         if (tx.db.home == home) return@mutate
-        tx.db = tx.db.copy(home = home, calendars = if (tx.db.home == null) tx.db.calendars else emptyMap())
+        if (tx.db.home == null) {
+            tx.db = tx.db.copy(home = home)
+            return@mutate
+        }
+        tx.db = tx.db.copy(home = home, calendars = emptyMap())
+        tx.shadows.clear()
+        tx.pendingDeletes.clear()
     }
 
     /**
@@ -265,15 +281,32 @@ class TodoStore(
         /** Stores [t] as edited now: `updatedAt` moves forward to at least the next whole second after the old one,
          *  so LAST-MODIFIED (whole seconds) always increases. */
         fun put(t: TodoTask) {
-            val old = tasks[t.id]
-            val floor = old?.let { (Math.floorDiv(it.updatedAt, 1000L) + 1) * 1000L } ?: Long.MIN_VALUE
-            tasks[t.id] = t.copy(updatedAt = maxOf(now, floor))
+            tasks[t.id] = limited(t).copy(updatedAt = after(tasks[t.id]))
         }
 
+        /** Deletes a task; the delete counts as later than its last edit (same rule as [put]). */
         fun remove(id: EntityID) {
-            tasks.remove(id) ?: return
+            val old = tasks.remove(id) ?: return
             val shadow = shadows.remove(id) ?: return
-            pendingDeletes[id] = PendingDelete(shadow.path, shadow.etag, now, shadow.unreadable)
+            pendingDeletes[id] = PendingDelete(shadow.path, shadow.etag, after(old), shadow.unreadable)
+        }
+
+        /** Now, but at least the next whole second after [old]'s `updatedAt`. */
+        private fun after(old: TodoTask?): Long {
+            val floor = old?.let { (Math.floorDiv(it.updatedAt, 1000L) + 1) * 1000L } ?: Long.MIN_VALUE
+            return maxOf(now, floor)
+        }
+
+        /** The root of [id] as shown, with its shown project and section ([Snapshot]). */
+        fun shownRoot(id: EntityID): TodoTask {
+            var cur = id
+            val seen = hashSetOf(id)
+            while (true) {
+                val p = snapshot.task(cur)?.parentId ?: break
+                if (!seen.add(p)) break
+                cur = p
+            }
+            return snapshot.task(cur) ?: tasks.getValue(id)
         }
 
         /** Live descendants by raw parent, depth first, guarded against cycles. */
@@ -291,18 +324,6 @@ class TodoStore(
                 }
             }
             return out
-        }
-
-        /** The top of [t]'s raw parent chain (at most MAX_TASK_DEPTH steps, cycle-safe). */
-        fun root(t: TodoTask): TodoTask {
-            var cur = t
-            val seen = hashSetOf(t.id)
-            repeat(app.todotim.core.SyncLimits.MAX_TASK_DEPTH) {
-                val p = cur.parentId?.let { tasks[it] } ?: return cur
-                if (!seen.add(p.id)) return cur
-                cur = p
-            }
-            return cur
         }
 
         /**
@@ -331,6 +352,21 @@ class TodoStore(
     }
 
     companion object {
+        /**
+         * [t] with its text within [SyncLimits] (title, description, label count and names), clipped as the server
+         * copy is on read, so a written task reads back unchanged.
+         */
+        internal fun limited(t: TodoTask): TodoTask {
+            val content = VTodo.clip(t.content, SyncLimits.MAX_CONTENT_LENGTH)
+            val description = VTodo.clip(t.description, SyncLimits.MAX_DESCRIPTION_LENGTH)
+            var labels = t.labels
+            if (labels.size > SyncLimits.MAX_LABELS_PER_TASK || labels.any { VTodo.clip(it, SyncLimits.MAX_NAME_LENGTH) != it }) {
+                labels = labels.map { VTodo.clip(it, SyncLimits.MAX_NAME_LENGTH) }.distinct().take(SyncLimits.MAX_LABELS_PER_TASK)
+            }
+            if (content === t.content && description === t.description && labels === t.labels) return t
+            return t.copy(content = content, description = description, labels = labels)
+        }
+
         /**
          * Order for inserting at [index] among sorted [orders]: max + 1 at the end, min − 1 at the start, else the
          * midpoint; null when the neighbours are too close (or out of order) for a distinct midpoint.

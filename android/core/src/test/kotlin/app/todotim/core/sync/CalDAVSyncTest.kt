@@ -454,6 +454,70 @@ class CalDAVSyncTest {
         assertNotNull(other.ics("${other.home}/todotim-inbox/$unsynced.ics"))
     }
 
+    @Test fun aChangedHomeMatchesByIdAndDeletesNothing() = runTest {
+        store.setHome(server.calendarHome)
+        put(inbox, "a", "Milk")
+        put(work, "b", "Report")
+        put(inbox, "c", "Bread")
+        sync()
+        now += HOUR
+        store.updateTask("a") { copy(content = "Oat milk") }
+        store.delete("c")
+        // The account's home moved: the new one has "a" (older) and "c", but not "b".
+        val moved = FakeCalDAVServer("calendars/new")
+        val newInbox = moved.addCalendar("todotim-inbox", "Inbox")
+        val newWork = moved.addCalendar("work", "Work")
+        moved.store("$newInbox/a.ics", task("a", "Milk"))
+        moved.store("$newInbox/c.ics", task("c", "Bread"))
+        store.setHome(moved.calendarHome)
+        val r = CalDAVSync.sync(store, moved, now, utc)
+        assertTrue(r.isComplete)
+        assertEquals(0, r.removed)
+        val snap = store.snapshot.value
+        assertEquals("Oat milk", snap.task("a")!!.content)
+        assertEquals("Report", snap.task("b")!!.content)
+        assertEquals("SUMMARY:Oat milk", line(moved.ics("$newInbox/a.ics")!!, "SUMMARY"))
+        assertEquals("SUMMARY:Report", line(moved.ics("$newWork/b.ics")!!, "SUMMARY"))
+        // The delete was meant for the old home.
+        assertTrue(moved.writes.none { it.startsWith("DELETE") })
+        assertNotNull(moved.ics("$newInbox/c.ics"))
+        assertEquals(0, snap.unsyncedCount)
+        assertTrue(store.database.value.shadows.values.all { it.path.startsWith(moved.home) })
+        // The old server was not touched.
+        assertEquals(emptyList<String>(), server.writes)
+    }
+
+    @Test fun aDeleteRightAfterAnEditInTheSameSecondStaysDeleted() = runTest {
+        put(inbox, "a", "Milk")
+        now = T0
+        sync()
+        now = T0 + 100
+        store.updateTask("a") { copy(content = "Oat milk") }
+        sync()
+        now = T0 + 150
+        store.updateTask("a") { copy(content = "Oat milk!") }
+        sync() // uploads LAST-MODIFIED of the next second
+        now = T0 + 200
+        store.delete("a")
+        val r = sync()
+        assertTrue(r.isComplete)
+        assertNull(store.snapshot.value.task("a"))
+        assertNull(server.ics("$inbox/a.ics"))
+    }
+
+    @Test fun anOverlongTitleIsUploadedOnce() = runTest {
+        put(inbox, "a", "Milk")
+        sync()
+        now += HOUR
+        store.updateTask("a") { copy(content = "x".repeat(app.todotim.core.SyncLimits.MAX_CONTENT_LENGTH + 10)) }
+        sync()
+        server.writes.clear()
+        val r = sync()
+        assertEquals(0, r.uploaded)
+        assertEquals(emptyList<String>(), server.writes)
+        assertEquals(0, store.snapshot.value.unsyncedCount)
+    }
+
     companion object {
         const val T0 = 1_800_000_000_000L // 2027-01-15T08:00:00Z
         const val MINUTE = 60_000L

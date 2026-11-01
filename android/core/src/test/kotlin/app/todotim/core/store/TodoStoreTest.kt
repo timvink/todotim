@@ -6,6 +6,8 @@ import app.todotim.core.Section
 import app.todotim.core.TodoTask
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNotNull
+import app.todotim.core.SyncLimits
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -186,5 +188,63 @@ class TodoStoreTest {
         assertEquals(app.todotim.core.Priority.P1, t.priority)
         assertNull(snap.task(b.id))
         assertEquals("cal/${b.id}.ics", store.database.value.pendingDeletes.getValue(b.id).path)
+    }
+
+    /** B (inbox) names A (work) as its parent: shown top-level, so A's cascades leave it alone. */
+    private fun crossListPair() {
+        val a = TodoTask("a", "work", null, null, "A", order = 1.0, createdAt = 0, updatedAt = 0)
+        val b = TodoTask("b", INBOX_ID, null, "a", "B", order = 1.0, createdAt = 0, updatedAt = 0)
+        val db = store.database.value
+        store.applySync(db, db.copy(tasks = mapOf("a" to a, "b" to b), shadows = mapOf("a" to shadowOf(a), "b" to shadowOf(b))))
+        assertNull(snap.task("b")!!.parentId)
+    }
+
+    @Test fun cascadesFollowTheDisplayedTreeOnly() {
+        crossListPair()
+        store.complete("a")
+        assertTrue(snap.task("a")!!.isCompleted)
+        assertFalse(snap.task("b")!!.isCompleted)
+        // Reopening B does not walk up into A.
+        store.complete("b")
+        store.reopen("b")
+        assertTrue(snap.task("a")!!.isCompleted)
+        store.reopen("a")
+        store.moveTask("a", "work", sectionId = "s1")
+        assertEquals(INBOX_ID, store.database.value.tasks.getValue("b").projectId)
+        assertNull(store.database.value.tasks.getValue("b").sectionId)
+        // A subtask of B goes where B is shown.
+        val c = store.addTask("C", parentId = "b")
+        assertEquals(INBOX_ID, c.projectId)
+        store.delete("a")
+        assertNotNull(snap.task("b"))
+        assertEquals(setOf("a"), store.database.value.pendingDeletes.keys)
+        assertEquals("a", store.database.value.tasks.getValue("b").parentId) // the raw link is kept
+    }
+
+    @Test fun deleteAfterAnEditInTheSameSecondIsLater() {
+        val a = TodoTask("a", INBOX_ID, null, null, "A", order = 1.0, createdAt = 0, updatedAt = now)
+        val db = store.database.value
+        store.applySync(db, db.copy(tasks = mapOf("a" to a), shadows = mapOf("a" to shadowOf(a))))
+        now += 100
+        store.updateTask("a") { copy(content = "A2") }
+        val edited = store.database.value.tasks.getValue("a").updatedAt
+        now += 100
+        store.delete("a")
+        assertTrue(store.database.value.pendingDeletes.getValue("a").deletedAt >= edited)
+    }
+
+    @Test fun textIsClippedToTheSyncLimits() {
+        val long = "x".repeat(SyncLimits.MAX_CONTENT_LENGTH + 5)
+        val a = store.addTask(
+            long, description = "d".repeat(SyncLimits.MAX_DESCRIPTION_LENGTH + 1),
+            labels = (0..150).map { "l$it" },
+        )
+        val t = snap.task(a.id)!!
+        assertEquals(SyncLimits.MAX_CONTENT_LENGTH, t.content.length)
+        assertEquals(SyncLimits.MAX_DESCRIPTION_LENGTH, t.description.length)
+        assertEquals(SyncLimits.MAX_LABELS_PER_TASK, t.labels.size)
+        store.updateTask(a.id) { copy(content = long + "y", labels = listOf("n".repeat(SyncLimits.MAX_NAME_LENGTH + 1))) }
+        assertEquals(SyncLimits.MAX_CONTENT_LENGTH, snap.task(a.id)!!.content.length)
+        assertEquals(SyncLimits.MAX_NAME_LENGTH, snap.task(a.id)!!.labels.single().length)
     }
 }

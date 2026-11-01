@@ -400,8 +400,9 @@ class CalDAVSync(
         return conflicted
     }
 
-    /** After a successful PUT: the shadow is what was written, and the task takes the server's whole-second times
-     *  (so it does not look edited). Without an ETag, the calendar is read again next time. */
+    /** After a successful PUT: the shadow is what was written, and the task becomes what that reads back as
+     *  (whole-second times, text as the server keeps it), so it does not look edited and is not written again.
+     *  Without an ETag, the calendar is read again next time. */
     private fun written(work: Work, t: TodoTask, path: String, etag: String?, ics: String) {
         uploaded++
         val v = VTodo.read(ics, t.projectId, zone)
@@ -410,7 +411,7 @@ class CalDAVSync(
             return
         }
         work.shadows[t.id] = Shadow.of(path, etag, ics, v)
-        adopt(work, t, v.task)
+        work.tasks[t.id] = v.task
         if (etag == null) {
             val cal = path.substringBeforeLast('/', "")
             work.calendars[cal]?.let { work.calendars[cal] = it.copy(stale = true) }

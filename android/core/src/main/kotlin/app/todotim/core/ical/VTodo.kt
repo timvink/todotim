@@ -161,7 +161,8 @@ object VTodo {
     fun normalizeNewlines(s: String): String =
         if (!s.contains('\r')) s else s.replace("\r\n", "\n").replace("\r", "\n")
 
-    private fun clip(s: String, max: Int): String {
+    /** [s] cut to at most [max] characters (grapheme clusters), as remote text is on read. */
+    internal fun clip(s: String, max: Int): String {
         if (s.length <= max && utf8Length(s) <= max) return s
         val g = graphemes(s)
         return if (g.size > max) g.subList(0, max).joinToString("") else s
