@@ -22,4 +22,12 @@ dependencies {
 tasks.test {
     systemProperty("todotim.fixtures", rootProject.projectDir.resolve("../fixtures").canonicalPath)
     inputs.dir(rootProject.projectDir.resolve("../fixtures"))
+    // Live tests against a real CalDAV server (LiveCalDAVTest, CrossClientLiveTest) run only with these set, and
+    // then every time (the server is not a task input).
+    val live = listOf("TODOTIM_LIVE_URL", "TODOTIM_LIVE_USER", "TODOTIM_LIVE_PASSWORD", "TODOTIM_CROSS_STEP", "TODOTIM_CROSS_DIR")
+    for (name in live) System.getenv(name)?.let { environment(name, it) }
+    if (System.getenv("TODOTIM_LIVE_URL") != null) {
+        outputs.upToDateWhen { false }
+        outputs.cacheIf { false }
+    }
 }
