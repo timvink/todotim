@@ -41,7 +41,7 @@ import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.dp
-import app.todotim.android.data.SyncSettings
+import app.todotim.android.data.ServerSettings
 import app.todotim.android.data.SyncStatus
 import app.todotim.android.ui.theme.TodoTimTheme
 import app.todotim.android.ui.theme.todoColors
@@ -54,15 +54,20 @@ import java.util.Locale
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun SettingsScreen(
-    settings: SyncSettings,
+    settings: ServerSettings,
     status: SyncStatus,
-    onSave: (serverUrl: String, username: String, password: String?) -> Unit,
+    /** Epoch milliseconds of the last complete sync. */
+    lastSyncedAt: Long?,
+    unsyncedCount: Int,
+    /** Saves; returns the message to show when the values are refused. */
+    onSave: (serverUrl: String, username: String, password: String?) -> String?,
     onSyncNow: () -> Unit,
     onBack: () -> Unit,
 ) {
     var url by rememberSaveable(settings.serverUrl) { mutableStateOf(settings.serverUrl) }
     var user by rememberSaveable(settings.username) { mutableStateOf(settings.username) }
     var password by rememberSaveable { mutableStateOf("") }
+    var saveError by rememberSaveable { mutableStateOf<String?>(null) }
     val changed = url != settings.serverUrl || user != settings.username || password.isNotEmpty()
     Column(Modifier.fillMaxSize()) {
         TopAppBar(
@@ -105,30 +110,45 @@ fun SettingsScreen(
                 style = MaterialTheme.typography.bodySmall,
                 color = todoColors.secondaryText,
             )
+            saveError?.let { Text(it, style = MaterialTheme.typography.bodyMedium, color = todoColors.overdue) }
             Row(horizontalArrangement = Arrangement.spacedBy(12.dp), verticalAlignment = Alignment.CenterVertically) {
                 Button(
-                    onClick = { onSave(url, user, password.ifEmpty { null }); password = "" },
+                    onClick = {
+                        saveError = onSave(url, user, password.ifEmpty { null })
+                        if (saveError == null) password = ""
+                    },
                     enabled = changed && url.isNotBlank() && user.isNotBlank(),
                 ) { Text("Save") }
-                OutlinedButton(onClick = onSyncNow, enabled = !status.isSyncing) { Text("Sync now") }
+                OutlinedButton(onClick = onSyncNow, enabled = !status.isSyncing && settings.isConfigured) { Text("Sync now") }
                 if (status.isSyncing) CircularProgressIndicator(Modifier.size(20.dp), strokeWidth = 2.dp)
             }
             Text(
-                syncStatusText(status),
+                syncStatusText(status, lastSyncedAt, settings.isConfigured),
                 style = MaterialTheme.typography.bodyMedium,
                 color = if (status.error != null) todoColors.overdue else todoColors.secondaryText,
             )
+            if (unsyncedCount > 0 && settings.isConfigured) {
+                Text(
+                    if (unsyncedCount == 1) "1 task not synced yet" else "$unsyncedCount tasks not synced yet",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = todoColors.secondaryText,
+                )
+            }
+            status.warnings.forEach {
+                Text("⚠ $it", style = MaterialTheme.typography.bodySmall, color = todoColors.secondaryText)
+            }
         }
     }
 }
 
 private val timeFormat = DateTimeFormatter.ofPattern("d MMM, HH:mm", Locale.ENGLISH)
 
-fun syncStatusText(status: SyncStatus): String = when {
+fun syncStatusText(status: SyncStatus, lastSyncedAt: Long?, configured: Boolean): String = when {
+    !configured -> "Not set up: tasks stay on this phone until you add a server."
     status.isSyncing -> "Syncing…"
     status.error != null -> "Last sync failed: ${status.error}"
-    status.lastSyncedAt != null ->
-        "Last synced " + Instant.ofEpochMilli(status.lastSyncedAt).atZone(ZoneId.systemDefault()).format(timeFormat)
+    lastSyncedAt != null ->
+        "Last synced " + Instant.ofEpochMilli(lastSyncedAt).atZone(ZoneId.systemDefault()).format(timeFormat)
     else -> "Not synced yet"
 }
 
@@ -137,9 +157,9 @@ fun syncStatusText(status: SyncStatus): String = when {
 private fun SettingsPreview() {
     TodoTimTheme(darkTheme = false) {
         SettingsScreen(
-            SyncSettings("https://cloud.example.com/remote.php/dav/", "tim", hasPassword = true),
-            SyncStatus(lastSyncedAt = 1_793_000_000_000),
-            { _, _, _ -> }, {}, {},
+            ServerSettings("https://cloud.example.com/remote.php/dav/", "tim", hasPassword = true),
+            SyncStatus(), lastSyncedAt = 1_793_000_000_000, unsyncedCount = 2,
+            { _, _, _ -> null }, {}, {},
         )
     }
 }

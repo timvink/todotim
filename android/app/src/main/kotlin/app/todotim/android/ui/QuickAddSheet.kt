@@ -52,11 +52,12 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import app.todotim.android.QuickAddDefaults
 import app.todotim.android.R
-import app.todotim.android.data.NewTask
-import app.todotim.android.data.QuickAddParsing
-import app.todotim.android.data.QuickAddResult
-import app.todotim.android.data.QuickAddToken
-import app.todotim.android.data.TodoSnapshot
+import app.todotim.core.parsing.DueDateFormatting
+import app.todotim.core.parsing.ParsedTask
+import app.todotim.core.parsing.ParsedToken
+import app.todotim.core.parsing.QuickAddParser
+import app.todotim.core.store.Snapshot
+import app.todotim.core.store.TodoStore
 import app.todotim.android.ui.theme.TodoColors
 import app.todotim.android.ui.theme.todoColors
 import app.todotim.core.EntityID
@@ -72,10 +73,9 @@ import java.time.LocalDate
 @Composable
 fun QuickAddSheet(
     defaults: QuickAddDefaults,
-    snapshot: TodoSnapshot,
-    parser: QuickAddParsing,
+    snapshot: Snapshot,
+    store: TodoStore,
     today: LocalDate,
-    onAdd: (NewTask) -> Unit,
     onDismiss: () -> Unit,
 ) {
     var field by remember { mutableStateOf(TextFieldValue(defaults.text, TextRange(defaults.text.length))) }
@@ -86,9 +86,16 @@ fun QuickAddSheet(
     var chipProject by remember { mutableStateOf(defaults.projectId to defaults.sectionId) }
     var picker by remember { mutableStateOf<QuickAddPicker?>(null) }
 
-    val parsed = parser.parse(field.text, today)
-    val (projectId, sectionId) = resolveProject(parsed, snapshot) ?: chipProject
-    val due = parsed.due ?: chipDue
+    val projectNames = remember(snapshot) { snapshot.projects.map { it.name } }
+    val sectionNames = remember(snapshot) { snapshot.projects.flatMap { p -> snapshot.sections(p.id).map { it.name } }.distinct() }
+    val parsed = remember(field.text, today, projectNames, sectionNames) {
+        QuickAddParser.parse(field.text, today, projectNames = projectNames, sectionNames = sectionNames)
+    }
+    val tokens = remember(field.text, today, projectNames, sectionNames) {
+        QuickAddParser.tokens(field.text, today, projectNames = projectNames, sectionNames = sectionNames)
+    }
+    val (projectId, sectionId) = resolvePlace(parsed, snapshot, chipProject)
+    val due = if (parsed.noDate) null else parsed.due ?: chipDue
     val priority = parsed.priority ?: chipPriority ?: Priority.P4
     val labels = (chipLabels + parsed.labels).distinct()
     val focus = remember { FocusRequester() }
@@ -100,11 +107,10 @@ fun QuickAddSheet(
 
     fun submit() {
         if (parsed.content.isBlank()) return
-        onAdd(
-            NewTask(
-                content = parsed.content, projectId = projectId, sectionId = sectionId, description = description.trim(),
-                priority = priority, due = due, labels = labels, recurrence = parsed.recurrence,
-            ),
+        // Label names need no label entry: the snapshot lists every name a task uses.
+        store.addTask(
+            content = parsed.content, projectId = projectId, sectionId = sectionId, description = description.trim(),
+            priority = priority, due = due, labels = labels,
         )
         field = TextFieldValue(defaults.text, TextRange(defaults.text.length))
         description = ""
@@ -123,7 +129,7 @@ fun QuickAddSheet(
                 onValueChange = { field = it.copy(text = it.text.replace("\n", " ")) },
                 textStyle = TextStyle(fontSize = 18.sp, color = textColor),
                 cursorBrush = SolidColor(MaterialTheme.colorScheme.primary),
-                visualTransformation = TokenHighlight(parsed.tokens, colors),
+                visualTransformation = TokenHighlight(tokens, colors),
                 keyboardOptions = KeyboardOptions(imeAction = ImeAction.Done),
                 keyboardActions = KeyboardActions(onDone = { submit() }),
                 decorationBox = { inner ->
@@ -148,7 +154,7 @@ fun QuickAddSheet(
                 horizontalArrangement = Arrangement.spacedBy(8.dp),
             ) {
                 val dueTint = due?.let { dueColor(it, today) } ?: colors.secondaryText
-                QuickChip(R.drawable.ic_calendar, due?.let { DueDates.label(it, today) } ?: "Date", dueTint, due != null) { picker = QuickAddPicker.Date }
+                QuickChip(R.drawable.ic_calendar, due?.let { DueDateFormatting.displayString(it, today) } ?: "Date", dueTint, due != null) { picker = QuickAddPicker.Date }
                 Box {
                     QuickChip(R.drawable.ic_flag, if (priority == Priority.P4) "Priority" else "P${priority.level}", colors.priority(priority), priority != Priority.P4) {
                         picker = QuickAddPicker.Priority
@@ -161,12 +167,12 @@ fun QuickAddSheet(
             }
             Row(Modifier.fillMaxWidth().padding(top = 4.dp), verticalAlignment = Alignment.CenterVertically) {
                 Box(Modifier.weight(1f)) {
-                    val project = snapshot.projectsById[projectId]
-                    val section = sectionId?.let { snapshot.sectionsById[it] }
+                    val project = snapshot.project(projectId)
+                    val section = sectionId?.let { sid -> snapshot.sections(projectId).firstOrNull { it.id == sid } }
                     QuickChip(
                         if (project?.isInbox == true) R.drawable.ic_inbox else null,
                         listOfNotNull(project?.name ?: "Inbox", section?.name).joinToString(" / "),
-                        if (project?.isInbox == true) colors.p3 else Palette.color(project?.color ?: "charcoal"),
+                        if (project?.isInbox == true) colors.p3 else paletteColor(project?.color ?: "charcoal"),
                         selected = false,
                     ) { picker = QuickAddPicker.Project }
                     ProjectSectionMenu(
@@ -197,14 +203,17 @@ fun QuickAddSheet(
 
 private enum class QuickAddPicker { Date, Priority, Labels, Project }
 
-/** The project (and section) named by `#project` / `/section` tokens, matched loosely by name. */
-private fun resolveProject(parsed: QuickAddResult, snapshot: TodoSnapshot): Pair<EntityID, EntityID?>? {
-    fun norm(s: String) = s.lowercase().replace(Regex("[\\s_-]"), "")
-    val project = parsed.projectName?.let { name -> snapshot.projects.firstOrNull { norm(it.name) == norm(name) } } ?: return null
+/**
+ * Where the task goes: the project of a `#project` token (else [chosen]'s), and the section of a `/section` token
+ * in it (else [chosen]'s section when the project is the chosen one). Names match case-insensitively.
+ */
+private fun resolvePlace(parsed: ParsedTask, snapshot: Snapshot, chosen: Pair<EntityID, EntityID?>): Pair<EntityID, EntityID?> {
+    val project = parsed.projectName?.let { name -> snapshot.projects.firstOrNull { it.name.equals(name, ignoreCase = true) } }
+    val projectId = project?.id ?: chosen.first
     val section = parsed.sectionName?.let { name ->
-        snapshot.sections.firstOrNull { it.projectId == project.id && norm(it.name) == norm(name) }
+        snapshot.sections(projectId).firstOrNull { it.name.equals(name, ignoreCase = true) }
     }
-    return project.id to section?.id
+    return projectId to (section?.id ?: chosen.second.takeIf { projectId == chosen.first })
 }
 
 @Composable
@@ -224,20 +233,20 @@ private fun QuickChip(icon: Int?, text: String, tint: Color, selected: Boolean, 
 }
 
 /** Highlights recognised tokens with a tinted background; the text itself is unchanged. */
-private class TokenHighlight(private val tokens: List<QuickAddToken>, private val colors: TodoColors) : VisualTransformation {
+private class TokenHighlight(private val tokens: List<ParsedToken>, private val colors: TodoColors) : VisualTransformation {
     override fun filter(text: AnnotatedString): TransformedText {
         if (tokens.isEmpty()) return TransformedText(text, OffsetMapping.Identity)
         val styled = buildAnnotatedString {
             append(text)
             for (t in tokens) {
-                if (t.range.first < 0 || t.range.last >= text.length) continue
+                if (t.start < 0 || t.end > text.length || t.start >= t.end) continue
                 val color = when (t.kind) {
-                    QuickAddToken.Kind.Date -> colors.today
-                    QuickAddToken.Kind.Priority -> colors.p1
-                    QuickAddToken.Kind.Label -> colors.p3
-                    QuickAddToken.Kind.Project, QuickAddToken.Kind.Section -> colors.thisWeek
+                    ParsedToken.Kind.DATE -> colors.today
+                    ParsedToken.Kind.PRIORITY -> colors.p1
+                    ParsedToken.Kind.LABEL -> colors.p3
+                    ParsedToken.Kind.PROJECT, ParsedToken.Kind.SECTION -> colors.thisWeek
                 }
-                addStyle(SpanStyle(color = color, background = color.copy(alpha = 0.15f)), t.range.first, t.range.last + 1)
+                addStyle(SpanStyle(color = color, background = color.copy(alpha = 0.15f)), t.start, t.end)
             }
         }
         return TransformedText(styled, OffsetMapping.Identity)

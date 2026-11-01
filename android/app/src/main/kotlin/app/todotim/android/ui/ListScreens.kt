@@ -27,7 +27,6 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.sp
-import app.todotim.android.data.SampleData
 import app.todotim.android.ui.theme.TodoTimTheme
 import java.time.LocalDate
 
@@ -106,13 +105,13 @@ private fun ListTopBar(title: String, state: ListScreenState, callbacks: ListScr
 @Composable
 private fun InboxPreview() {
     val today = LocalDate.of(2026, 11, 2)
-    val s = SampleData.snapshot(today)
+    val s = PreviewData.snapshot(today)
     TodoTimTheme(darkTheme = false) {
         TaskListScreen(
             title = "Inbox",
             items = TaskLists.project(s, "inbox", showCompleted = false),
             state = ListScreenState(today, showCompleted = false, isRefreshing = false, canGoBack = false) {
-                Palette.color(s.labelsByName[it]?.color ?: "charcoal")
+                paletteColor(s.labels.firstOrNull { l -> l.name == it }?.color ?: "charcoal")
             },
             callbacks = ListScreenCallbacks(TaskRowActions({}, {}, {}, {}), {}, {}, {}),
         )

@@ -5,16 +5,10 @@ import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 import androidx.lifecycle.ViewModel
-import androidx.lifecycle.viewModelScope
-import app.todotim.android.data.InMemorySyncSettingsStore
-import app.todotim.android.data.InMemoryTodoRepository
-import app.todotim.android.data.QuickAddParsing
-import app.todotim.android.data.StubQuickAddParser
-import app.todotim.android.data.SyncSettingsStore
-import app.todotim.android.data.TodoRepository
+import app.todotim.android.data.edit
 import app.todotim.core.EntityID
 import app.todotim.core.INBOX_ID
-import kotlinx.coroutines.launch
+import app.todotim.core.store.TodoStore
 
 /** Where the app is. Tabs are roots; the others are pushed on top of a tab. */
 sealed interface Screen {
@@ -29,15 +23,8 @@ sealed interface Screen {
 /** What the quick-add sheet starts with, from the screen it was opened on. */
 data class QuickAddDefaults(val projectId: EntityID = INBOX_ID, val sectionId: EntityID? = null, val text: String = "")
 
-/**
- * The one ViewModel: navigation, sheets and view options, plus pass-through access to the repository.
- * TODO: the integrator constructs it with the real repository, settings store and parser (a factory or DI).
- */
-class AppViewModel(
-    val repository: TodoRepository = InMemoryTodoRepository(),
-    val settingsStore: SyncSettingsStore = InMemorySyncSettingsStore(),
-    val parser: QuickAddParsing = StubQuickAddParser,
-) : ViewModel() {
+/** The one ViewModel: navigation, sheets and view options. The data lives in the app's [TodoStore]. */
+class AppViewModel : ViewModel() {
     private val backStack = mutableStateListOf<Screen>(Screen.Inbox)
     val screen: Screen get() = backStack.last()
     val tab: Screen get() = backStack.first()
@@ -72,28 +59,18 @@ class AppViewModel(
         }
     }
 
-    fun sync() {
-        viewModelScope.launch { repository.sync() }
-    }
-
-    /** Completes the task and returns how to undo it (reopen, or restore the due date of a recurring task). */
-    fun complete(id: EntityID): () -> Unit {
-        val s = repository.snapshot.value
-        val before = s.tasksById[id] ?: return {}
+    /** Completes the task and returns how to undo it (reopen, or restore the due date of a repeating task). */
+    fun complete(store: TodoStore, id: EntityID): () -> Unit {
+        val s = store.snapshot.value
+        val before = s.task(id) ?: return {}
         // Open tasks in the subtree: completing the parent completes them too, so undo reopens them all.
-        val open = mutableListOf<EntityID>()
-        val queue = ArrayDeque(listOf(before))
-        while (queue.isNotEmpty()) {
-            val t = queue.removeFirst()
-            if (!t.isCompleted) open += t.id
-            queue.addAll(s.childrenOf[t.id].orEmpty())
-        }
-        repository.complete(id)
+        val open = (listOf(id) + s.descendantIds(id)).filter { s.task(it)?.isCompleted == false }
+        store.complete(id)
         return {
-            if (before.recurrence != null && repository.snapshot.value.tasksById[id]?.isCompleted == false) {
-                repository.reschedule(id, before.due)
+            if (before.recurrence != null && store.snapshot.value.task(id)?.isCompleted == false) {
+                store.edit(id) { it.copy(due = before.due, recurrence = before.recurrence) }
             } else {
-                open.forEach(repository::reopen)
+                open.forEach(store::reopen)
             }
         }
     }

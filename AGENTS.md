@@ -118,9 +118,18 @@ root; both the Swift tests and the Kotlin tests check against it, so a contract 
 - `android/core` — pure Kotlin/JVM (no Android APIs): models, iCalendar, VTODO mapping, recurrence,
   quick add, CalDAV client, sync, store. Package `app.todotim.core`.
 - `android/app` — Compose UI, WorkManager background sync, credentials. Package `app.todotim.android`.
+  The UI reads core's `Snapshot` and mutates core's `TodoStore` directly (no repository layer); edit tasks
+  with `store.edit(id) { it.copy(…) }`, which hands over the stored task, never a display-repaired snapshot
+  copy. `TodoTimApplication` owns one `AppGraph`: the store (loaded off the main thread from
+  `filesDir/todotim/db.json`), persistence, `SyncSettingsStore` (URL and username in SharedPreferences, the
+  password AES-GCM-encrypted with an Android Keystore key) and the one `SyncManager` that the UI (start,
+  resume after 1 min, pull-to-refresh, 3 s after edits) and the 15-minute `SyncWorker` share.
 
     cd android && ./gradlew :core:test            # JVM tests, incl. fixtures
-    cd android && ./gradlew :app:assembleDebug    # build/outputs/apk/debug/app-debug.apk
+    cd android && ./gradlew :app:testDebugUnitTest :app:assembleDebug :app:assembleRelease
+
+Release builds are minified (R8) and signed with `android/keystore.properties` (gitignored; `storeFile`
+relative to `android/`, `storePassword`, `keyAlias`, `keyPassword`) when present, else with the debug key.
 
 Needs JDK 21 (`JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home` on the Mac) and an
 Android SDK in `android/local.properties` (`sdk.dir=…`).

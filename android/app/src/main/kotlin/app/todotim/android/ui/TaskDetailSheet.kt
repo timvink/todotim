@@ -49,9 +49,11 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import app.todotim.android.R
-import app.todotim.android.data.NewTask
-import app.todotim.android.data.TodoRepository
-import app.todotim.android.data.TodoSnapshot
+import app.todotim.android.data.edit
+import app.todotim.core.Recurrence
+import app.todotim.core.parsing.DueDateFormatting
+import app.todotim.core.store.Snapshot
+import app.todotim.core.store.TodoStore
 import app.todotim.android.ui.theme.todoColors
 import app.todotim.core.EntityID
 import app.todotim.core.TodoTask
@@ -65,34 +67,34 @@ import java.time.LocalDate
 @Composable
 fun TaskDetailSheet(
     taskId: EntityID,
-    snapshot: TodoSnapshot,
-    repository: TodoRepository,
+    snapshot: Snapshot,
+    store: TodoStore,
     today: LocalDate,
     onComplete: (TodoTask) -> Unit,
     onOpenTask: (EntityID) -> Unit,
     onDismiss: () -> Unit,
 ) {
-    val task = snapshot.tasksById[taskId] ?: return
+    val task = snapshot.task(taskId) ?: return
     ModalBottomSheet(onDismissRequest = onDismiss, sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)) {
         Column(Modifier.verticalScroll(rememberScrollState()).padding(bottom = 24.dp)) {
-            LocationRow(task, snapshot, repository, onOpenTask)
-            TitleAndDescription(task, repository, onComplete)
+            LocationRow(task, snapshot, store, onOpenTask)
+            TitleAndDescription(task, store, onComplete)
             HorizontalDivider(color = todoColors.divider, modifier = Modifier.padding(vertical = 8.dp))
-            Properties(task, snapshot, repository, today)
+            Properties(task, snapshot, store, today)
             HorizontalDivider(color = todoColors.divider, modifier = Modifier.padding(vertical = 8.dp))
-            Subtasks(task, snapshot, repository, onComplete, onOpenTask)
+            Subtasks(task, snapshot, store, onComplete, onOpenTask)
             HorizontalDivider(color = todoColors.divider, modifier = Modifier.padding(vertical = 8.dp))
-            DeleteRow(task) { repository.delete(task.id); onDismiss() }
+            DeleteRow(task) { store.delete(task.id); onDismiss() }
         }
     }
 }
 
 /** "# Work / Planning ▾" (moves the task), and the parent of a subtask. */
 @Composable
-private fun LocationRow(task: TodoTask, snapshot: TodoSnapshot, repository: TodoRepository, onOpenTask: (EntityID) -> Unit) {
+private fun LocationRow(task: TodoTask, snapshot: Snapshot, store: TodoStore, onOpenTask: (EntityID) -> Unit) {
     var menu by remember { mutableStateOf(false) }
-    val project = snapshot.projectsById[task.projectId]
-    val section = task.sectionId?.let { snapshot.sectionsById[it] }
+    val project = snapshot.project(task.projectId)
+    val section = task.sectionId?.let { sid -> snapshot.sections(task.projectId).firstOrNull { it.id == sid } }
     Column(Modifier.padding(horizontal = 16.dp)) {
         Box {
             Row(
@@ -102,7 +104,7 @@ private fun LocationRow(task: TodoTask, snapshot: TodoSnapshot, repository: Todo
                 if (project?.isInbox == true) {
                     Icon(painterResource(R.drawable.ic_inbox), null, Modifier.size(16.dp), tint = todoColors.p3)
                 } else {
-                    Text("#", color = Palette.color(project?.color ?: "charcoal"), fontWeight = FontWeight.Bold)
+                    Text("#", color = paletteColor(project?.color ?: "charcoal"), fontWeight = FontWeight.Bold)
                 }
                 Spacer(Modifier.width(6.dp))
                 Text(
@@ -115,11 +117,11 @@ private fun LocationRow(task: TodoTask, snapshot: TodoSnapshot, repository: Todo
             ProjectSectionMenu(
                 expanded = menu, snapshot = snapshot, currentProject = task.projectId,
                 currentSection = task.sectionId.takeIf { task.parentId == null },
-                onPick = { p, s -> repository.moveTask(task.id, p, s) },
+                onPick = { p, s -> store.moveTask(task.id, p, s) },
                 onDismiss = { menu = false },
             )
         }
-        task.parentId?.let { snapshot.tasksById[it] }?.let { parent ->
+        task.parentId?.let { snapshot.task(it) }?.let { parent ->
             Row(
                 Modifier.clickable { onOpenTask(parent.id) }.padding(vertical = 4.dp),
                 verticalAlignment = Alignment.CenterVertically,
@@ -133,7 +135,7 @@ private fun LocationRow(task: TodoTask, snapshot: TodoSnapshot, repository: Todo
 }
 
 @Composable
-private fun TitleAndDescription(task: TodoTask, repository: TodoRepository, onComplete: (TodoTask) -> Unit) {
+private fun TitleAndDescription(task: TodoTask, store: TodoStore, onComplete: (TodoTask) -> Unit) {
     var title by remember(task.id) { mutableStateOf(task.content) }
     var description by remember(task.id) { mutableStateOf(task.description) }
     val textColor = MaterialTheme.colorScheme.onSurface
@@ -144,7 +146,7 @@ private fun TitleAndDescription(task: TodoTask, repository: TodoRepository, onCo
                 value = title,
                 onValueChange = { v ->
                     title = v.replace("\n", " ")
-                    if (title.isNotBlank()) repository.updateTask(task.id) { it.copy(content = title.trim()) }
+                    if (title.isNotBlank()) store.edit(task.id) { it.copy(content = title.trim()) }
                 },
                 textStyle = TextStyle(
                     fontSize = 20.sp, fontWeight = FontWeight.SemiBold, color = textColor,
@@ -155,7 +157,7 @@ private fun TitleAndDescription(task: TodoTask, repository: TodoRepository, onCo
             )
             BasicTextField(
                 value = description,
-                onValueChange = { v -> description = v; repository.updateTask(task.id) { it.copy(description = v) } },
+                onValueChange = { v -> description = v; store.edit(task.id) { it.copy(description = v) } },
                 textStyle = TextStyle(fontSize = 15.sp, color = textColor),
                 cursorBrush = SolidColor(MaterialTheme.colorScheme.primary),
                 modifier = Modifier.fillMaxWidth().padding(top = 8.dp),
@@ -169,7 +171,7 @@ private fun TitleAndDescription(task: TodoTask, repository: TodoRepository, onCo
 }
 
 @Composable
-private fun Properties(task: TodoTask, snapshot: TodoSnapshot, repository: TodoRepository, today: LocalDate) {
+private fun Properties(task: TodoTask, snapshot: Snapshot, store: TodoStore, today: LocalDate) {
     var reschedule by remember { mutableStateOf(false) }
     var priorityMenu by remember { mutableStateOf(false) }
     var labelsDialog by remember { mutableStateOf(false) }
@@ -177,16 +179,16 @@ private fun Properties(task: TodoTask, snapshot: TodoSnapshot, repository: TodoR
     val dueTint = task.due?.let { dueColor(it, today) } ?: todoColors.secondaryText
     PropertyRow(
         icon = painterResource(R.drawable.ic_calendar), tint = dueTint,
-        text = task.due?.let { DueDates.label(it, today) } ?: "Date",
+        text = task.due?.let { DueDateFormatting.displayString(it, today) } ?: "Date",
         textColor = task.due?.let { dueTint },
-        onClear = task.due?.let { { repository.reschedule(task.id, null) } },
+        onClear = task.due?.let { { store.edit(task.id) { it.copy(due = null) } } },
         onClick = { reschedule = true },
     )
     task.recurrence?.let { rule ->
         PropertyRow(
             icon = painterResource(R.drawable.ic_repeat), tint = todoColors.secondaryText,
-            text = "Repeats ${DueDates.describeRecurrence(rule)}",
-            onClear = { repository.updateTask(task.id) { it.copy(recurrence = null) } },
+            text = Recurrence.summary(rule),
+            onClear = { store.edit(task.id) { it.copy(recurrence = null) } },
             onClick = {},
         )
     }
@@ -196,7 +198,7 @@ private fun Properties(task: TodoTask, snapshot: TodoSnapshot, repository: TodoR
             text = priorityName(task.priority),
             onClick = { priorityMenu = true },
         )
-        PriorityMenu(priorityMenu, task.priority, onPick = { p -> repository.updateTask(task.id) { it.copy(priority = p) } }, onDismiss = { priorityMenu = false })
+        PriorityMenu(priorityMenu, task.priority, onPick = { p -> store.edit(task.id) { it.copy(priority = p) } }, onDismiss = { priorityMenu = false })
     }
     PropertyRow(
         icon = painterResource(R.drawable.ic_label), tint = todoColors.secondaryText,
@@ -205,10 +207,10 @@ private fun Properties(task: TodoTask, snapshot: TodoSnapshot, repository: TodoR
     )
 
     if (reschedule) {
-        RescheduleSheet(task.due, today, onPick = { repository.reschedule(task.id, it) }, onDismiss = { reschedule = false })
+        RescheduleSheet(task.due, today, onPick = { store.edit(task.id) { t -> t.copy(due = it) } }, onDismiss = { reschedule = false })
     }
     if (labelsDialog) {
-        LabelsDialog(snapshot.labels, task.labels, onDone = { names -> repository.updateTask(task.id) { it.copy(labels = names) } }, onDismiss = { labelsDialog = false })
+        LabelsDialog(snapshot.labels, task.labels, onDone = { names -> store.edit(task.id) { it.copy(labels = names) } }, onDismiss = { labelsDialog = false })
     }
 }
 
@@ -237,12 +239,12 @@ private fun PropertyRow(
 @Composable
 private fun Subtasks(
     task: TodoTask,
-    snapshot: TodoSnapshot,
-    repository: TodoRepository,
+    snapshot: Snapshot,
+    store: TodoStore,
     onComplete: (TodoTask) -> Unit,
     onOpenTask: (EntityID) -> Unit,
 ) {
-    val children = snapshot.childrenOf[task.id].orEmpty()
+    val children = snapshot.subtasks(task.id, includeCompleted = true)
     var adding by remember(task.id) { mutableStateOf(false) }
     var newTitle by remember(task.id) { mutableStateOf("") }
     Text(
@@ -267,7 +269,7 @@ private fun Subtasks(
     }
     if (adding) {
         fun add() {
-            if (newTitle.isNotBlank()) repository.addTask(NewTask(content = newTitle, projectId = task.projectId, parentId = task.id))
+            if (newTitle.isNotBlank()) store.addTask(content = newTitle.trim(), projectId = task.projectId, parentId = task.id)
             newTitle = ""
         }
         Row(Modifier.padding(start = 16.dp, end = 16.dp, top = 8.dp), verticalAlignment = Alignment.CenterVertically) {

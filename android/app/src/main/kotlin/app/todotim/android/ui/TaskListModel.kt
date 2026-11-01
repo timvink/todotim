@@ -1,9 +1,11 @@
 package app.todotim.android.ui
 
-import app.todotim.android.data.TodoSnapshot
+import androidx.compose.ui.graphics.Color
 import app.todotim.core.EntityID
 import app.todotim.core.Project
+import app.todotim.core.ProjectColor
 import app.todotim.core.TodoTask
+import app.todotim.core.store.Snapshot
 
 /** One row of a task list: a group header or a task. */
 sealed interface ListItem {
@@ -31,70 +33,53 @@ sealed interface ListItem {
     }
 }
 
-/** Builds the rows the screens show from a [TodoSnapshot]. Pure, so it is easy to test and preview. */
+/** Builds the rows the screens show from a core [Snapshot]. Pure, so it is easy to test and preview. */
 object TaskLists {
     /** A project: its tasks without section, then each section (header) with its tasks; subtasks indented. */
-    fun project(s: TodoSnapshot, projectId: EntityID, showCompleted: Boolean): List<ListItem> {
+    fun project(s: Snapshot, projectId: EntityID, showCompleted: Boolean): List<ListItem> {
         val out = mutableListOf<ListItem>()
-        val topLevel = s.childrenOf[null].orEmpty().filter { it.projectId == projectId }
-        val sectionIds = s.sections.map { it.id }.toSet()
-        topLevel.filter { it.sectionId == null || it.sectionId !in sectionIds }
-            .forEach { addTree(s, it, 0, showCompleted, null, out) }
-        for (section in s.sections.filter { it.projectId == projectId }.sortedBy { it.order }) {
-            val tasks = topLevel.filter { it.sectionId == section.id }
-            val rows = mutableListOf<ListItem>()
-            tasks.forEach { addTree(s, it, 0, showCompleted, null, rows) }
-            out += ListItem.Header("section-${section.id}", section.name, tasks.count { !it.isCompleted })
-            out += rows
+        s.taskIds(projectId, null, showCompleted).forEach { addTree(s, it, 0, showCompleted, out) }
+        for (section in s.sections(projectId)) {
+            out += ListItem.Header("section-${section.id}", section.name, s.openCount(projectId, section.id))
+            s.taskIds(projectId, section.id, showCompleted).forEach { addTree(s, it, 0, showCompleted, out) }
         }
         return out
     }
 
     /** Open tasks carrying [label], in project order. */
-    fun label(s: TodoSnapshot, label: String, showCompleted: Boolean): List<ListItem> =
-        s.tasks.filter { label in it.labels && (showCompleted || !it.isCompleted) }
-            .sortedWith(projectOrder(s))
-            .map { taskItem(s, it, 0, s.projectsById[it.projectId]) }
+    fun label(s: Snapshot, label: String): List<ListItem> =
+        s.tasksWithLabel(label).map { taskItem(s, it, 0, s.project(it.projectId)) }
 
     /** Open tasks whose title or description contains [query], grouped by project. */
-    fun search(s: TodoSnapshot, query: String): List<ListItem> {
-        val q = query.trim()
-        if (q.isEmpty()) return emptyList()
-        val matches = s.tasks.filter {
-            !it.isCompleted && (it.content.contains(q, ignoreCase = true) || it.description.contains(q, ignoreCase = true))
-        }
-        return matches.groupBy { it.projectId }
-            .mapNotNull { (id, tasks) -> s.projectsById[id]?.let { it to tasks } }
-            .sortedWith(compareBy({ !it.first.isInbox }, { it.first.order }))
-            .flatMap { (project, tasks) ->
-                listOf(ListItem.Header("project-${project.id}", project.name, tasks.size, project)) +
-                    tasks.sortedWith(projectOrder(s)).map { taskItem(s, it, 0, null) }
+    fun search(s: Snapshot, query: String): List<ListItem> {
+        if (query.isBlank()) return emptyList()
+        val matches = s.search(query)
+        val counts = matches.groupingBy { it.projectId }.eachCount()
+        val out = mutableListOf<ListItem>()
+        var current: EntityID? = null
+        for (t in matches) { // in project order, so each project's matches are together
+            if (t.projectId != current) {
+                current = t.projectId
+                val project = s.project(t.projectId) ?: s.inbox
+                out += ListItem.Header("project-${project.id}", project.name, counts.getValue(t.projectId), project)
             }
+            out += taskItem(s, t, 0, null)
+        }
+        return out
     }
 
-    /** Open tasks per project id, subtasks included. */
-    fun openCounts(s: TodoSnapshot): Map<EntityID, Int> =
-        s.tasks.filter { !it.isCompleted }.groupingBy { it.projectId }.eachCount()
-
-    /** Open tasks per label name. */
-    fun labelCounts(s: TodoSnapshot): Map<String, Int> =
-        s.tasks.filter { !it.isCompleted }.flatMap { it.labels }.groupingBy { it }.eachCount()
-
-    private fun projectOrder(s: TodoSnapshot): Comparator<TodoTask> = compareBy(
-        { s.projectsById[it.projectId]?.order ?: Double.MAX_VALUE },
-        { it.sectionId?.let { id -> s.sectionsById[id]?.order } ?: -1.0 },
-        { it.order },
-    )
-
-    private fun addTree(s: TodoSnapshot, task: TodoTask, depth: Int, showCompleted: Boolean, project: Project?, out: MutableList<ListItem>) {
-        if (task.isCompleted && !showCompleted) return
-        out += taskItem(s, task, depth, project)
+    private fun addTree(s: Snapshot, id: EntityID, depth: Int, showCompleted: Boolean, out: MutableList<ListItem>) {
+        val task = s.task(id) ?: return
+        out += taskItem(s, task, depth, null)
         if (task.collapsed) return
-        s.childrenOf[task.id].orEmpty().forEach { addTree(s, it, depth + 1, showCompleted, project, out) }
+        s.subtaskIds(id, showCompleted).forEach { addTree(s, it, depth + 1, showCompleted, out) }
     }
 
-    private fun taskItem(s: TodoSnapshot, task: TodoTask, depth: Int, project: Project?): ListItem.TaskItem {
-        val children = s.childrenOf[task.id].orEmpty()
-        return ListItem.TaskItem(task, depth, children.size, children.count { it.isCompleted }, project)
+    private fun taskItem(s: Snapshot, task: TodoTask, depth: Int, project: Project?): ListItem.TaskItem {
+        val (done, total) = s.subtaskProgress(task.id)
+        return ListItem.TaskItem(task, depth, total, done, project)
     }
 }
+
+/** The palette colour of a project or label colour key. */
+fun paletteColor(key: String): Color = Color(0xFF000000.toInt() or ProjectColor.entry(key).hex)
