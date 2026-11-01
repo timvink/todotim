@@ -252,6 +252,19 @@ class TodoStore(
     /** Records the time of a complete sync. */
     internal fun markSynced(at: Long) = mutate { tx -> tx.db = tx.db.copy(lastSyncAt = at) }
 
+    /**
+     * Replaces the database of a store that holds nothing yet (no tasks, no account) with [db]: demo data in debug
+     * builds (`android/app/src/debug`). Returns false, changing nothing, when the store is not empty.
+     */
+    fun seed(db: Database): Boolean = mutate { tx ->
+        if (tx.db.account != null || tx.tasks.isNotEmpty() || tx.shadows.isNotEmpty()) return@mutate false
+        tx.db = db
+        tx.tasks.clear(); tx.tasks.putAll(db.tasks)
+        tx.shadows.clear(); tx.shadows.putAll(db.shadows)
+        tx.pendingDeletes.clear(); tx.pendingDeletes.putAll(db.pendingDeletes)
+        true
+    }
+
     // endregion
 
     // region Plumbing

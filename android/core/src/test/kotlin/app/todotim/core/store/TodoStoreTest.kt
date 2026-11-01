@@ -43,6 +43,16 @@ class TodoStoreTest {
         assertNull(unknown.sectionId)
     }
 
+    @Test fun seedReplacesOnlyAnEmptyStore() {
+        val demo = TodoStore(base).apply { addTask("Demo", projectId = "work") }.database.value
+        assertTrue(TodoStore().seed(demo))
+        store.addTask("Mine")
+        val before = store.database.value
+        assertFalse(store.seed(demo))
+        assertEquals(before, store.database.value)
+        assertFalse(TodoStore(Database(account = Account("https://example.com/", "tim"))).seed(demo))
+    }
+
     @Test fun updateKeepsStructureAndBumpsUpdatedAt() {
         val a = store.addTask("A", projectId = "work")
         now += 10

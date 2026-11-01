@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="utf-8"?>
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+    <application>
+        <!-- Debug builds only: fills an empty store with demo data (README screenshots), then opens the app.
+             adb shell am start -n app.todotim.android.debug/app.todotim.android.DemoActivity -->
+        <activity
+            android:name=".DemoActivity"
+            android:exported="true"
+            android:theme="@style/Theme.TodoTim" />
+    </application>
+</manifest>

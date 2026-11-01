@@ -130,6 +130,9 @@ root; both the Swift tests and the Kotlin tests check against it, so a contract 
 
 Release builds are minified (R8) and signed with `android/keystore.properties` (gitignored; `storeFile`
 relative to `android/`, `storePassword`, `keyAlias`, `keyPassword`) when present, else with the debug key.
+Debug builds are `app.todotim.android.debug` ("TodoTim debug"), installed next to the release app with their
+own data. Their `DemoActivity` fills an empty store with the README screenshot's demo data
+(`adb shell am start -n app.todotim.android.debug/app.todotim.android.DemoActivity`).
 
 Needs JDK 21 (`JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home` on the Mac) and an
 Android SDK in `android/local.properties` (`sdk.dir=…`).

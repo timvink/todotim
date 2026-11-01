@@ -35,6 +35,11 @@ android {
     }
 
     buildTypes {
+        // Installs next to the release app (own data, own sync account), labelled "TodoTim debug"
+        // (src/debug/res/values/strings.xml).
+        debug {
+            applicationIdSuffix = ".debug"
+        }
         release {
             signingConfig = signingConfigs.findByName("release") ?: signingConfigs.getByName("debug")
             isMinifyEnabled = true
