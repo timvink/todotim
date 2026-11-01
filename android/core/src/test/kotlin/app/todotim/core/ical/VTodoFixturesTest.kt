@@ -94,6 +94,15 @@ class VTodoFixturesTest {
         }
     }
 
+    @Test fun numberFormat() {
+        val cases = Json.parseToJsonElement(File(dir, "numbers.json").readText()).jsonObject["format"]!!.jsonArray
+        assertTrue(cases.isNotEmpty())
+        for (c in cases) {
+            val value = c.jsonObject["value"]!!.str()!!
+            assertEquals(value, c.jsonObject["text"]!!.str(), VTodo.format(value.toDouble()))
+        }
+    }
+
     // JSON shape
 
     private fun JsonElement.str(): String? = if (this is JsonNull) null else jsonPrimitive.content

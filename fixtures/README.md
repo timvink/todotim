@@ -1,7 +1,7 @@
 # Shared fixtures
 
-Golden data checked by both the Swift tests (`Tests/TodoCoreTests`) and the Kotlin tests
-(`android/core/src/test`). A behaviour change updates the fixture and both implementations together.
+Golden data checked by both the Swift tests (`Tests/TodoCoreTests/FixtureTests.swift`) and the Kotlin
+tests (`android/core/src/test`). A behaviour change updates the fixture and both implementations together.
 All dates are ISO `yyyy-MM-dd` local calendar dates. Locales are identifiers such as `en_US`.
 
 ## recurrence
@@ -113,6 +113,10 @@ the result with `after.ics`. `edit.json`:
   that id with the read `sectionName` and `sectionOrder` (`""` and `0` when missing); else null.
 - `unchanged: true`: patch must return nil (nothing to write); there is no `after.ics`.
 
+**`numbers.json`.** `format`: `{ "value", "text" }`, how an order is written in `X-TODOTIM-ORDER` and
+`X-ORDER` (`VTodo.format`): a whole number below 10^15 without a fraction, otherwise Swift's
+`Double.description` (`1e-05`, `1000000000000000.0`, `1e+16`). `value` is a string, parsed as a Double.
+
 **`make/<name>.json` + `make/<name>.ics`.** `VTodo.make(task, uid:, parentUID:, section:)` must return the
 `.ics`. The JSON holds `task` (a task object, without `uid`, `sectionName` and `sectionOrder`), `uid`,
 `parentUid` (string or null) and `section` (as in `edit.json`, or null).
@@ -120,11 +124,11 @@ the result with `after.ics`. `edit.json`:
 ## urls
 
 `urls.json`: the URL rules of `WebDAVClient` (docs/caldav.md, "Limits"): what a server URL may be, how a
-relative path becomes a request URL, and which hrefs from a server are accepted. Checked by the Kotlin tests
-(`dav/UrlFixturesTest`); the Swift `WebDAVClientTests` cover the same cases inline.
+relative path becomes a request URL, and which hrefs from a server are accepted.
 
 - `baseURL`: `normalizedBaseURL`.
   - `valid`: `{ "input", "normalized" }`; the input is accepted and normalized to that URL (trailing slash).
+    Scheme and host compare in lowercase: Foundation keeps their spelling, OkHttp lowercases them.
   - `insecure`: plain http:// to a host other than localhost; refused as insecure.
   - `invalid`: refused as an invalid URL (no scheme or host, credentials, query, fragment, other schemes).
 - `requestPath`: `url(for:)` on a client with server URL `base`.

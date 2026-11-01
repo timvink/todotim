@@ -1,6 +1,8 @@
 package app.todotim.core.ical
 
 import java.math.BigDecimal
+import java.math.MathContext
+import java.math.RoundingMode
 import java.text.BreakIterator
 
 // Small helpers that reproduce Swift `String` semantics the Swift TodoCore relies on, so the Kotlin port
@@ -74,8 +76,15 @@ internal fun swiftDescription(d: Double): String {
     if (d.isInfinite()) return if (d > 0) "inf" else "-inf"
     if (d == 0.0) return if (1.0 / d < 0) "-0.0" else "0.0"
     val sign = if (d < 0) "-" else ""
-    // JDK 19+ Double.toString gives the shortest digits that read back as the same value.
-    val bd = BigDecimal(java.lang.Double.toString(Math.abs(d))).stripTrailingZeros()
+    // JDK 19+ Double.toString gives the shortest digits that read back as the same value, but at least two
+    // (the closest two-digit decimal: 4.9E-324 for Double.MIN_VALUE); Swift writes one digit when one reads
+    // back (5e-324), the closest such digit when both neighbours do.
+    var bd = BigDecimal(java.lang.Double.toString(Math.abs(d))).stripTrailingZeros()
+    if (bd.precision() == 2) {
+        bd = listOf(RoundingMode.HALF_EVEN, RoundingMode.UP, RoundingMode.DOWN)
+            .map { bd.round(MathContext(1, it)) }
+            .firstOrNull { it.toDouble() == Math.abs(d) }?.stripTrailingZeros() ?: bd
+    }
     val digits = bd.unscaledValue().toString()
     // value = 0.<digits> × 10^decimalExponent
     val decimalExponent = digits.length - bd.scale()
