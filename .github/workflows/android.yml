@@ -22,8 +22,7 @@ jobs:
           persist-credentials: false
       # The runner image ships JDK 21 and an Android SDK (ANDROID_HOME).
       - name: Test and build
-        env:
-          JAVA_HOME: ${{ env.JAVA_HOME_21_X64 }}
         run: |
+          export JAVA_HOME="$JAVA_HOME_21_X64"
           echo "sdk.dir=$ANDROID_HOME" > local.properties
           ./gradlew --no-daemon :core:test :app:testDebugUnitTest :app:assembleDebug
