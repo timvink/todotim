@@ -1,0 +1,13 @@
+{
+  "set": {
+    "labels": [
+      "a,b",
+      "c"
+    ],
+    "parentId": "new-parent",
+    "order": -1.5,
+    "priority": 1,
+    "collapsed": true,
+    "description": "Line 1\nLine 2; done"
+  }
+}

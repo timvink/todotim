@@ -1,0 +1,21 @@
+{
+  "id": "sec",
+  "uid": "sec",
+  "projectId": "p",
+  "sectionId": "s1",
+  "sectionName": "Name, with: \"quotes\"\nand ^",
+  "sectionOrder": 1.5,
+  "parentId": null,
+  "content": "In a section",
+  "description": "",
+  "priority": 4,
+  "due": null,
+  "labels": [],
+  "isCompleted": false,
+  "completedAt": null,
+  "order": 3,
+  "collapsed": false,
+  "recurrence": null,
+  "createdAt": "1970-01-01T00:00:00Z",
+  "updatedAt": "1970-01-01T00:00:00Z"
+}

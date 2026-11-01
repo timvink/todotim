@@ -1,0 +1,21 @@
+{
+  "id": "unk",
+  "uid": "unk",
+  "projectId": "p",
+  "sectionId": null,
+  "sectionName": null,
+  "sectionOrder": null,
+  "parentId": null,
+  "content": "",
+  "description": "",
+  "priority": 4,
+  "due": "2026-11-03",
+  "labels": [],
+  "isCompleted": false,
+  "completedAt": null,
+  "order": -978307200,
+  "collapsed": false,
+  "recurrence": null,
+  "createdAt": "1970-01-01T00:00:00Z",
+  "updatedAt": "1970-01-01T00:00:00Z"
+}

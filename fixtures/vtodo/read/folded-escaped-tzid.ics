@@ -1,0 +1,13 @@
+BEGIN:VCALENDAR
+VERSION:2.0
+BEGIN:VTODO
+UID:fold-1
+SUMMARY:Long line that is
+  folded across
+	three lines é
+ é
+DESCRIPTION:a\nb\, c\; d\\ e\Nf
+DUE;TZID=America/New_York:20261103T220000
+DTSTAMP:20261020T100000Z
+END:VTODO
+END:VCALENDAR
