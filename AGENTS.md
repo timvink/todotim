@@ -108,3 +108,19 @@ Performance benchmarks: `swift test -c release -Xswiftc -enable-testing --filter
 In the app: `scripts/perf-launch.sh DATA_DIR` (launch timing, medians) and `scripts/perf.sh` (scripted interactions).
 Password is stored in the Keychain under `SyncSettings.credentialAccount` (`user@host[:port]`); the settings in
 UserDefaults. `~/.todotim.toml` is only read when owned by the user and not group/world-writable (`AppConfig.load`).
+
+## Android app (`android/`)
+
+Kotlin + Jetpack Compose companion app (sideloaded, single user), Gradle rooted at `android/`. It follows
+the same contract ([docs/caldav.md](docs/caldav.md)). Shared golden data lives in `fixtures/` at the repo
+root; both the Swift tests and the Kotlin tests check against it, so a contract change updates both.
+
+- `android/core` — pure Kotlin/JVM (no Android APIs): models, iCalendar, VTODO mapping, recurrence,
+  quick add, CalDAV client, sync, store. Package `app.todotim.core`.
+- `android/app` — Compose UI, WorkManager background sync, credentials. Package `app.todotim.android`.
+
+    cd android && ./gradlew :core:test            # JVM tests, incl. fixtures
+    cd android && ./gradlew :app:assembleDebug    # build/outputs/apk/debug/app-debug.apk
+
+Needs JDK 21 (`JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home` on the Mac) and an
+Android SDK in `android/local.properties` (`sdk.dir=…`).
