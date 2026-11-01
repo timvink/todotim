@@ -30,6 +30,7 @@ import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.remember
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
@@ -66,7 +67,8 @@ fun SettingsScreen(
 ) {
     var url by rememberSaveable(settings.serverUrl) { mutableStateOf(settings.serverUrl) }
     var user by rememberSaveable(settings.username) { mutableStateOf(settings.username) }
-    var password by rememberSaveable { mutableStateOf("") }
+    // Not rememberSaveable: the password must not land in the saved-instance-state Bundle.
+    var password by remember { mutableStateOf("") }
     var saveError by rememberSaveable { mutableStateOf<String?>(null) }
     val changed = url != settings.serverUrl || user != settings.username || password.isNotEmpty()
     Column(Modifier.fillMaxSize()) {
@@ -99,7 +101,9 @@ fun SettingsScreen(
             OutlinedTextField(
                 value = password, onValueChange = { password = it },
                 label = { Text("Password") },
-                placeholder = { if (settings.hasPassword) Text("Saved — type to replace") },
+                placeholder = {
+                    if (settings.hasPassword && url == settings.serverUrl && user == settings.username) Text("Saved — type to replace")
+                },
                 singleLine = true,
                 visualTransformation = PasswordVisualTransformation(),
                 keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password, imeAction = ImeAction.Done),

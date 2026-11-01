@@ -8,6 +8,7 @@ import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.FlowPreview
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharedFlow
@@ -53,8 +54,15 @@ class SyncManager(
     @Volatile private var lastAttemptAt: Long? = null
     @Volatile private var afterLastSync: Database? = null
 
+    /** Delay before a follow-up sync (set by [syncAfterEdits]). */
+    @Volatile private var followUpDelayMillis: Long = 3_000
+
     /** Runs one sync (or waits for the running one, then runs). Returns whether it succeeded. */
-    suspend fun sync(manual: Boolean = false): Boolean {
+    suspend fun sync(manual: Boolean = false): Boolean = sync(manual, followUp = null)
+
+    /** [followUp]: for a follow-up sync, the unsynced count the sync before it ended with; it is followed up
+     *  again only when it brought that count down (otherwise its writes were refused and it would loop). */
+    private suspend fun sync(manual: Boolean, followUp: Int?): Boolean {
         val account = credentials()
         if (account == null) {
             if (manual) errorEvents.tryEmit("No server set up. Add one in Settings.")
@@ -66,6 +74,7 @@ class SyncManager(
         try {
             val result = controller.syncNow(account.settings, account.password)
             state.update { it.copy(error = null, warnings = result.warnings) }
+            scheduleFollowUp(followUp)
             return true
         } catch (e: CancellationException) {
             throw e
@@ -78,6 +87,20 @@ class SyncManager(
         } finally {
             afterLastSync = store.database.value
             if (running.decrementAndGet() == 0) state.update { it.copy(isSyncing = false) }
+        }
+    }
+
+    /**
+     * Local changes the sync did not push (an edit made while it ran, or a write it could not make) get one more
+     * sync after [followUpDelayMillis]. The database the sync leaves behind is not an edit for [syncAfterEdits],
+     * so without this an edit made during the push would wait for the next resume or background sync.
+     */
+    private fun scheduleFollowUp(followUp: Int?) {
+        val unsynced = store.snapshot.value.unsyncedCount
+        if (unsynced == 0 || (followUp != null && unsynced >= followUp)) return
+        scope.launch {
+            delay(followUpDelayMillis)
+            if (store.snapshot.value.unsyncedCount > 0) sync(manual = false, followUp = unsynced)
         }
     }
 
@@ -95,6 +118,7 @@ class SyncManager(
      */
     @OptIn(FlowPreview::class)
     fun syncAfterEdits(debounceMillis: Long = 3_000): Job = scope.launch {
+        followUpDelayMillis = debounceMillis
         store.database.drop(1).debounce(debounceMillis).collect { db ->
             if (db !== afterLastSync && store.snapshot.value.unsyncedCount > 0) sync()
         }

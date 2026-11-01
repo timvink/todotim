@@ -4,6 +4,7 @@ import app.todotim.core.dav.CalDAVClient
 import app.todotim.core.dav.CalDAVServer
 import app.todotim.core.dav.CalendarHome
 import app.todotim.core.dav.SyncError
+import app.todotim.core.dav.WebDAVClient
 import app.todotim.core.store.Account
 import app.todotim.core.store.Persistence
 import app.todotim.core.store.TodoStore
@@ -37,9 +38,11 @@ class SyncController(
     suspend fun syncNow(settings: SyncSettings, password: String, now: () -> Long = System::currentTimeMillis): SyncResult =
         running.withLock {
             if (password.isEmpty()) throw SyncError.MissingPassword
-            val account = Account(settings.serverUrl.trim(), settings.username.trim())
-            val db = store.database.value
-            if (db.account != account) store.resetAccount(account)
+            val account = Account(normalizedServerUrl(settings.serverUrl), settings.username.trim())
+            val stored = store.database.value.account
+            if (stored == null || Account(normalizedServerUrl(stored.serverUrl), stored.username) != account) {
+                store.resetAccount(account)
+            }
             val cached = store.database.value.home
             try {
                 var server = connect(settings, password, cached)
@@ -58,6 +61,18 @@ class SyncController(
                 persistence?.flush(store)
             }
         }
+
+    companion object {
+        /**
+         * [serverUrl] as the sync uses it ([WebDAVClient.normalizedBaseURL]: trimmed, trailing slash, lowercase
+         * host, no default port), so spellings of one server are one account. A URL the sync refuses is only trimmed.
+         */
+        fun normalizedServerUrl(serverUrl: String): String = try {
+            WebDAVClient.normalizedBaseURL(serverUrl).toString()
+        } catch (e: SyncError) {
+            serverUrl.trim()
+        }
+    }
 
     private fun isHomeGone(e: SyncError, server: CalDAVServer): Boolean = when (e) {
         is SyncError.NotFound -> e.path.trimEnd('/') == server.home.trimEnd('/')

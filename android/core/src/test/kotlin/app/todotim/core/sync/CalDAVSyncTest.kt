@@ -454,6 +454,19 @@ class CalDAVSyncTest {
         assertNotNull(other.ics("${other.home}/todotim-inbox/$unsynced.ics"))
     }
 
+    @Test fun spellingsOfOneServerAreOneAccount() = runTest {
+        put(inbox, "a", "Milk")
+        val controller = SyncController(store, zone = utc) { _, _, _ -> server }
+        controller.syncNow(SyncSettings("https://dav.example.com/dav", "tim"), "pw")
+        assertEquals(Account("https://dav.example.com/dav/", "tim"), store.database.value.account)
+        // A pending edit of a synced task survives: another spelling is not another account.
+        now += HOUR
+        store.updateTask("a") { copy(content = "Oat milk") }
+        controller.syncNow(SyncSettings(" https://DAV.Example.com:443/dav/ ", "tim"), "pw")
+        assertEquals("Oat milk", store.snapshot.value.task("a")!!.content)
+        assertEquals("SUMMARY:Oat milk", line(server.ics("$inbox/a.ics")!!, "SUMMARY"))
+    }
+
     @Test fun aChangedHomeMatchesByIdAndDeletesNothing() = runTest {
         store.setHome(server.calendarHome)
         put(inbox, "a", "Milk")

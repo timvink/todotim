@@ -6,11 +6,15 @@ import android.security.keystore.KeyProperties
 import android.util.Base64
 import app.todotim.core.dav.SyncError
 import app.todotim.core.dav.WebDAVClient
+import app.todotim.core.sync.SyncController
 import app.todotim.core.sync.SyncSettings
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import java.io.IOException
 import java.security.GeneralSecurityException
+import java.security.InvalidKeyException
+import java.security.ProviderException
 import java.security.KeyStore
 import javax.crypto.Cipher
 import javax.crypto.KeyGenerator
@@ -44,6 +48,34 @@ fun validateServerSettings(serverUrl: String, username: String): String? {
     return null
 }
 
+/** What [SyncSettingsStore.save] writes: the normalized URL, the trimmed username and what to do with the password. */
+data class SettingsChange(
+    val serverUrl: String,
+    val username: String,
+    /** The password to store; null keeps the stored one, "" removes it. */
+    val password: String?,
+)
+
+/**
+ * Plans saving [serverUrl], [username] and [password] (null or empty: keep the stored one) over [stored].
+ * The URL is stored normalized as the sync uses it ([SyncController.normalizedServerUrl]), so `…/dav` and `…/dav/`
+ * are one account. The password belongs to (URL, username): when either changes, the stored one is never kept,
+ * so it is not sent to another server or user. Throws [IllegalArgumentException] with a message for the user.
+ */
+fun planSettingsChange(stored: ServerSettings, serverUrl: String, username: String, password: String?): SettingsChange {
+    validateServerSettings(serverUrl, username)?.let { throw IllegalArgumentException(it) }
+    val url = SyncController.normalizedServerUrl(serverUrl)
+    val user = username.trim()
+    val sameAccount = url == SyncController.normalizedServerUrl(stored.serverUrl) && user == stored.username.trim()
+    return when {
+        !password.isNullOrEmpty() -> SettingsChange(url, user, password)
+        sameAccount -> SettingsChange(url, user, null)
+        stored.hasPassword || stored.isConfigured ->
+            throw IllegalArgumentException("Enter the password for this server and username.")
+        else -> SettingsChange(url, user, "")
+    }
+}
+
 /**
  * Server URL and username in SharedPreferences; the password encrypted with an AES-GCM key that lives in the
  * Android Keystore (it never leaves the device; the preferences hold only IV and ciphertext). Backups and device
@@ -55,16 +87,27 @@ class SyncSettingsStore(context: Context) {
     val settings: StateFlow<ServerSettings> = state.asStateFlow()
 
     /**
-     * Saves URL and username, and the password unless it is null (null keeps the stored one).
-     * Throws [IllegalArgumentException] with a message for the user when [validateServerSettings] refuses them.
+     * Saves URL and username, and the password unless it is null or empty (then the stored one is kept, which is only
+     * allowed for the same server and username: see [planSettingsChange]).
+     * Throws [IllegalArgumentException] with a message for the user when the values are refused or the password
+     * cannot be encrypted.
      */
     fun save(serverUrl: String, username: String, password: String?) {
-        validateServerSettings(serverUrl, username)?.let { throw IllegalArgumentException(it) }
+        val change = planSettingsChange(state.value, serverUrl, username, password)
+        val sealed = change.password?.takeIf { it.isNotEmpty() }?.let { plain ->
+            try {
+                PasswordCipher.encrypt(plain)
+            } catch (e: Exception) {
+                if (!PasswordCipher.isKeystoreFailure(e)) throw e
+                throw IllegalArgumentException("Could not store the password securely: ${e.message ?: e::class.java.simpleName}", e)
+            }
+        }
         val edit = prefs.edit()
-            .putString(KEY_URL, serverUrl.trim())
-            .putString(KEY_USER, username.trim())
-        if (password != null) {
-            if (password.isEmpty()) edit.remove(KEY_PASSWORD) else edit.putString(KEY_PASSWORD, PasswordCipher.encrypt(password))
+            .putString(KEY_URL, change.serverUrl)
+            .putString(KEY_USER, change.username)
+        when {
+            sealed != null -> edit.putString(KEY_PASSWORD, sealed)
+            change.password != null -> edit.remove(KEY_PASSWORD)
         }
         edit.apply()
         state.value = read()
@@ -95,9 +138,23 @@ class SyncSettingsStore(context: Context) {
 /** AES-256-GCM with a non-exportable Android Keystore key. Stored form: base64(iv) ":" base64(ciphertext+tag). */
 private object PasswordCipher {
     private const val ALIAS = "todotim-sync-password"
+    private const val KEYSTORE = "AndroidKeyStore"
     private const val TRANSFORMATION = "AES/GCM/NoPadding"
 
-    fun encrypt(plain: String): String {
+    /** Encrypts; a key the Keystore invalidated is deleted and made again, once. Throws Keystore failures. */
+    fun encrypt(plain: String): String = try {
+        seal(plain)
+    } catch (e: InvalidKeyException) {
+        // KeyPermanentlyInvalidatedException among them: the old ciphertext is unreadable anyway.
+        KeyStore.getInstance(KEYSTORE).apply { load(null) }.deleteEntry(ALIAS)
+        seal(plain)
+    }
+
+    /** Whether [e] is a failure of the Keystore or the cipher (rather than a bug). */
+    fun isKeystoreFailure(e: Exception) =
+        e is GeneralSecurityException || e is ProviderException || e is IOException || e is IllegalStateException
+
+    private fun seal(plain: String): String {
         val cipher = Cipher.getInstance(TRANSFORMATION)
         cipher.init(Cipher.ENCRYPT_MODE, key())
         val sealed = cipher.doFinal(plain.toByteArray(Charsets.UTF_8))
@@ -116,12 +173,16 @@ private object PasswordCipher {
         null
     } catch (e: IndexOutOfBoundsException) {
         null
+    } catch (e: ProviderException) {
+        null
+    } catch (e: IOException) {
+        null
     }
 
     private fun key(): SecretKey {
-        val keyStore = KeyStore.getInstance("AndroidKeyStore").apply { load(null) }
+        val keyStore = KeyStore.getInstance(KEYSTORE).apply { load(null) }
         (keyStore.getKey(ALIAS, null) as? SecretKey)?.let { return it }
-        val generator = KeyGenerator.getInstance(KeyProperties.KEY_ALGORITHM_AES, "AndroidKeyStore")
+        val generator = KeyGenerator.getInstance(KeyProperties.KEY_ALGORITHM_AES, KEYSTORE)
         generator.init(
             KeyGenParameterSpec.Builder(ALIAS, KeyProperties.PURPOSE_ENCRYPT or KeyProperties.PURPOSE_DECRYPT)
                 .setBlockModes(KeyProperties.BLOCK_MODE_GCM)

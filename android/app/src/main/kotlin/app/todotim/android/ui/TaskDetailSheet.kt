@@ -134,19 +134,46 @@ private fun LocationRow(task: TodoTask, snapshot: Snapshot, store: TodoStore, on
     }
 }
 
+/**
+ * A text field's editor state over a stored value: [text] is what the field shows, [stored] the stored value it
+ * was last in step with (read from the store or written by the field).
+ */
+class EditorText(initial: String) {
+    var text by mutableStateOf(initial)
+    var stored = initial
+
+    /**
+     * Takes a stored value that changed elsewhere (a sync): the field shows it unless it already shows the same text
+     * ([normalize] maps the field's text to what it would store), so the user's next keystroke is not made on
+     * stale text and does not write that back over the newer value.
+     */
+    fun follow(value: String, normalize: (String) -> String) {
+        if (value == stored) return
+        stored = value
+        if (normalize(text) != value) text = value
+    }
+}
+
 @Composable
 private fun TitleAndDescription(task: TodoTask, store: TodoStore, onComplete: (TodoTask) -> Unit) {
-    var title by remember(task.id) { mutableStateOf(task.content) }
-    var description by remember(task.id) { mutableStateOf(task.description) }
+    val title = remember(task.id) { EditorText(task.content) }
+    val description = remember(task.id) { EditorText(task.description) }
+    // A sync may change the stored text while the sheet is open: show it, so the next keystroke builds on it.
+    title.follow(task.content, String::trim)
+    description.follow(task.description) { it }
     val textColor = MaterialTheme.colorScheme.onSurface
     Row(Modifier.padding(start = 4.dp, end = 16.dp), verticalAlignment = Alignment.Top) {
         PriorityCheckbox(task.priority, task.isCompleted, onClick = { onComplete(task) }, size = 24.dp)
         Column(Modifier.weight(1f).padding(top = 8.dp, start = 4.dp)) {
             BasicTextField(
-                value = title,
+                value = title.text,
                 onValueChange = { v ->
-                    title = v.replace("\n", " ")
-                    if (title.isNotBlank()) store.edit(task.id) { it.copy(content = title.trim()) }
+                    title.text = v.replace("\n", " ")
+                    val content = title.text.trim()
+                    if (content.isNotBlank()) {
+                        title.stored = content
+                        store.edit(task.id) { it.copy(content = content) }
+                    }
                 },
                 textStyle = TextStyle(
                     fontSize = 20.sp, fontWeight = FontWeight.SemiBold, color = textColor,
@@ -156,13 +183,17 @@ private fun TitleAndDescription(task: TodoTask, store: TodoStore, onComplete: (T
                 modifier = Modifier.fillMaxWidth(),
             )
             BasicTextField(
-                value = description,
-                onValueChange = { v -> description = v; store.edit(task.id) { it.copy(description = v) } },
+                value = description.text,
+                onValueChange = { v ->
+                    description.text = v
+                    description.stored = v
+                    store.edit(task.id) { it.copy(description = v) }
+                },
                 textStyle = TextStyle(fontSize = 15.sp, color = textColor),
                 cursorBrush = SolidColor(MaterialTheme.colorScheme.primary),
                 modifier = Modifier.fillMaxWidth().padding(top = 8.dp),
                 decorationBox = { inner ->
-                    if (description.isEmpty()) Text("Description", color = todoColors.secondaryText, fontSize = 15.sp)
+                    if (description.text.isEmpty()) Text("Description", color = todoColors.secondaryText, fontSize = 15.sp)
                     inner()
                 },
             )

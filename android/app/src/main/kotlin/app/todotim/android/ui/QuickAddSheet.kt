@@ -86,13 +86,8 @@ fun QuickAddSheet(
     var chipProject by remember { mutableStateOf(defaults.projectId to defaults.sectionId) }
     var picker by remember { mutableStateOf<QuickAddPicker?>(null) }
 
-    val projectNames = remember(snapshot) { snapshot.projects.map { it.name } }
-    val sectionNames = remember(snapshot) { snapshot.projects.flatMap { p -> snapshot.sections(p.id).map { it.name } }.distinct() }
-    val parsed = remember(field.text, today, projectNames, sectionNames) {
-        QuickAddParser.parse(field.text, today, projectNames = projectNames, sectionNames = sectionNames)
-    }
-    val tokens = remember(field.text, today, projectNames, sectionNames) {
-        QuickAddParser.tokens(field.text, today, projectNames = projectNames, sectionNames = sectionNames)
+    val (parsed, tokens) = remember(field.text, today, snapshot, chipProject.first) {
+        parseQuickAdd(field.text, today, snapshot, chipProject.first)
     }
     val (projectId, sectionId) = resolvePlace(parsed, snapshot, chipProject)
     val due = if (parsed.noDate) null else parsed.due ?: chipDue
@@ -207,7 +202,30 @@ private enum class QuickAddPicker { Date, Priority, Labels, Project }
  * Where the task goes: the project of a `#project` token (else [chosen]'s), and the section of a `/section` token
  * in it (else [chosen]'s section when the project is the chosen one). Names match case-insensitively.
  */
-private fun resolvePlace(parsed: ParsedTask, snapshot: Snapshot, chosen: Pair<EntityID, EntityID?>): Pair<EntityID, EntityID?> {
+/**
+ * Parses quick-add [text] with the section names of the project the task goes to: the one a #project token names,
+ * else [chosenProjectId]. Sections of other projects would make `/Planning review` match a longer name that the
+ * target project does not have. When the #project token changes the target, the text is parsed again with its
+ * sections.
+ */
+internal fun parseQuickAdd(
+    text: String,
+    today: LocalDate,
+    snapshot: Snapshot,
+    chosenProjectId: EntityID,
+): Pair<ParsedTask, List<ParsedToken>> {
+    val projectNames = snapshot.projects.map { it.name }
+    fun analyse(projectId: EntityID): Pair<ParsedTask, List<ParsedToken>> {
+        val sectionNames = snapshot.sections(projectId).map { it.name }
+        return QuickAddParser.parse(text, today, projectNames = projectNames, sectionNames = sectionNames) to
+            QuickAddParser.tokens(text, today, projectNames = projectNames, sectionNames = sectionNames)
+    }
+    val first = analyse(chosenProjectId)
+    val target = resolvePlace(first.first, snapshot, chosenProjectId to null).first
+    return if (target == chosenProjectId) first else analyse(target)
+}
+
+internal fun resolvePlace(parsed: ParsedTask, snapshot: Snapshot, chosen: Pair<EntityID, EntityID?>): Pair<EntityID, EntityID?> {
     val project = parsed.projectName?.let { name -> snapshot.projects.firstOrNull { it.name.equals(name, ignoreCase = true) } }
     val projectId = project?.id ?: chosen.first
     val section = parsed.sectionName?.let { name ->
