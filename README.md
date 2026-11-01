@@ -1,8 +1,8 @@
 # TodoTim
 
 A fast, calm, native macOS to-do app, driven from the keyboard with vim motions and dressed in
-[Catppuccin](https://catppuccin.com). Your tasks stay on your own CalDAV server, as standard task lists that other
-task apps can share.
+[Catppuccin](https://catppuccin.com), with a companion app for Android. Your tasks stay on your own CalDAV server,
+as standard task lists that other task apps can share.
 
 ![TodoTim showing a project with sections, tasks and sub-tasks](docs/screenshot.png)
 
@@ -24,7 +24,26 @@ the calendar and board views.
 - Local-first: works offline, and syncs over CalDAV in the background
 - Native SwiftUI app with no third-party dependencies
 
+## Android
+
+The Android app takes your lists with you. It syncs with the same CalDAV server and keeps everything the Mac
+app writes: projects, sections, sub-tasks, labels and order.
+
+<img src="docs/screenshot-android.png" alt="TodoTim on Android showing a project with sections and tasks" width="300"> <img src="docs/screenshot-android-quickadd.png" alt="Quick Add on Android with the date, priority, label and project highlighted" width="300">
+
+- Inbox, projects with sections and collapsible sub-tasks, labels and search
+- Quick Add with the same syntax as on the Mac
+- Swipe right to complete, swipe left to reschedule; tap a task to edit it
+- Syncs on launch, a few seconds after each change, on pull-to-refresh and every 15 minutes in the background
+- Works offline; the password is encrypted with a key in the Android Keystore
+
+It leaves out creating projects and sections: make those on the Mac.
+
 ## Install
+
+Each release has both apps, with the same version number.
+
+### macOS
 
 1. Download `TodoTim-vX.Y.Z.zip` from the [latest release](https://github.com/timvink/todotim/releases/latest).
 2. Verify that GitHub Actions built the zip from this repository (needs the [GitHub CLI](https://cli.github.com)):
@@ -44,6 +63,18 @@ check in step 2 is what ties the download to this repository. Don't remove the q
 step, but needs a paid Apple Developer account.)
 
 Requires macOS 15 (Sequoia) or later, on Apple silicon or Intel.
+
+### Android
+
+1. Download `TodoTim-vX.Y.Z.apk` from the [latest release](https://github.com/timvink/todotim/releases/latest),
+   and verify it like the Mac app: `gh attestation verify TodoTim-vX.Y.Z.apk --repo timvink/todotim`.
+2. Open it on your phone and allow your browser or file manager to install apps when Android asks.
+
+To get updates, add `https://github.com/timvink/todotim` to [Obtainium](https://obtainium.imranr.dev) instead:
+it installs each new release's APK. Every release is signed with the same key, so updates install over the
+previous version and keep your data.
+
+Requires Android 10 or later.
 
 ## Sync with CalDAV
 
@@ -65,6 +96,9 @@ For example, with Nextcloud:
    - **Server URL**: `https://your.cloud/remote.php/dav/`
    - **Username** and the **app password**
 3. Click **Test connection**, turn on sync, and close the window.
+
+On Android, open **Browse › ⚙**, enter the same server URL, username and an app password of its own, and tap
+**Save**.
 
 For another server, enter its CalDAV address and your username and password, for example
 `https://dav.example.com/` for Radicale or `https://dav.example.com/dav.php/` for Baïkal. TodoTim finds your
@@ -181,6 +215,10 @@ The other shortcuts follow Todoist and macOS:
     swift build
     swift test
     scripts/bundle.sh && open build/TodoTim.app
+
+The Android app is a Gradle project in `android/` (JDK 21 and the Android SDK):
+
+    cd android && ./gradlew :core:test :app:assembleDebug
 
 See [CONTRIBUTING.md](CONTRIBUTING.md) for development and the release process, and [AGENTS.md](AGENTS.md) for the
 architecture.

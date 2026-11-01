@@ -14,8 +14,11 @@ android {
         applicationId = "app.todotim.android"
         minSdk = 29
         targetSdk = 36
-        versionCode = 1
-        versionName = "0.1.0"
+        // Releases pass the tag's version (-PtodotimVersion=X.Y.Z); local builds are 0.0.1.
+        val version = (findProperty("todotimVersion") as String?) ?: "0.0.1"
+        val (major, minor, patch) = version.split(".").map { it.toInt() }
+        versionCode = major * 10000 + minor * 100 + patch
+        versionName = version
     }
 
     // Release signing from android/keystore.properties (gitignored: storeFile, storePassword, keyAlias,
