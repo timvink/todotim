@@ -9,6 +9,7 @@ import TodoCore
 /// focusable, so a local NSEvent monitor is used instead. Keys pass through untouched
 /// while a text field has focus, while a modifier (⌘/⌃/⌥) is held (menu commands
 /// handle those), and in windows other than the main window (popovers, alerts, Settings).
+/// While a picker popover is open, keys that reach the main window are forwarded to it.
 @MainActor
 final class KeyRouter {
     private let model: AppModel
@@ -45,6 +46,17 @@ final class KeyRouter {
         if !event.modifierFlags.intersection([.command, .control, .option]).isEmpty { return false }
         let chars = event.charactersIgnoringModifiers ?? ""
         let isEscape = event.keyCode == Key.escape
+
+        // A picker popover (t / @ / v) is open but the main window got the key: the popover is
+        // not key. Hand the key to the popover's field, never to the list (`e` completes).
+        if model.popover != nil {
+            if isEscape { model.popover = nil; return true }
+            if let popover = PopoverFocus.window {
+                PopoverFocus.focusField(in: popover)
+                popover.sendEvent(event)
+            }
+            return true
+        }
 
         // In-window modals (topmost first).
         if model.showShortcuts {

@@ -398,6 +398,9 @@ private struct PopoverFrameFill: NSViewRepresentable {
             let fill = Fill(frame: frame.bounds)
             fill.autoresizingMask = [.width, .height]
             frame.addSubview(fill, positioned: .below, relativeTo: content)
+            // Typing goes to the picker's field, not the list behind it (where `e` completes
+            // the task). SwiftUI's focus request alone can land before the popover is key.
+            DispatchQueue.main.async { PopoverFocus.focusField(in: window) }
         }
     }
 
@@ -411,6 +414,30 @@ private struct PopoverFrameFill: NSViewRepresentable {
             super.viewDidChangeEffectiveAppearance()
             needsDisplay = true
         }
+    }
+}
+
+/// Keyboard focus for a picker popover, which is a window of its own.
+@MainActor
+enum PopoverFocus {
+    /// The visible popover window, if any.
+    static var window: NSWindow? {
+        NSApp.windows.first { $0.isVisible && String(describing: type(of: $0)).contains("Popover") }
+    }
+
+    /// Makes the popover key and its first editable text field the first responder (unless a
+    /// text field already is).
+    static func focusField(in window: NSWindow) {
+        if !window.isKeyWindow { window.makeKey() }
+        if window.firstResponder is NSText { return }  // the field editor of a focused field
+        if let field = firstEditableField(in: window.contentView) { window.makeFirstResponder(field) }
+    }
+
+    private static func firstEditableField(in view: NSView?) -> NSTextField? {
+        guard let view else { return nil }
+        if let field = view as? NSTextField, field.isEditable { return field }
+        for sub in view.subviews { if let f = firstEditableField(in: sub) { return f } }
+        return nil
     }
 }
 
