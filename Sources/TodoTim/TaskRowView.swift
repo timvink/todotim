@@ -113,6 +113,8 @@ struct TaskRowView: View, Equatable {
     @State private var hovering = false
     /// Row height for drop half-detection and the placeholder; not observed.
     @State private var height = HeightBox()
+    /// Pointer x over the row, so a drag knows where it started; not observed.
+    @State private var pointer = PointerBox()
 
     nonisolated static func == (a: Self, b: Self) -> Bool {
         a.item == b.item && a.task == b.task && a.isSelected == b.isSelected && a.popover == b.popover
@@ -199,13 +201,16 @@ struct TaskRowView: View, Equatable {
             }
         }
         .onGeometryChange(for: CGFloat.self, of: { $0.size.height }) { [height] h in height.value = h }
+        .onContinuousHover { [pointer] phase in
+            if case .active(let p) = phase { pointer.x = p.x }
+        }
         .onDrag {
-            MainActor.assumeIsolated { model.beginDrag(t.id, rowHeight: height.value) }
+            MainActor.assumeIsolated { model.beginDrag(t.id, rowHeight: height.value, startX: pointer.x) }
             return NSItemProvider(object: t.id as NSString)
         } preview: {
             DragPreview(task: t)
         }
-        .modifier(RowDropModifier(enabled: project == nil, model: model, item: item, collapsed: t.collapsed, height: height))
+        .modifier(RowDropModifier(enabled: project == nil, model: model, item: item, height: height))
         .padding(.leading, -Theme.grip)
     }
 
@@ -327,12 +332,11 @@ private struct RowDropModifier: ViewModifier {
     let enabled: Bool
     let model: AppModel
     let item: RowItem
-    let collapsed: Bool
     let height: HeightBox
 
     func body(content: Content) -> some View {
         if enabled {
-            content.onDrop(of: [.text], delegate: TaskRowDropDelegate(model: model, item: item, collapsed: collapsed, height: height))
+            content.onDrop(of: [.text], delegate: TaskRowDropDelegate(model: model, item: item, height: height))
         } else {
             content
         }

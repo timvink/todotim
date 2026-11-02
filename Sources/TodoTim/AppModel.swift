@@ -470,9 +470,9 @@ final class AppModel {
     }
 
     /// Starts a drag of a task row (called when the drag session begins).
-    func beginDrag(_ id: EntityID, rowHeight: CGFloat, inPanel: Bool = false, trackMouse: Bool = true) {
-        drag.begin(id, excluded: Set([id] + store.descendantIDs(of: id)), rowHeight: rowHeight, inPanel: inPanel,
-                   trackMouse: trackMouse)
+    func beginDrag(_ id: EntityID, rowHeight: CGFloat, startX: CGFloat? = nil, inPanel: Bool = false, trackMouse: Bool = true) {
+        drag.begin(id, excluded: Set([id] + store.descendantIDs(of: id)), rowHeight: rowHeight, startX: startX,
+                   inPanel: inPanel, trackMouse: trackMouse)
     }
 
     /// Moves the dragged task to `target` (or the current drop target). Returns false when
