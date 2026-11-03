@@ -134,7 +134,7 @@ fun TaskRow(item: ListItem.TaskItem, today: LocalDate, actions: TaskRowActions, 
             PriorityCheckbox(task.priority, task.isCompleted, onClick = { actions.onToggle(item) })
             Column(Modifier.weight(1f).padding(top = 9.dp, start = 4.dp, end = 8.dp)) {
                 Text(
-                    task.content,
+                    rememberRichText(task.content),
                     style = MaterialTheme.typography.bodyLarge.copy(fontSize = 16.sp),
                     color = if (task.isCompleted) todoColors.secondaryText else MaterialTheme.colorScheme.onSurface,
                     textDecoration = if (task.isCompleted) TextDecoration.LineThrough else null,
@@ -143,7 +143,7 @@ fun TaskRow(item: ListItem.TaskItem, today: LocalDate, actions: TaskRowActions, 
                 )
                 if (task.description.isNotBlank()) {
                     Text(
-                        task.description.lineSequence().first(),
+                        rememberRichText(task.description.lineSequence().first()),
                         style = MaterialTheme.typography.bodySmall,
                         color = todoColors.secondaryText,
                         maxLines = 1,

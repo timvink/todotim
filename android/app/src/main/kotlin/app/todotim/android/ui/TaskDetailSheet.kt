@@ -50,6 +50,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import app.todotim.android.R
 import app.todotim.android.data.edit
+import app.todotim.core.parsing.InlineMarkdown
 import app.todotim.core.Recurrence
 import app.todotim.core.parsing.DueDateFormatting
 import app.todotim.core.store.Snapshot
@@ -128,7 +129,7 @@ private fun LocationRow(task: TodoTask, snapshot: Snapshot, store: TodoStore, on
             ) {
                 Icon(painterResource(R.drawable.ic_subtasks), null, Modifier.size(14.dp), tint = todoColors.secondaryText)
                 Spacer(Modifier.width(6.dp))
-                Text("Subtask of ${parent.content}", color = todoColors.secondaryText, fontSize = 13.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                Text("Subtask of ${InlineMarkdown.plainText(parent.content)}", color = todoColors.secondaryText, fontSize = 13.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
             }
         }
     }
@@ -290,7 +291,7 @@ private fun Subtasks(
         ) {
             PriorityCheckbox(child.priority, child.isCompleted, onClick = { onComplete(child) }, size = 20.dp)
             Text(
-                child.content,
+                rememberRichText(child.content),
                 color = if (child.isCompleted) todoColors.secondaryText else MaterialTheme.colorScheme.onSurface,
                 textDecoration = if (child.isCompleted) TextDecoration.LineThrough else null,
                 maxLines = 2, overflow = TextOverflow.Ellipsis,
@@ -349,7 +350,7 @@ private fun DeleteRow(task: TodoTask, onDelete: () -> Unit) {
         AlertDialog(
             onDismissRequest = { confirm = false },
             title = { Text("Delete task?") },
-            text = { Text("“${task.content}” and its sub-tasks will be deleted.") },
+            text = { Text("“${InlineMarkdown.plainText(task.content)}” and its sub-tasks will be deleted.") },
             confirmButton = { TextButton(onClick = { confirm = false; onDelete() }) { Text("Delete", color = todoColors.overdue) } },
             dismissButton = { TextButton(onClick = { confirm = false }) { Text("Cancel") } },
         )
