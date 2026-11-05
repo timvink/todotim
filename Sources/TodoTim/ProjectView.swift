@@ -226,7 +226,23 @@ private struct SelectionScroller: View {
                     withAnimation(.easeOut(duration: 0.12)) { proxy.scrollTo(id) }
                 }
             }
+            // The inline editor (`a`, "Add task", a new subtask) opens without a selection, and
+            // each added task pushes it one row down: keep it on screen as it opens and moves.
+            .onChange(of: items.firstIndex { $0.id == Self.editorID }) { _, index in
+                guard index != nil else { return }
+                // Once the row is laid out, so the scroll knows its height. Without an anchor the
+                // scroll goes only as far as needed, and nowhere when the row is on screen.
+                DispatchQueue.main.async {
+                    if distance(to: Self.editorID) > Self.animatedDistance {
+                        proxy.scrollTo(Self.editorID)
+                    } else {
+                        withAnimation(.easeOut(duration: 0.12)) { proxy.scrollTo(Self.editorID) }
+                    }
+                }
+            }
     }
+
+    private static let editorID = DisplayItem.editor(depth: 0).id
 
     /// Rows between `id` and the nearest row on screen.
     private func distance(to id: String) -> Int {

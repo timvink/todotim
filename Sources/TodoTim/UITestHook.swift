@@ -30,6 +30,7 @@ import TodoCore
 ///     sidebar show|hide    show or hide the sidebar
 ///     snapshot PATH [popover]   render the window (or the open popover) into a PNG at PATH (works on
 ///                          any Space, no capture permission)
+///     mousedrag X1 Y1 X2 Y2   a real mouse drag between window points (moves the system cursor)
 ///     quit
 @MainActor
 enum UITestHook {
@@ -164,10 +165,48 @@ enum UITestHook {
             var v = frame.hitTest(frame.convert(p, from: nil))
             while let view = v, chain.count < 6 { chain.append(String(describing: type(of: view))); v = view.superview }
             out("hittest \(x),\(y): " + chain.joined(separator: " < "))
+        case "mousedrag":
+            // mousedrag X1 Y1 X2 Y2: a real mouse drag (window points from the top left), posted to
+            // the system (it moves the real cursor; needs Accessibility). Exercises the SwiftUI drop delegates.
+            let n = line.split(separator: " ").dropFirst().compactMap { Double($0) }
+            guard n.count == 4, let w = model.mainWindow, let screen = w.screen ?? NSScreen.screens.first else { break }
+            func global(_ x: Double, _ y: Double) -> CGPoint {
+                // CG global coordinates: origin at the top left of the main screen.
+                let p = NSPoint(x: w.frame.minX + x, y: w.frame.maxY - y)
+                return CGPoint(x: p.x, y: (NSScreen.screens.first?.frame.maxY ?? screen.frame.maxY) - p.y)
+            }
+            out("mousedrag window=\(w.frame) from=\(global(n[0], n[1])) to=\(global(n[2], n[3]))")
+            // Above other apps' windows: an app started from a shell is not allowed to activate itself.
+            w.level = .floating
+            w.orderFrontRegardless()
+            mouseDrag(from: global(n[0], n[1]), to: global(n[2], n[3]))
+            return
         case "quit": NSApp.terminate(nil)
         default: out("unknown command \(cmd)")
         }
         out("ok \(line)")
+    }
+
+    /// Posts mouse down, a slow drag and mouse up to this process from a background thread, so
+    /// the main thread is free to run AppKit's drag session while the events arrive.
+    private static func mouseDrag(from a: CGPoint, to b: CGPoint) {
+        Thread.detachNewThread {
+            func post(_ type: CGEventType, _ p: CGPoint) {
+                CGEvent(mouseEventSource: nil, mouseType: type, mouseCursorPosition: p, mouseButton: .left)?.post(tap: .cghidEventTap)
+            }
+            post(.leftMouseDown, a)
+            usleep(150_000)
+            let steps = 40
+            for i in 1...steps {
+                let t = CGFloat(i) / CGFloat(steps)
+                post(.leftMouseDragged, CGPoint(x: a.x + (b.x - a.x) * t, y: a.y + (b.y - a.y) * t))
+                usleep(25_000)
+            }
+            usleep(400_000)
+            post(.leftMouseUp, b)
+            usleep(1_200_000)
+            DispatchQueue.main.async { MainActor.assumeIsolated { out("ok mousedrag") } }
+        }
     }
 }
 #endif
