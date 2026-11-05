@@ -18,7 +18,15 @@ repo="$(cd "$(dirname "$0")/.." && pwd)"
 ARCHS="${ARCHS:-x86_64 aarch64}"
 VERSION="${VERSION:-dev}"
 
+# The Swift image has no curl: the SDK archive is downloaded here, on the host, and checked in the
+# container. (`swift sdk install <url>` crashes in SwiftPM on Linux, the same FoundationNetworking bug.)
+download="$repo/.build-linux-static/$(basename "$SDK_URL")"
 if [[ "${TODOTIM_IN_CONTAINER:-}" != 1 ]]; then
+  if [[ ! -f "$download" ]]; then
+    mkdir -p "$(dirname "$download")"
+    curl -fsSL -o "$download.part" "$SDK_URL"
+    mv "$download.part" "$download"
+  fi
   exec docker run --rm -e TODOTIM_IN_CONTAINER=1 -e ARCHS="$ARCHS" -e VERSION="$VERSION" \
     -v "$repo":/src -v todotim-swift-static:/cache -w /src "$SWIFT_IMAGE" bash /src/scripts/linux-build.sh
 fi
@@ -33,9 +41,13 @@ cache="${TODOTIM_BUILD_CACHE:-/cache}"
 sdks="$cache/swift-sdks"
 mkdir -p "$sdks"
 if ! swift sdk list --swift-sdks-path "$sdks" 2>/dev/null | grep -q static-linux; then
-  # Downloaded with curl and checked here (`swift sdk install <url>` crashes in SwiftPM on Linux, the same FoundationNetworking bug).
-  archive="$cache/$(basename "$SDK_URL")"
+  archive="$download"
+  [[ -f "$archive" ]] || archive="$cache/$(basename "$SDK_URL")"
   if [[ ! -f "$archive" ]]; then
+    if ! command -v curl > /dev/null; then
+      echo "Download $SDK_URL to $download first (this image has no curl), or run the script outside the container." >&2
+      exit 1
+    fi
     curl -fsSL -o "$archive.part" "$SDK_URL"
     mv "$archive.part" "$archive"
   fi
