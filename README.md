@@ -220,7 +220,7 @@ TodoTim moves like vim:
 | `j` / `k`, `↓` / `↑` | Next / previous task. With nothing selected, the top / bottom of the current section |
 | `J` / `K`, `⇧↓` / `⇧↑` | Select the next / previous task too (several tasks at once) |
 | `gg` / `G` | First / last task of the section |
-| `h` / `l` | Hide / show sub-tasks. On a sub-task, `h` hides its list and selects the parent |
+| `h` / `l`, `←` / `→` | Hide / show sub-tasks. On a sub-task, `h` hides its list and selects the parent |
 | `/` | Search. `Esc` leaves the search field, and a second `Esc` returns to the list you came from |
 | `g` then `i` | Go to Inbox |
 | `Esc` | Close the editor or popover, then clear the selection |

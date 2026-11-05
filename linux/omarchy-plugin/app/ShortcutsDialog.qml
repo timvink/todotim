@@ -10,7 +10,7 @@ Modal {
   readonly property var groups: [
     { title: "Move", keys: [
       ["j / k", "Next / previous task"], ["J / K", "Select the next / previous task too"], ["gg / G", "First / last task of the section"],
-      ["h / l", "Hide / show sub-tasks"], ["g i", "Go to Inbox"], ["Ctrl+1 … 9", "Inbox, projects 1–8"],
+      ["h / l, \u2190 / \u2192", "Hide / show sub-tasks"], ["g i", "Go to Inbox"], ["Ctrl+1 … 9", "Inbox, projects 1–8"],
       ["/", "Search"], ["Esc", "Step back; hides TodoTim at the top"] ] },
     { title: "Add", keys: [
       ["q", "Quick Add"], ["a / A", "Add task at the bottom / top of the section"], ["s", "Add section"],

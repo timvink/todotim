@@ -168,7 +168,7 @@ enum ShortcutCatalog {
             Item(keys: "⇧↑  or  ⇧K", action: "Select the previous task too"),
             Item(keys: "G  then  G", action: "Select first task in section"),
             Item(keys: "⇧G", action: "Select last task in section"),
-            Item(keys: "H  /  L", action: "Hide / show sub-tasks"),
+            Item(keys: "←  /  →  or  H  /  L", action: "Hide / show sub-tasks"),
             Item(keys: "Esc", action: "Close editor / clear selection"),
             Item(keys: "Esc  (in search)", action: "Back to the list"),
         ]),

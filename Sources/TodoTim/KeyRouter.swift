@@ -2,7 +2,7 @@ import AppKit
 import SwiftUI
 import TodoCore
 
-/// Handles Todoist's single-key shortcuts (q, a, e, 1–4, …) and the vim motions (j/k, h/l,
+/// Handles Todoist's single-key shortcuts (q, a, e, 1–4, …) and the vim motions (j/k, h/l or ←/→,
 /// gg/G, g i, Esc).
 ///
 /// SwiftUI's `.onKeyPress` only fires for the focused view, and list rows are not
@@ -30,7 +30,7 @@ final class KeyRouter {
     }
 
     private enum Key {
-        static let up: UInt16 = 126, down: UInt16 = 125, returnKey: UInt16 = 36, enter: UInt16 = 76, escape: UInt16 = 53
+        static let up: UInt16 = 126, down: UInt16 = 125, left: UInt16 = 123, right: UInt16 = 124, returnKey: UInt16 = 36, enter: UInt16 = 76, escape: UInt16 = 53
     }
 
     /// Plain keys that are also menu key equivalents. While a modal panel is open they are
@@ -103,6 +103,8 @@ final class KeyRouter {
         switch event.keyCode {
         case Key.up: if shift { model.extendSelection(-1) } else { model.moveSelection(-1) }; return true
         case Key.down: if shift { model.extendSelection(1) } else { model.moveSelection(1) }; return true
+        case Key.left: model.collapseSelected(); return true
+        case Key.right: model.expandSelected(); return true
         case Key.returnKey, Key.enter:
             guard model.selectedTaskID != nil else { return false }
             model.openSelected(); return true
