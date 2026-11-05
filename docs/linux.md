@@ -71,7 +71,8 @@ request that changed them, so an id in a reply (a new task to select) is already
 Commands: `hello`, `setView` (`view`: `{kind: "project", id}` / `{kind: "label", name}` /
 `{kind: "search", query}`), `setShowCompleted`, `setSectionCollapsed`, `targets`, `parseQuickAdd` (token
 ranges are UTF-16 offsets, as QML strings index), `quickAdd`, `getTask`, `updateTask` (`content`,
-`description`, `priority`, `due` or `dueText`, `labels`), `toggleComplete`, `deleteTask`, `undo`,
+`description`, `priority`, `due` or `dueText`, `labels`), `toggleComplete`, `completeTasks` (`ids`, one undo step), `deleteTask`, `undo` (hands back the
+`selection` a completion request carried, so the client selects those tasks again),
 `moveTask`, `indentTask`, `outdentTask`, `shiftTask`, `setTaskCollapsed`, `parseDate`, `addProject`,
 `updateProject`, `deleteProject`, `moveProject`, `addSection`, `renameSection`, `deleteSection`,
 `moveSection`, `addLabel`, `updateLabel`, `deleteLabel`, `syncNow`, `getSyncSettings`, `configureSync`,

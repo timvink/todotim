@@ -16,6 +16,13 @@ FocusScope {
   readonly property bool narrow: width < theme.space(720)
 
   property string selectedId: ""
+  // Tasks selected with J/K (Shift+↓/↑): the range from `selectionAnchor` to `selectedId` in row
+  // order, both included. Empty while one task (or none) is selected. Like the Mac's `multiSelection`.
+  property var multiIds: []
+  property string selectionAnchor: ""
+  property bool extendingSelection: false
+  // Any other way of selecting a task ends a J/K selection.
+  onSelectedIdChanged: if (!extendingSelection) clearMultiSelection()
   property string pendingSelect: ""
   property string neighborId: ""
   property var overlays: []
@@ -148,7 +155,50 @@ FocusScope {
     return i >= 0 ? rows[i] : null
   }
 
+  function clearMultiSelection() {
+    selectionAnchor = ""
+    if (multiIds.length > 0) multiIds = []
+  }
+
+  function isInSelection(id) { return id === selectedId || multiIds.indexOf(id) >= 0 }
+
+  // Sets the selection without `onSelectedIdChanged` ending the multi-selection.
+  function setSelection(cursor, anchor, ids) {
+    extendingSelection = true
+    selectedId = cursor
+    extendingSelection = false
+    selectionAnchor = ids.length > 0 ? anchor : ""
+    multiIds = ids
+  }
+
+  // J/K, Shift+↓/↑: moves the selection and selects every task between it and where it started.
+  function extendSelection(delta) {
+    var i = indexOfId(selectedId)
+    if (i < 0) return move(delta)
+    var anchor = selectionAnchor && indexOfId(selectionAnchor) >= 0 ? selectionAnchor : selectedId
+    var a = indexOfId(anchor)
+    var j = i
+    for (var k = i + delta; k >= 0 && k < rows.length; k += delta) if (rows[k].type === "task") { j = k; break }
+    var ids = []
+    if (j !== a) for (k = Math.min(a, j); k <= Math.max(a, j); k++) if (rows[k].type === "task") ids.push(rows[k].id)
+    setSelection(rows[j].id, anchor, ids)
+    Qt.callLater(ensureVisible)
+  }
+
+  // What `undo` hands back to select again (the engine keeps it with the undo step).
+  function selectionState() {
+    return { view: JSON.stringify(currentSpec()), cursor: selectedId, anchor: selectionAnchor, ids: multiIds }
+  }
+
+  function restoreSelection(s) {
+    if (!s || !s.view || s.view !== JSON.stringify(currentSpec())) return
+    if (s.cursor && indexOfId(s.cursor) < 0) { pendingSelect = s.cursor; return }
+    setSelection(s.cursor || "", s.anchor || "", s.ids || [])
+    Qt.callLater(ensureVisible)
+  }
+
   function select(id) {
+    clearMultiSelection()
     selectedId = id
     focusList()
     Qt.callLater(ensureVisible)
@@ -167,6 +217,7 @@ FocusScope {
 
   // j/k: without a selection, the first (last) task on screen.
   function move(delta) {
+    clearMultiSelection()
     var i = indexOfId(selectedId)
     var j
     if (i < 0) {
@@ -192,17 +243,21 @@ FocusScope {
   }
 
   // The task to select after `id` disappears: the next one outside its sub-tasks, else the previous.
-  function neighborOf(id) {
-    var i = indexOfId(id)
-    if (i < 0) return ""
-    var depth = rows[i].depth
-    var inTree = true
-    for (var j = i + 1; j < rows.length; j++) {
-      if (rows[j].type !== "task") { inTree = false; continue }
-      if (inTree && rows[j].depth > depth) continue
-      return rows[j].id
+  function neighborOf(id) { return neighborOfAll([id]) }
+
+  // The task to select after `ids` and their sub-tasks disappear: the first one below the last of
+  // them, else the last one above the first.
+  function neighborOfAll(ids) {
+    var gone = {}, lo = rows.length, hi = -1
+    for (var n = 0; n < ids.length; n++) {
+      var i = indexOfId(ids[n])
+      if (i < 0) continue
+      lo = Math.min(lo, i); hi = Math.max(hi, i); gone[ids[n]] = true
+      for (var d = i + 1; d < rows.length && rows[d].type === "task" && rows[d].depth > rows[i].depth; d++) gone[rows[d].id] = true
     }
-    for (j = i - 1; j >= 0; j--) if (rows[j].type === "task") return rows[j].id
+    if (hi < 0) return ""
+    for (var j = hi + 1; j < rows.length; j++) if (rows[j].type === "task" && !gone[rows[j].id]) return rows[j].id
+    for (j = lo - 1; j >= 0; j--) if (rows[j].type === "task" && !gone[rows[j].id]) return rows[j].id
     return ""
   }
 
@@ -255,7 +310,17 @@ FocusScope {
     var completing = r ? !r.completed : !(detail.task && detail.task.id === id && detail.task.completed)
     if (completing && id === selectedId && !view.showCompleted) neighborId = neighborOf(id)
     if (completing && !fromDetailList && isOpen("detail") && detail.taskId === id) closeOverlay("detail")
-    req("toggleComplete", { id: id }, showResult)
+    req("toggleComplete", { id: id, selection: selectionState() }, showResult)
+  }
+
+  // x, e, Ctrl+Enter in the list: completes the selected task, or every task of a J/K selection
+  // in one undo step. When all of them are completed already (shown completed tasks), reopens them.
+  function completeSelected() {
+    if (multiIds.length === 0) { toggleComplete(selectedId); return }
+    var ids = multiIds.slice()
+    var completing = ids.some(function(id) { var r = rowOf(id); return r && !r.completed })
+    if (completing && !view.showCompleted) neighborId = neighborOfAll(ids)
+    req("completeTasks", { ids: ids, selection: selectionState() }, showResult)
   }
 
   function setPriority(id, p) { if (id) req("updateTask", { id: id, priority: p }) }
@@ -301,7 +366,10 @@ FocusScope {
   }
 
   function undo() {
-    req("undo", {}, function(ok, r) { toast.show(ok ? "Undone: " + r.message : r, false) })
+    req("undo", {}, function(ok, r) {
+      toast.show(ok ? "Undone: " + r.message : r, false)
+      if (ok) restoreSelection(r.selection)
+    })
   }
   // `u`: the toast's Undo, only while the toast offers it.
   function undoFromToast() { if (toast.offersUndo) undo() }
@@ -591,22 +659,24 @@ FocusScope {
       else if (event.key === Qt.Key_BracketLeft) outdent()
       else if (event.key === Qt.Key_Up || event.key === Qt.Key_K) shift(-1)
       else if (event.key === Qt.Key_Down || event.key === Qt.Key_J) shift(1)
-      else if (event.key === Qt.Key_Return || event.key === Qt.Key_Enter) toggleComplete(selectedId)
+      else if (event.key === Qt.Key_Return || event.key === Qt.Key_Enter) completeSelected()
       else if (event.key === Qt.Key_Backspace) confirmDelete(selectedId)
       else return
       event.accepted = true
       return
     }
+    var shiftKey = event.modifiers & Qt.ShiftModifier
     switch (event.key) {
-      case Qt.Key_Down: move(1); break
-      case Qt.Key_Up: move(-1); break
+      case Qt.Key_Down: if (shiftKey) extendSelection(1); else move(1); break
+      case Qt.Key_Up: if (shiftKey) extendSelection(-1); else move(-1); break
       case Qt.Key_Left: collapseSelected(); break
       case Qt.Key_Right: expandSelected(); break
       case Qt.Key_Return:
       case Qt.Key_Enter: if (selectedId) openTask(selectedId); break
       case Qt.Key_Delete: confirmDelete(selectedId); break
       case Qt.Key_Escape:
-        if (view.kind === "search") leaveSearch()
+        if (multiIds.length > 0) clearMultiSelection()
+        else if (view.kind === "search") leaveSearch()
         else if (selectedId) selectedId = ""
         else closeRequested()
         break
@@ -618,11 +688,13 @@ FocusScope {
         switch (t) {
           case "j": move(1); break
           case "k": move(-1); break
+          case "J": extendSelection(1); break
+          case "K": extendSelection(-1); break
           case "g": chord = "g"; break
           case "G": jumpEdge(true); break
           case "h": collapseSelected(); break
           case "l": expandSelected(); break
-          case "e": toggleComplete(selectedId); break
+          case "e": case "x": completeSelected(); break
           case "1": case "2": case "3": case "4": setPriority(selectedId, Number(t)); break
           case "t": openDatePicker(selectedId); break
           case "@": openLabelPicker(selectedId); break
@@ -633,7 +705,6 @@ FocusScope {
           case "s": addSection(); break
           case "/": focusSearch(); break
           case "?": openOverlay("shortcuts"); break
-          case "x": confirmDelete(selectedId); break
           case "u": undoFromToast(); break
           default: return
         }

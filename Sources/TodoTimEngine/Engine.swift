@@ -63,6 +63,8 @@ public final class Engine {
     struct UndoEntry {
         var message: String
         var restore: () -> Void
+        /// The client's selection when the change was made (opaque here), handed back by `undo`.
+        var selection: JSON = .null
     }
     var undoStack: [UndoEntry] = []
 

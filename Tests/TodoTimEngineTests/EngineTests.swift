@@ -175,6 +175,26 @@ final class EngineTests: XCTestCase {
         XCTAssertEqual(try send("undo").reply["error"], "Nothing to undo")
     }
 
+    func testCompleteSeveralTasksAndUndo() async throws {
+        let a = try result("quickAdd", ["text": "Bread"])["taskId"]!
+        let b = try result("quickAdd", ["text": "Butter"])["taskId"]!
+        let child = try result("quickAdd", ["text": "Salted", "parentId": b])["taskId"]!
+        try result("quickAdd", ["text": "Jam"])
+        try result("setView", ["view": ["kind": "project", "id": "inbox"]])
+
+        // The sub-task goes with its parent and is counted once.
+        let selection: JSON = ["cursor": b, "anchor": a, "ids": [a, b, child]]
+        let done = try result("completeTasks", ["ids": [a, b, child], "selection": selection])
+        XCTAssertEqual(done["toast"]?["message"], "3 tasks completed")
+        XCTAssertEqual(taskRows().map { $0["content"]!.string! }, ["Jam"])
+        // One undo step brings all of them back, with the selection it was given.
+        let undone = try result("undo")
+        XCTAssertEqual(undone["selection"], selection)
+        XCTAssertEqual(taskRows().map { $0["content"]!.string! }, ["Bread", "Butter", "Salted", "Jam"])
+        XCTAssertEqual(try send("undo").reply["error"], "Nothing to undo")
+        XCTAssertEqual(try send("completeTasks", ["ids": []]).reply["error"], "Missing ids")
+    }
+
     func testUpdateTaskFields() async throws {
         let id = try result("quickAdd", ["text": "Read a book"])["taskId"]!
         var task = try result("updateTask", ["id": id, "priority": 2, "dueText": "next friday", "labels": ["a", "A", " b "]])

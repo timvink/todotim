@@ -52,13 +52,16 @@ extension Engine {
             try updateTask(t.id, r)
             return try taskDetail(try task(r))
         case "toggleComplete":
-            return try toggleComplete(try task(r))
+            return try toggleComplete(try task(r), selection: r["selection"] ?? .null)
+        case "completeTasks":
+            guard let ids = r["ids"]?.array?.compactMap(\.string), !ids.isEmpty else { throw EngineError("Missing ids") }
+            return completeTasks(ids.compactMap { store.task($0) }, selection: r["selection"] ?? .null)
         case "deleteTask":
             return deleteTask(try task(r))
         case "undo":
             guard let entry = undoStack.popLast() else { throw EngineError("Nothing to undo") }
             entry.restore()
-            return ["message": .string(entry.message)]
+            return ["message": .string(entry.message), "selection": entry.selection]
         case "moveTask":
             let t = try task(r)
             let pid = try string(r, "projectId")
@@ -265,29 +268,60 @@ extension Engine {
     }
 
     /// Completes (with undo) or reopens a task, like the Mac app's `AppModel.toggleComplete`.
-    func toggleComplete(_ t: TodoTask) throws -> JSON {
+    /// `selection` comes back from `undo`.
+    func toggleComplete(_ t: TodoTask, selection: JSON = .null) throws -> JSON {
         if t.isCompleted {
             store.toggleComplete(t.id)
             return ["completed": false, "toast": .null]
         }
-        if let rule = t.recurrence, Recurrence.advance(rule, from: t.due ?? DueDate(now(), calendar: calendar), calendar: calendar) != nil {
-            store.toggleComplete(t.id, calendar: calendar)
-            let restore: () -> Void = { [weak self] in
-                self?.store.updateTask(t.id) { $0.due = t.due; $0.recurrence = t.recurrence }
-            }
-            let label = store.task(t.id)?.due?.displayString(now: now(), calendar: calendar) ?? "date set"
-            return pushUndo("Next due \(label)", restore: restore, extra: ["completed": false])
+        let done = completeTasks([t], selection: selection)
+        var result = done.object ?? [:]
+        result["completed"] = .bool(!isRepeating(t))
+        return .object(result)
+    }
+
+    /// Completes open tasks as one undo step with one toast, like the Mac app's
+    /// `AppModel.completeSelection`; a sub-task whose parent is among them goes with the parent.
+    /// When every task is completed already, reopens them (no toast).
+    func completeTasks(_ tasks: [TodoTask], selection: JSON = .null) -> JSON {
+        let open = tasks.filter { !$0.isCompleted }
+        if open.isEmpty {
+            store.performBatch { for t in tasks { store.toggleComplete(t.id) } }
+            return ["toast": .null]
         }
-        let affected = ([t.id] + store.descendantIDs(of: t.id)).filter { store.task($0)?.isCompleted == false }
-        store.toggleComplete(t.id, calendar: calendar)
+        let covered = Set(open.flatMap { store.descendantIDs(of: $0.id) })
+        let roots = open.filter { !covered.contains($0.id) }
+        var restores: [() -> Void] = []
+        var count = 0
+        var nextDue: String?
+        store.performBatch {
+            for t in roots {
+                if isRepeating(t) {
+                    store.toggleComplete(t.id, calendar: calendar)
+                    restores.append { [weak self] in self?.store.updateTask(t.id) { $0.due = t.due; $0.recurrence = t.recurrence } }
+                    count += 1
+                    nextDue = store.task(t.id)?.due?.displayString(now: now(), calendar: calendar) ?? "date set"
+                } else {
+                    let affected = ([t.id] + store.descendantIDs(of: t.id)).filter { store.task($0)?.isCompleted == false }
+                    store.toggleComplete(t.id, calendar: calendar)
+                    restores.append { [weak self] in
+                        for id in affected { self?.store.updateTask(id) { $0.isCompleted = false; $0.completedAt = nil } }
+                    }
+                    count += affected.count
+                }
+            }
+        }
         let restore: () -> Void = { [weak self] in
             guard let self else { return }
-            self.store.performBatch {
-                for id in affected { self.store.updateTask(id) { $0.isCompleted = false; $0.completedAt = nil } }
-            }
+            self.store.performBatch { for r in restores.reversed() { r() } }
         }
-        let message = affected.count == 1 ? "1 task completed" : "\(affected.count) tasks completed"
-        return pushUndo(message, restore: restore, extra: ["completed": true])
+        let message = roots.count == 1 && nextDue != nil ? "Next due \(nextDue!)"
+            : count == 1 ? "1 task completed" : "\(count) tasks completed"
+        return pushUndo(message, restore: restore, selection: selection, extra: [:])
+    }
+
+    private func isRepeating(_ t: TodoTask) -> Bool {
+        t.recurrence.map { Recurrence.advance($0, from: t.due ?? DueDate(now(), calendar: calendar), calendar: calendar) != nil } ?? false
     }
 
     func deleteTask(_ t: TodoTask) -> JSON {
@@ -302,8 +336,9 @@ extension Engine {
         return pushUndo(affected.count == 1 ? "1 task deleted" : "\(affected.count) tasks deleted", restore: restore, extra: [:])
     }
 
-    private func pushUndo(_ message: String, restore: @escaping () -> Void, extra: [String: JSON]) -> JSON {
-        undoStack.append(UndoEntry(message: message, restore: restore))
+    private func pushUndo(_ message: String, restore: @escaping () -> Void, selection: JSON = .null,
+                          extra: [String: JSON]) -> JSON {
+        undoStack.append(UndoEntry(message: message, restore: restore, selection: selection))
         if undoStack.count > 50 { undoStack.removeFirst(undoStack.count - 50) }
         var result = extra
         result["toast"] = ["message": .string(message), "undo": true]

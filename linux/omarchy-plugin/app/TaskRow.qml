@@ -10,6 +10,8 @@ Item {
   property var app
   property var row: ({})
   readonly property bool selected: app && app.selectedId === row.id
+  // In a J/K selection: filled like the selected row, without its edge.
+  readonly property bool inSelection: selected || (app && app.multiIds.indexOf(row.id) >= 0)
   readonly property int indent: theme.space(26)
   readonly property bool hasChips: !!row.due || !!row.repeat || row.subTotal > 0 || (row.labels && row.labels.length > 0)
 
@@ -20,7 +22,7 @@ Item {
     anchors.leftMargin: theme.space(6)
     anchors.rightMargin: theme.space(6)
     radius: theme.radius
-    color: root.selected ? theme.cursorFill : mouse.containsMouse ? theme.hover : "transparent"
+    color: root.inSelection ? theme.cursorFill : mouse.containsMouse ? theme.hover : "transparent"
     Rectangle {
       visible: root.selected
       width: Math.max(2, theme.space(3))

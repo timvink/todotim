@@ -71,7 +71,7 @@ Modal {
     else if (event.key === Qt.Key_Return || event.key === Qt.Key_Enter) { title.forceActiveFocus(); title.cursorPosition = title.text.length }
     else if (t === "j" || event.key === Qt.Key_Down) { save(); app.moveDetail(1) }
     else if (t === "k" || event.key === Qt.Key_Up) { save(); app.moveDetail(-1) }
-    else if (t === "e" || (ctrl && (event.key === Qt.Key_Return))) app.toggleComplete(taskId)
+    else if (t === "e" || t === "x" || (ctrl && (event.key === Qt.Key_Return))) app.toggleComplete(taskId)
     else if (t >= "1" && t <= "4" && !ctrl) app.setPriority(taskId, Number(t))
     else if (t === "t") app.openDatePicker(taskId)
     else if (t === "@") app.openLabelPicker(taskId)
