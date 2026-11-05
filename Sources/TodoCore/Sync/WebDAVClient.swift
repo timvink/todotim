@@ -38,18 +38,23 @@ public final class WebDAVClient: @unchecked Sendable {
         self.baseURL = try Self.normalizedBaseURL(serverURL)
         let token = Data("\(username):\(password)".utf8).base64EncodedString()
         self.authorization = "Basic \(token)"
-        if let session {
-            self.session = session
-        } else {
-            let config = URLSessionConfiguration.ephemeral
-            config.timeoutIntervalForRequest = 30
-            config.requestCachePolicy = .reloadIgnoringLocalCacheData
-            config.httpCookieStorage = nil
-            config.httpShouldSetCookies = false
-            config.urlCredentialStorage = nil
-            self.session = URLSession(configuration: config)
-        }
+        self.session = session ?? Self.sharedSession
     }
+
+    /// The session of every client. It is never released: FoundationNetworking on Linux (the
+    /// Omarchy engine's static build) crashes when a URLSession is deallocated ("_MultiHandle
+    /// deallocated with non-zero retain count"). Sharing it is safe: it stores no cookies, cache or
+    /// credentials, and every request carries its own Authorization header.
+    static let sharedSession: URLSession = {
+        let config = URLSessionConfiguration.ephemeral
+        config.timeoutIntervalForRequest = 30
+        config.requestCachePolicy = .reloadIgnoringLocalCacheData
+        config.urlCache = nil
+        config.httpCookieStorage = nil
+        config.httpShouldSetCookies = false
+        config.urlCredentialStorage = nil
+        return URLSession(configuration: config)
+    }()
 
     /// Trims whitespace, validates scheme/host and ensures a trailing slash. Plain http:// is
     /// accepted only for localhost (127.0.0.1, ::1), so the password never travels unencrypted.
@@ -234,9 +239,14 @@ public final class WebDAVClient: @unchecked Sendable {
         let limit = maxResponseBytes
         do {
             #if canImport(FoundationNetworking)
-            // swift-corelibs-foundation (Linux, used for tests only) has no `bytes(for:)`: the body
-            // is read whole and the final URL checked after the fact.
-            let (data, response) = try await session.data(for: req, delegate: delegate)
+            // swift-corelibs-foundation (Linux) has no `bytes(for:)`: the body is read whole and the
+            // final URL checked after the fact.
+            let data: Data, response: URLResponse
+            do {
+                (data, response) = try await Self.load(req, session: session, delegate: delegate)
+            } catch let e as URLError where e.code == .cancelled && delegate.challenged {
+                throw SyncError.unauthorized
+            }
             guard let http = response as? HTTPURLResponse else { throw SyncError.network("Invalid server response") }
             if let target = delegate.rejectedTarget { throw SyncError.redirectRejected(target) }
             if let url = http.url, !Self.isWithin(url, base: baseURL) { throw SyncError.redirectRejected(Self.displayString(url)) }
@@ -282,6 +292,51 @@ public final class WebDAVClient: @unchecked Sendable {
         }
     }
 
+    #if canImport(FoundationNetworking)
+    /// `URLSession.data(for:delegate:)` of swift-corelibs-foundation never gives the delegate to the
+    /// task, so redirects would be followed unchecked and a 401 would never finish. Here the task
+    /// gets the delegate before it starts.
+    private static func load(_ req: URLRequest, session: URLSession,
+                             delegate: RedirectGuard) async throws -> (Data, URLResponse) {
+        let handle = TaskHandle()
+        return try await withTaskCancellationHandler {
+            try await withCheckedThrowingContinuation { continuation in
+                let task = session.dataTask(with: req) { data, response, error in
+                    if let error {
+                        continuation.resume(throwing: error)
+                    } else if let response {
+                        continuation.resume(returning: (data ?? Data(), response))
+                    } else {
+                        continuation.resume(throwing: URLError(.badServerResponse))
+                    }
+                }
+                task.delegate = delegate
+                handle.start(task)
+            }
+        } onCancel: {
+            handle.cancel()
+        }
+    }
+
+    /// The task of one `load`, cancelled also when the cancellation comes before it started.
+    private final class TaskHandle: @unchecked Sendable {
+        private let lock = NSLock()
+        private var task: URLSessionTask?
+        private var cancelled = false
+
+        func start(_ task: URLSessionTask) {
+            let cancelNow = lock.withLock { self.task = task; return cancelled }
+            task.resume()
+            if cancelNow { task.cancel() }
+        }
+
+        func cancel() {
+            let task = lock.withLock { cancelled = true; return self.task }
+            task?.cancel()
+        }
+    }
+    #endif
+
     /// Follows only redirects that stay inside the base URL (same scheme, host, port, and a path
     /// below it); any other redirect is not followed and remembered in `rejectedTarget`. With
     /// `follows` false, no redirect is followed and none is rejected: the caller gets the response.
@@ -295,8 +350,31 @@ public final class WebDAVClient: @unchecked Sendable {
 
         var rejectedTarget: String? { lock.withLock { rejected } }
 
+        /// Whether the server asked for credentials (a 401 with WWW-Authenticate).
+        var challenged: Bool { lock.withLock { sawChallenge } }
+        private var sawChallenge = false
+
+        /// Requests carry their own Authorization header, so a challenge means the credentials were
+        /// refused. macOS: the default, which hands the 401 back as it is. Linux: FoundationNetworking
+        /// never finishes a request after the default handling of a 401 (nor times out), so the
+        /// challenge is declined; the request then fails as cancelled, and `send` reports it as 401.
+        func urlSession(_ session: URLSession, task: URLSessionTask, didReceive challenge: URLAuthenticationChallenge,
+                        completionHandler: @escaping (URLSession.AuthChallengeDisposition, URLCredential?) -> Void) {
+            #if canImport(FoundationNetworking)
+            lock.withLock { sawChallenge = true }
+            completionHandler(.rejectProtectionSpace, nil)
+            #else
+            completionHandler(.performDefaultHandling, nil)
+            #endif
+        }
+
+        // The completion-handler form: swift-corelibs-foundation calls only that one.
         func urlSession(_ session: URLSession, task: URLSessionTask, willPerformHTTPRedirection response: HTTPURLResponse,
-                        newRequest request: URLRequest) async -> URLRequest? {
+                        newRequest request: URLRequest, completionHandler: @escaping (URLRequest?) -> Void) {
+            completionHandler(redirect(to: request))
+        }
+
+        func redirect(to request: URLRequest) -> URLRequest? {
             guard follows else { return nil }
             if let url = request.url, WebDAVClient.isWithin(url, base: base) { return request }
             lock.withLock { rejected = request.url.map(WebDAVClient.displayString) ?? "?" }

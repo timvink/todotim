@@ -1,4 +1,7 @@
 import Foundation
+#if canImport(FoundationNetworking)
+import FoundationNetworking
+#endif
 
 /// A calendar in the user's calendar home, with the properties TodoTim syncs (raw values).
 struct RemoteCalendar: Codable, Equatable, Sendable {

@@ -1,4 +1,7 @@
 import Foundation
+#if canImport(FoundationNetworking)
+import FoundationNetworking
+#endif
 @testable import TodoCore
 
 /// In-memory CalDAV server for sync tests: calendars with properties and sync tokens (RFC 6578

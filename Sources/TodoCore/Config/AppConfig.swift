@@ -324,9 +324,27 @@ public enum PasswordCommand {
         return password
     }
     #else
-    /// Linux builds (tests only) have no login shell or posix_spawn flags to rely on.
+    /// Linux: the same rules through `Subprocess` (the user's shell as a login shell, its own
+    /// process group, stderr discarded, the first line of stdout).
     static func runBlocking(_ command: String, timeout: TimeInterval, cancelled: CancelFlag) throws -> String {
-        throw Failure(message: "password_command is only supported on macOS")
+        let shell = ProcessInfo.processInfo.environment["SHELL"].flatMap { $0.isEmpty ? nil : $0 } ?? "/bin/sh"
+        let result: Subprocess.Result
+        do {
+            result = try Subprocess.run([shell, "-lc", command], timeout: timeout, maxOutput: maxOutput,
+                                        isCancelled: { cancelled.isSet })
+        } catch {
+            throw Failure(message: "password_command could not start")
+        }
+        if result.cancelled { throw CancellationError() }
+        if result.timedOut { throw Failure(message: "password_command timed out after \(Int(timeout.rounded())) s") }
+        if result.tooMuchOutput { throw Failure(message: "password_command printed more than \(maxOutput / 1024) KB") }
+        if let signal = result.signal { throw Failure(message: "password_command was killed by signal \(signal)") }
+        guard let code = result.exitCode else { throw Failure(message: "password_command did not finish") }
+        guard code == 0 else { throw Failure(message: "password_command failed (exit \(code))") }
+        let password = String(data: result.stdout, encoding: .utf8)?
+            .components(separatedBy: .newlines).first?.trimmingCharacters(in: .whitespaces) ?? ""
+        guard !password.isEmpty else { throw Failure(message: "password_command printed nothing") }
+        return password
     }
     #endif
 }

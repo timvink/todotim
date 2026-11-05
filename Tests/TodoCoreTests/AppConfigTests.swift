@@ -66,7 +66,7 @@ final class AppConfigTests: XCTestCase {
         }
     }
 
-    #if os(macOS)  // password_command needs posix_spawn's macOS flags and a login shell
+    #if os(macOS) || os(Linux)  // password_command runs the user's login shell
     func testPasswordCommand() async throws {
         let password = try await PasswordCommand.run("printf 's3cret\\nignored'")
         XCTAssertEqual(password, "s3cret")
@@ -93,7 +93,7 @@ final class AppConfigTests: XCTestCase {
     #endif
 }
 
-#if os(macOS)  // password_command needs posix_spawn's macOS flags and a login shell
+#if os(macOS) || os(Linux)  // password_command runs the user's login shell
 final class PasswordCommandLimitTests: XCTestCase {
     private func elapsed(_ body: () async throws -> Void) async -> (TimeInterval, Error?) {
         let start = Date()

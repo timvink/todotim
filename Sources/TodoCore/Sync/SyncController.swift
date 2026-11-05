@@ -413,7 +413,7 @@ public final class SyncController {
             credentialError = nil
         } catch {
             sessionPassword = (account, password)
-            credentialError = "Could not save the password in the Keychain (\(Self.message(for: error))). It is kept in memory until TodoTim quits."
+            credentialError = "Could not save the password in \(credentials.storeName) (\(Self.message(for: error))). It is kept in memory until TodoTim quits."
             NSLog("TodoTim: \(credentialError!)")
         }
     }

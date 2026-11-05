@@ -72,7 +72,7 @@ public enum LocalPersistence {
     }
 
     /// Atomic write: a 0600 temporary file in the same folder, renamed over `url`.
-    static func writePrivately(_ data: Data, to url: URL) throws {
+    public static func writePrivately(_ data: Data, to url: URL) throws {
         let dir = url.deletingLastPathComponent()
         let tmp = dir.appendingPathComponent(".\(url.lastPathComponent).tmp-\(UUID().uuidString)")
         let fd = open(tmp.path, O_WRONLY | O_CREAT | O_EXCL | O_CLOEXEC, 0o600)

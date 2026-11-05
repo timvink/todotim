@@ -1,8 +1,9 @@
 # TodoTim
 
-A fast, calm, native macOS to-do app, driven from the keyboard with vim motions and dressed in
-[Catppuccin](https://catppuccin.com), with a companion app for Android. Your tasks stay on your own CalDAV server,
-as standard task lists that other task apps can share.
+A fast, calm to-do app driven from the keyboard with vim motions: a native macOS app dressed in
+[Catppuccin](https://catppuccin.com), a plugin for the [Omarchy](https://omarchy.org) Linux desktop that wears
+whatever Omarchy theme you pick, and a companion app for Android. Your tasks stay on your own CalDAV server, as
+standard task lists that other task apps can share.
 
 ![TodoTim showing a project with sections, tasks and sub-tasks](docs/screenshot.png)
 
@@ -37,20 +38,42 @@ app writes: projects, sections, sub-tasks, labels and order.
 - Syncs on launch, a few seconds after each change, on pull-to-refresh and every 15 minutes in the background
 - Works offline; the password is encrypted with a key in the Android Keystore
 
-It leaves out creating projects and sections: make those on the Mac.
+It leaves out creating projects and sections: make those on the Mac or in Omarchy.
+
+## Omarchy (Linux)
+
+On [Omarchy](https://omarchy.org) 4, TodoTim is a plugin of the desktop shell itself (Omarchy's
+Quickshell-based bar, menus and panels), so it looks like the rest of your desktop and follows every theme switch
+live: colors, font and sizes come from the active Omarchy theme. A key opens it from anywhere and Esc hides it
+again; a bar widget shows how many tasks are in your Inbox.
+
+![TodoTim on Omarchy with the Tokyo Night theme, showing a project with sections and sub-tasks](docs/screenshot-omarchy.png)
+
+- The same vim motions and Todoist shortcuts as on the Mac (`Ctrl` where the Mac uses `⌘`; press `?`)
+- Projects with colors, sections, sub-tasks, labels, priorities, due dates and descriptions with links
+- Quick Add with the same syntax, highlighted while you type, also from a global key
+- Search, label views, completed tasks, undo for complete and delete
+- Syncs with the same CalDAV server; works offline. The password lives in your keyring (GNOME Keyring)
+- Runs on x86_64 and on ARM (Asahi Linux on Apple silicon)
+
+Under the hood it is the Mac app's sync engine (TodoCore, in Swift), built as one static Linux binary, behind a QML
+interface; [docs/linux.md](docs/linux.md) explains how the pieces fit.
 
 ## Install
 
-Each release has both apps, with the same version number.
+Each app has its own releases and version numbers: tags `macos-v…`, `android-v…` and `linux-v…` (releases up to
+v0.9.1 had the Mac and Android apps together). Every download can be checked the same way: it carries a
+[build attestation](https://docs.github.com/en/actions/security-for-github-actions/using-artifact-attestations)
+proving that GitHub Actions built it from this repository.
 
 ### macOS
 
-1. Download `TodoTim-vX.Y.Z.zip` from the [latest release](https://github.com/timvink/todotim/releases/latest).
+1. Download `TodoTim-macOS-X.Y.Z.zip` from the [latest macOS release](https://github.com/timvink/todotim/releases?q=macOS&expanded=true).
 2. Verify that GitHub Actions built the zip from this repository (needs the [GitHub CLI](https://cli.github.com)):
 
-       gh attestation verify TodoTim-vX.Y.Z.zip --repo timvink/todotim
+       gh attestation verify TodoTim-macOS-X.Y.Z.zip --repo timvink/todotim
 
-   The `.sha256` file on the release only detects a damaged download (`shasum -a 256 -c TodoTim-vX.Y.Z.zip.sha256`);
+   The `.sha256` file on the release only detects a damaged download (`shasum -a 256 -c TodoTim-macOS-X.Y.Z.zip.sha256`);
    it comes from the same place as the zip, so it does not prove who built it.
 3. Unzip it and move `TodoTim.app` to `/Applications`.
 4. Open the app. macOS blocks it the first time. Go to **System Settings › Privacy & Security**, scroll to
@@ -66,15 +89,34 @@ Requires macOS 15 (Sequoia) or later, on Apple silicon or Intel.
 
 ### Android
 
-1. Download `TodoTim-vX.Y.Z.apk` from the [latest release](https://github.com/timvink/todotim/releases/latest),
-   and verify it like the Mac app: `gh attestation verify TodoTim-vX.Y.Z.apk --repo timvink/todotim`.
+1. Download `TodoTim-Android-X.Y.Z.apk` from the [latest Android release](https://github.com/timvink/todotim/releases?q=Android&expanded=true),
+   and verify it like the Mac app: `gh attestation verify TodoTim-Android-X.Y.Z.apk --repo timvink/todotim`.
 2. Open it on your phone and allow your browser or file manager to install apps when Android asks.
 
-To get updates, add `https://github.com/timvink/todotim` to [Obtainium](https://obtainium.imranr.dev) instead:
-it installs each new release's APK. Every release is signed with the same key, so updates install over the
-previous version and keep your data.
+To get updates, add `https://github.com/timvink/todotim` to [Obtainium](https://obtainium.imranr.dev) instead,
+and set **Filter release titles by regular expression** to `Android` (the repository also has macOS and Omarchy
+releases). Obtainium then installs each new Android release. Every release is signed with the same key, so
+updates install over the previous version and keep your data.
 
 Requires Android 10 or later.
+
+### Omarchy
+
+1. Download `todotim-omarchy-X.Y.Z-x86_64.tar.gz` (or `-aarch64` on ARM) from the
+   [latest Omarchy release](https://github.com/timvink/todotim/releases?q=Omarchy&expanded=true), and verify it:
+   `gh attestation verify todotim-omarchy-X.Y.Z-x86_64.tar.gz --repo timvink/todotim`.
+2. Unpack it and run the installer, which adds the plugin to `~/.config/omarchy/plugins/` and enables it:
+
+       tar xzf todotim-omarchy-X.Y.Z-x86_64.tar.gz
+       todotim-omarchy-X.Y.Z-x86_64/install.sh
+
+3. Bind keys in `~/.config/hypr/bindings.lua`, for example:
+
+       o.bind("SUPER + ALT + T", "TodoTim", { panel = "timvink.todotim" })
+       o.bind("SUPER + ALT + Q", "TodoTim Quick Add", "omarchy-shell shell summon timvink.todotim '{\"action\":\"quickAdd\"}'")
+
+To update, run the new release's `install.sh`; `uninstall.sh` removes the plugin (and with `--purge` your local
+tasks too). Requires Omarchy 4 or later.
 
 ## Sync with CalDAV
 
@@ -98,7 +140,8 @@ For example, with Nextcloud:
 3. Click **Test connection**, turn on sync, and close the window.
 
 On Android, open **Browse › ⚙**, enter the same server URL, username and an app password of its own, and tap
-**Save**.
+**Save**. In Omarchy, press `Ctrl+,` (or click the cloud at the bottom of the sidebar), fill in the same fields,
+and **Save**.
 
 For another server, enter its CalDAV address and your username and password, for example
 `https://dav.example.com/` for Radicale or `https://dav.example.com/dav.php/` for Baïkal. TodoTim finds your
@@ -108,11 +151,11 @@ server URL, the Nextcloud layout.
 
 The first sync uploads your existing projects and tasks. Running it again creates no duplicates.
 
-TodoTim syncs a few seconds after each change, every minute, and when you press `⌘R`. An idle sync is a single
+TodoTim syncs a few seconds after each change, every minute, and when you press `⌘R` (`Ctrl+R` in Omarchy). An idle sync is a single
 request. The sidebar shows "Synced" with a green cloud when the server has every change, and "Sync pending" while
-a change waits to be sent. Your password is stored in the macOS Keychain, per server: after you change the server URL, enter the
-password again. Local data lives in `~/Library/Application Support/TodoTim/` (`db.json`, plus
-`caldav-state.json`, which records where your calendars are and what the last sync saw).
+a change waits to be sent. Your password is stored in the macOS Keychain (in Omarchy, the keyring), per server: after you change the server URL, enter the
+password again. Local data lives in `~/Library/Application Support/TodoTim/`, in Omarchy in `~/.local/share/todotim/`:
+`db.json`, plus `caldav-state.json`, which records where your calendars are and what the last sync saw.
 
 When two devices edit the same task, the most recent edit wins. When TodoTim and another app change the same
 project, section or label, TodoTim's change wins.
@@ -125,7 +168,7 @@ TodoTim completes tasks with other repeat rules normally.
 
 Instead of the Settings window, you can configure sync in `~/.todotim.toml` (or the path in `TODOTIM_CONFIG`),
 which suits dotfile managers such as chezmoi. While the file has a `[sync]` table, the app uses it and shows
-those settings read-only.
+those settings read-only. The Omarchy app reads the same file, so one dotfile can set up both.
 
 ```toml
 # TodoTim — https://github.com/timvink/todotim
@@ -141,7 +184,7 @@ password_command = "rbw get 'Nextcloud app password'"
 share_with = ["tasks-agent"]
 ```
 
-`password_command` runs in your login shell, so tools from Homebrew are found. Leave it out to enter the
+`password_command` runs in your login shell, so tools from Homebrew (or your Linux `PATH`) are found. Leave it out to enter the
 password in Settings instead. TodoTim versions before CalDAV sync used `folder` and a
 `.../remote.php/dav/files/USERNAME/` URL. TodoTim ignores `folder` now, and accepts that URL as the DAV root.
 
@@ -150,6 +193,8 @@ password in Settings instead. TodoTim versions before CalDAV sync used `folder` 
 - **Credentials.** The app password is stored in the macOS Keychain (service `TodoTim WebDAV`, a name kept from
   earlier versions), under an account named after both user and server, for example `tim@cloud.example.com`.
   With `password_command`, the password is kept in memory only and the Keychain is not read. A password saved for one server is never sent to another. TodoTim never logs it or shows `password_command` output.
+  On Omarchy the password is in your Secret Service keyring (GNOME Keyring), stored with `secret-tool` under
+  `application=todotim` and the same account name; it is handed over on stdin, never on a command line or in a file.
 - **HTTPS only.** TodoTim refuses `http://` server URLs (except `localhost`). It sends requests only to the
   server URL's host: while finding your calendar home it follows redirects on that host only, and after that it
   stays inside the server URL (or the calendar home, when that lies outside it). A principal, home or redirect on
@@ -161,7 +206,8 @@ password in Settings instead. TodoTim versions before CalDAV sync used `folder` 
 - **Remote data.** Data from the server is validated: ids must be short `[A-Za-z0-9_-]` strings (others are
   mapped to derived ids), calendar data is parsed with size, line and nesting limits, and responses, text
   lengths and subtask depth are limited.
-- **Local data** in `~/Library/Application Support/TodoTim/` is readable only by you.
+- **Local data** in `~/Library/Application Support/TodoTim/` (on Omarchy `~/.local/share/todotim/`) is readable
+  only by you.
 
 Report vulnerabilities privately as described in [SECURITY.md](SECURITY.md).
 
@@ -178,7 +224,7 @@ TodoTim moves like vim:
 | `g` then `i` | Go to Inbox |
 | `Esc` | Close the editor or popover, then clear the selection |
 
-The other shortcuts follow Todoist and macOS:
+The other shortcuts follow Todoist and macOS (in Omarchy, `Ctrl` instead of `⌘`; `?` lists them):
 
 | Key | Action |
 |---|---|
@@ -221,8 +267,14 @@ The Android app is a Gradle project in `android/` (JDK 21 and the Android SDK):
 
     cd android && ./gradlew :core:test :app:assembleDebug
 
-See [CONTRIBUTING.md](CONTRIBUTING.md) for development and the release process, and [AGENTS.md](AGENTS.md) for the
-architecture.
+The Omarchy app is the QML plugin in `linux/omarchy-plugin` and the `todotim-engine` Swift executable. These run
+in Docker, so they work from a Mac too:
+
+    scripts/linux-test.sh                  # TodoCore and engine tests on Linux
+    scripts/linux-build.sh                 # static engines in build/linux/<arch>/
+
+See [CONTRIBUTING.md](CONTRIBUTING.md) for development and the release process, [AGENTS.md](AGENTS.md) for the
+architecture, and [docs/linux.md](docs/linux.md) for the Omarchy app.
 
 ## License
 

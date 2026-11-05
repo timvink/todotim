@@ -12,12 +12,16 @@ public protocol CredentialStore: Sendable {
     func setPassword(_ password: String?, for account: String)
     /// Like `setPassword`, but throws when the password could not be stored.
     func savePassword(_ password: String?, for account: String) throws
+    /// Where the password is kept, for messages ("the Keychain", "the keyring").
+    var storeName: String { get }
 }
 
 extension CredentialStore {
     public func savePassword(_ password: String?, for account: String) throws {
         setPassword(password, for: account)
     }
+
+    public var storeName: String { "the Keychain" }
 }
 
 // The Keychain exists only on Apple platforms; TodoCore also builds on Linux for tests.

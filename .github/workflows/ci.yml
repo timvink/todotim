@@ -23,3 +23,19 @@ jobs:
         run: swift test
       - name: Bundle app
         run: scripts/bundle.sh
+
+  # TodoCore and the Omarchy engine on Linux, and the static engine the Omarchy release ships.
+  linux:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Test
+        run: scripts/linux-test.sh
+      - name: Build the static engine
+        run: ARCHS=x86_64 scripts/linux-build.sh
+      - name: Check the engine
+        run: |
+          file build/linux/x86_64/todotim-engine | tee /dev/stderr | grep -q 'statically linked'
+          printf '%s\n' '{"req":1,"cmd":"hello"}' | build/linux/x86_64/todotim-engine --data-dir "$RUNNER_TEMP/data" --no-sync | grep -q '"re":1,"result"'

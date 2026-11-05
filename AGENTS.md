@@ -1,14 +1,19 @@
 # TodoTim
 
 Native macOS (15+) Todoist clone in SwiftUI, syncing with any CalDAV server (VTODO), such as Nextcloud or Radicale.
-No calendar, board, Today or Upcoming views.
+No calendar, board, Today or Upcoming views. Companions: an Android app (`android/`) and an Omarchy (Linux) app
+(`linux/` plus `Sources/TodoTimEngine`) on the same CalDAV contract.
 
 ## Layout
 
 - `Sources/TodoCore` — models, `TodoStore` (all mutations), persistence, parsing, CalDAV sync. No UI.
 - `Sources/TodoTim` — SwiftUI app.
-- `Tests/TodoCoreTests` — XCTest for TodoCore.
+- `Sources/TodoTimEngine`, `Sources/todotim-engine` — the Omarchy app's engine (TodoCore behind a JSON-lines
+  protocol); builds on macOS and Linux.
+- `linux/omarchy-plugin` — the Omarchy shell plugin (QML); `linux/dev` — headless test harness.
+- `Tests/TodoCoreTests` — XCTest for TodoCore; `Tests/TodoTimEngineTests` — the engine protocol end to end.
 - `scripts/bundle.sh` — builds `build/TodoTim.app` from the SwiftPM executable.
+- `scripts/linux-test.sh`, `linux-build.sh`, `linux-package.sh` — Linux tests, static engines, release tarballs.
 
 ## Build and test
 
@@ -18,10 +23,11 @@ No calendar, board, Today or Upcoming views.
 
 When several agents work at once, use a private scratch path: `swift build --scratch-path .build-<name>`.
 
-TodoCore and its tests also build on Linux (the app target is left out there), for example with
-`docker run --rm -v "$PWD":/src -w /src swift:6.2 swift test --scratch-path .build-linux`. Keychain and
-`password_command` are macOS-only. Linux XCTest crashes on synchronous test methods in `@MainActor` classes,
-so make them `async` in a scratch copy when running the whole suite there.
+TodoCore, the engine and their tests also build on Linux (the app target is left out there):
+`scripts/linux-test.sh` runs them in the swift:6.2.4 image. Linux XCTest crashes on synchronous test methods in
+`@MainActor` classes, so the script makes them `async` in a scratch copy; write new engine tests as `async`.
+The Keychain is macOS-only (the engine uses `secret-tool` on Linux); `password_command` works on both
+(`Subprocess` on Linux).
 
 Live sync test against a real CalDAV server (use a throwaway user; it deletes that user's task lists):
 `TODOTIM_LIVE_URL=https://host/remote.php/dav/ TODOTIM_LIVE_USER=… TODOTIM_LIVE_PASSWORD=… [TODOTIM_LIVE_SHARE_WITH=…] swift test --filter LiveCalDAVTests`.
@@ -108,6 +114,32 @@ Performance benchmarks: `swift test -c release -Xswiftc -enable-testing --filter
 In the app: `scripts/perf-launch.sh DATA_DIR` (launch timing, medians) and `scripts/perf.sh` (scripted interactions).
 Password is stored in the Keychain under `SyncSettings.credentialAccount` (`user@host[:port]`); the settings in
 UserDefaults. `~/.todotim.toml` is only read when owned by the user and not group/world-writable (`AppConfig.load`).
+
+## Omarchy app (`linux/`)
+
+Omarchy 4's desktop is one Quickshell (QML) process with plugins; TodoTim is one of them
+(`timvink.todotim`, kinds `service`, `panel`, `bar-widget`), installed in `~/.config/omarchy/plugins/`. Details and
+the protocol: [docs/linux.md](docs/linux.md).
+
+- `todotim-engine` owns the data: `Engine` (TodoStore, `PersistenceWriter`, `SyncController` with
+  `EngineDefaults` and `SecretToolCredentialStore`), `RowBuilder` (rows of a view, like the Mac's
+  `DisplayBuilder`), `QuickAddResolution` (like `QuickAddView`; token offsets in UTF-16). Requests carry `req`,
+  replies `re`; `sidebar`/`rows` events go out before the reply. Data in `~/.local/share/todotim/`.
+- The plugin only renders and sends requests: `Service.qml` runs the engine (bundled `bin/`, else PATH, else
+  `$TODOTIM_ENGINE`), `Panel.qml` is a `FloatingWindow`, `app/AppView.qml` holds selection, dialogs and keys.
+  Rows come as JSON strings in a `ListModel` (`ModelSync.js` diffs by key).
+- Theme: only through `app/Theme.qml`, which binds `Commons.Color` / `Style` (qualify `Commons.Color`: Qt 6.12
+  has its own `Color`) and reads the theme's `colors.toml` for named colors. Icons via `app/Icons.js`.
+- QML gotchas: inline components cannot see the file's ids (make a file with a `theme` property instead);
+  delegates use `required property`; text with `\uXXXX` escapes only (no raw private-use glyphs).
+- The engine ships as one fully static binary per architecture (Static Linux SDK, musl, Swift 6.2.4; Swift
+  6.4.2's FoundationNetworking crashes on Linux). Static FoundationNetworking crashes when a URLSession is
+  deallocated, hence `WebDAVClient.sharedSession`. Its `data(for:delegate:)` never gives the delegate to the
+  task (redirects go unchecked, a 401 never finishes), hence `WebDAVClient.load`; it calls only the
+  completion-handler forms of delegate methods.
+- `linux/dev/headless.sh` runs the plugin in headless sway with Omarchy's real `shell/Commons` and `shell/Ui`
+  (from an Omarchy checkout) and takes screenshots; `wtype` drops the first key of each run (the script
+  primes it with Shift).
 
 ## Android app (`android/`)
 

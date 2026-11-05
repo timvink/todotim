@@ -1,0 +1,26 @@
+{
+  "schemaVersion": 1,
+  "id": "timvink.todotim",
+  "name": "TodoTim",
+  "version": "0.0.0-dev",
+  "author": "Tim Vink",
+  "license": "MIT",
+  "description": "Keyboard-driven to-do lists (projects, sections, sub-tasks, labels, Quick Add) that sync with your own CalDAV server.",
+  "kinds": ["service", "panel", "bar-widget"],
+  "keepLoaded": true,
+  "entryPoints": {
+    "service": "Service.qml",
+    "panel": "Panel.qml",
+    "barWidget": "BarWidget.qml"
+  },
+  "barWidget": {
+    "displayName": "TodoTim",
+    "description": "Open tasks in the Inbox. Click to open TodoTim, right-click for Quick Add.",
+    "category": "Productivity",
+    "aliases": ["todo", "tasks", "todoist"],
+    "allowMultiple": false,
+    "defaultSection": "right",
+    "defaults": {},
+    "schema": []
+  }
+}
