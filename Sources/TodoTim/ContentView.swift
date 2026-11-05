@@ -146,7 +146,9 @@ private struct ModalLayer: View {
                 if shortcuts {
                     Backdrop { model.showShortcuts = false }
                     ShortcutsHelpView()
-                        .frame(width: min(640, paneWidth - 48), height: max(300, min(560, size.height - 96)))
+                        // Its content's height, up to the window's bottom margin.
+                        .frame(width: min(680, paneWidth - 48))
+                        .frame(maxHeight: max(300, size.height - Theme.titleBarHeight - 8 - 24))
                         .modalPanel()
                         .frame(maxWidth: .infinity)
                         .padding(.leading, left)

@@ -243,33 +243,55 @@ struct ShortcutsHelpView: View {
             }
             .padding(.leading, 20).padding(.trailing, 12).padding(.vertical, 12)
             Hairline()
-            ScrollView {
-                LazyVGrid(columns: [GridItem(.flexible(), spacing: 32, alignment: .top),
-                                    GridItem(.flexible(), alignment: .top)],
-                          alignment: .leading, spacing: 24) {
-                    ForEach(ShortcutCatalog.groups, id: \.title) { group in
-                        VStack(alignment: .leading, spacing: 8) {
-                            Text(group.title)
-                                .font(Fonts.bodySemibold)
-                                .foregroundStyle(Theme.text)
-                                .padding(.bottom, 2)
-                            ForEach(group.items) { item in
-                                HStack(spacing: 8) {
-                                    Text(item.action)
-                                        .font(Fonts.body)
-                                        .foregroundStyle(Theme.text)
-                                    Spacer(minLength: 8)
-                                    Text(item.keys)
-                                        .font(.system(size: 11, weight: .medium, design: .monospaced))
-                                        .foregroundStyle(Theme.secondaryText)
-                                        .padding(.horizontal, 8).padding(.vertical, 3)
-                                        .background(Capsule().fill(Theme.field))
-                                }
-                            }
-                        }
-                    }
+            // As tall as the list when the window has room for it; scrolls only when it does not.
+            ViewThatFits(in: .vertical) {
+                columns
+                ScrollView { columns }
+            }
+        }
+    }
+
+    /// The groups in two columns, each group going to the shorter one (in catalog order), so a
+    /// short group is not padded to the height of the long one beside it.
+    private var columns: some View {
+        var split: [[Int]] = [[], []]
+        var heights = [0, 0]
+        for (i, g) in ShortcutCatalog.groups.enumerated() {
+            let c = heights[1] < heights[0] ? 1 : 0
+            split[c].append(i)
+            heights[c] += g.items.count + 2  // the title and the gap after the group
+        }
+        return HStack(alignment: .top, spacing: 32) {
+            ForEach(split.indices, id: \.self) { c in
+                VStack(alignment: .leading, spacing: 24) {
+                    ForEach(split[c], id: \.self) { group(ShortcutCatalog.groups[$0]) }
                 }
-                .padding(20)
+                .frame(maxWidth: .infinity, alignment: .topLeading)
+            }
+        }
+        .padding(20)
+        .fixedSize(horizontal: false, vertical: true)
+    }
+
+    private func group(_ group: (title: String, items: [ShortcutCatalog.Item])) -> some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text(group.title)
+                .font(Fonts.bodySemibold)
+                .foregroundStyle(Theme.text)
+                .padding(.bottom, 2)
+            ForEach(group.items) { item in
+                HStack(spacing: 8) {
+                    Text(item.action)
+                        .font(Fonts.body)
+                        .foregroundStyle(Theme.text)
+                    Spacer(minLength: 8)
+                    Text(item.keys)
+                        .font(.system(size: 11, weight: .medium, design: .monospaced))
+                        .foregroundStyle(Theme.secondaryText)
+                        .padding(.horizontal, 8).padding(.vertical, 3)
+                        .background(Capsule().fill(Theme.field))
+                        .fixedSize()
+                }
             }
         }
     }
