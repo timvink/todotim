@@ -148,6 +148,7 @@ enum ShortcutCatalog {
             Item(keys: "?", action: "Show keyboard shortcuts"),
             Item(keys: "⌘R", action: "Sync now"),
             Item(keys: "⌘Z", action: "Undo complete / delete"),
+            Item(keys: "U", action: "Undo, while the toast shows it"),
             Item(keys: "⌘,", action: "Settings"),
         ]),
         ("Navigate", [

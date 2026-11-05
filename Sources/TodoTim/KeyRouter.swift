@@ -80,6 +80,7 @@ final class KeyRouter {
             case (_, "t"): model.popover = .date
             case (_, "@"): model.popover = .labels
             case (_, "v"): model.popover = .move
+            case (_, "u"): return model.undoFromToast()
             default: return Self.menuKeys.contains(chars)
             }
             return true
@@ -129,6 +130,7 @@ final class KeyRouter {
         case "/": model.focusSearch()
         case "?": model.showShortcuts = true
         case "g": pendingG = Date()
+        case "u": return model.undoFromToast()
         default: return false
         }
         return true

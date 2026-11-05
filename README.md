@@ -193,6 +193,7 @@ The other shortcuts follow Todoist and macOS:
 | `⌘↑` / `⌘↓` | Move task up / down |
 | `⌘⌫` | Delete task |
 | `⌘Z` | Undo complete or delete |
+| `u` | Undo, while the undo toast shows |
 | `⌘F` | Search |
 | `⌘1` | Go to Inbox |
 | `⌘2`…`⌘9` | Go to project 1–8 |

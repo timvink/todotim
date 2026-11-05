@@ -21,7 +21,7 @@ import TodoCore
 ///     enddrag              cancel the drag
 ///     collapse S           toggle section S
 ///     order                print the visible task titles with depths
-///     key esc|up|down|return|j|k|h|l|g|G|a|e|t|v|@|/   post a key press to the app's own queue
+///     key esc|up|down|return|j|k|h|l|g|G|a|e|t|v|@|/|u   post a key press to the app's own queue
 ///     search TEXT          open search with this query
 ///     state                print the list, the selection and which modals are open
 ///     addtask TEXT         add a task with this raw title to the current project
@@ -125,7 +125,7 @@ enum UITestHook {
             let codes: [String: (String, UInt16)] = ["esc": ("\u{1b}", 53), "up": ("\u{F700}", 126), "down": ("\u{F701}", 125),
                                                     "return": ("\r", 36), "j": ("j", 38), "k": ("k", 40), "h": ("h", 4),
                                                     "l": ("l", 37), "g": ("g", 5), "G": ("G", 5), "a": ("a", 0), "e": ("e", 14),
-                                                    "t": ("t", 17), "v": ("v", 9), "@": ("@", 19), "/": ("/", 44)]
+                                                    "t": ("t", 17), "v": ("v", 9), "@": ("@", 19), "/": ("/", 44), "u": ("u", 32)]
             guard let w = model.mainWindow, let (chars, code) = codes[arg] else { break }
             if let e = NSEvent.keyEvent(with: .keyDown, location: .zero, modifierFlags: [], timestamp: ProcessInfo.processInfo.systemUptime,
                                         windowNumber: w.windowNumber, context: nil, characters: chars,

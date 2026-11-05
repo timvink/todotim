@@ -543,6 +543,15 @@ final class AppModel {
         um.setActionName(name)
     }
 
+    /// The toast's Undo (its button, or `u` while it shows). Returns false when there is none.
+    @discardableResult
+    func undoFromToast() -> Bool {
+        guard let undo = toast?.undo else { return false }
+        undo()
+        toast = nil
+        return true
+    }
+
     func showToast(_ message: String, undo: (() -> Void)?) {
         let info = ToastInfo(message: message, undo: undo)
         toast = info

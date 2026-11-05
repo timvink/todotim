@@ -206,15 +206,16 @@ struct ToastView: View {
     private func content(_ toast: ToastInfo) -> some View {
         HStack(spacing: 14) {
             Text(toast.message).font(Fonts.body).foregroundStyle(Theme.text)
-            if let undo = toast.undo {
-                Button("Undo") {
-                    undo()
-                    model.toast = nil
+            if toast.undo != nil {
+                HStack(spacing: 6) {
+                    Button("Undo") { model.undoFromToast() }
+                        .buttonStyle(.plain)
+                        .font(Fonts.bodySemibold)
+                        .foregroundStyle(Theme.accent)
+                        .pointerStyle(.link)
+                        .help("Undo (U)")
+                    Text("or press U").font(Fonts.body).foregroundStyle(Theme.tertiaryText)
                 }
-                .buttonStyle(.plain)
-                .font(Fonts.bodySemibold)
-                .foregroundStyle(Theme.accent)
-                .pointerStyle(.link)
             }
             Button { model.toast = nil } label: {
                 Image(systemName: "xmark").font(.system(size: 11, weight: .bold))
