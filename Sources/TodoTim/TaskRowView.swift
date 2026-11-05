@@ -83,7 +83,8 @@ struct TaskRowHost: View, Equatable {
         if let task = store.task(item.id) {
             let selected = model.selectedTaskID == item.id
             // No selection pill while the task panel is open: it would peek out beside the panel.
-            TaskRowView(item: item, task: task, isSelected: selected && model.detailTaskID == nil,
+            let inSelection = selected || model.multiSelection.contains(item.id)
+            TaskRowView(item: item, task: task, isSelected: inSelection && model.detailTaskID == nil,
                         popover: selected && model.detailTaskID == nil ? model.popover : nil,
                         labelColors: model.labelColorKeys(task.labels),
                         project: item.showProject ? store.project(task.projectId).map(ProjectBadge.init) : nil)

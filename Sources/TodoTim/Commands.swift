@@ -42,7 +42,9 @@ struct AppCommands: Commands {
             Divider()
             Button("Open Task  ↩") { model.openSelected() }
                 .disabled(!model.hasSelection)
-            Button("Complete Task") { model.actionTaskID.map(model.toggleComplete) }
+            Button("Complete Task") {
+                if let id = model.detailTaskID { model.toggleComplete(id) } else { model.completeSelection() }
+            }
                 .keyboardShortcut(.return, modifiers: .command)
                 .disabled(!model.hasActionTask)
             Button("Indent") { model.indent() }
@@ -100,6 +102,10 @@ struct AppCommands: Commands {
                 .keyboardShortcut("j", modifiers: [])
             Button("Previous Task") { model.moveSelection(-1) }
                 .keyboardShortcut("k", modifiers: [])
+            Button("Select Next Task Too") { model.extendSelection(1) }
+                .keyboardShortcut("j", modifiers: .shift)
+            Button("Select Previous Task Too") { model.extendSelection(-1) }
+                .keyboardShortcut("k", modifiers: .shift)
             Button("Hide Sub-tasks") { model.collapseSelected() }
                 .keyboardShortcut("h", modifiers: [])
                 .disabled(!model.hasSelection)
@@ -158,6 +164,8 @@ enum ShortcutCatalog {
             Item(keys: "⌘2 … ⌘9", action: "Go to project 1 … 8"),
             Item(keys: "↓  or  J", action: "Select next task"),
             Item(keys: "↑  or  K", action: "Select previous task"),
+            Item(keys: "⇧↓  or  ⇧J", action: "Select the next task too"),
+            Item(keys: "⇧↑  or  ⇧K", action: "Select the previous task too"),
             Item(keys: "G  then  G", action: "Select first task in section"),
             Item(keys: "⇧G", action: "Select last task in section"),
             Item(keys: "H  /  L", action: "Hide / show sub-tasks"),
@@ -172,7 +180,7 @@ enum ShortcutCatalog {
         ]),
         ("Selected task", [
             Item(keys: "↩", action: "Open task"),
-            Item(keys: "E  or  ⌘↩", action: "Complete task"),
+            Item(keys: "X  or  E  or  ⌘↩", action: "Complete the selected tasks"),
             Item(keys: "1  2  3  4", action: "Set priority"),
             Item(keys: "T", action: "Set date"),
             Item(keys: "@", action: "Labels"),

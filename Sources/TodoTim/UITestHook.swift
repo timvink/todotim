@@ -21,7 +21,7 @@ import TodoCore
 ///     enddrag              cancel the drag
 ///     collapse S           toggle section S
 ///     order                print the visible task titles with depths
-///     key esc|up|down|return|j|k|h|l|g|G|a|e|t|v|@|/|u   post a key press to the app's own queue
+///     key esc|up|down|return|j|k|h|l|g|G|a|e|t|v|@|/|u|x|J|K|shift-up|shift-down   post a key press to the app's own queue
 ///     search TEXT          open search with this query
 ///     state                print the list, the selection and which modals are open
 ///     addtask TEXT         add a task with this raw title to the current project
@@ -125,9 +125,12 @@ enum UITestHook {
             let codes: [String: (String, UInt16)] = ["esc": ("\u{1b}", 53), "up": ("\u{F700}", 126), "down": ("\u{F701}", 125),
                                                     "return": ("\r", 36), "j": ("j", 38), "k": ("k", 40), "h": ("h", 4),
                                                     "l": ("l", 37), "g": ("g", 5), "G": ("G", 5), "a": ("a", 0), "e": ("e", 14),
-                                                    "t": ("t", 17), "v": ("v", 9), "@": ("@", 19), "/": ("/", 44), "u": ("u", 32)]
+                                                    "t": ("t", 17), "v": ("v", 9), "@": ("@", 19), "/": ("/", 44), "u": ("u", 32),
+                                                    "x": ("x", 7), "J": ("J", 38), "K": ("K", 40),
+                                                    "shift-up": ("\u{F700}", 126), "shift-down": ("\u{F701}", 125)]
             guard let w = model.mainWindow, let (chars, code) = codes[arg] else { break }
-            if let e = NSEvent.keyEvent(with: .keyDown, location: .zero, modifierFlags: [], timestamp: ProcessInfo.processInfo.systemUptime,
+            let flags: NSEvent.ModifierFlags = arg.hasPrefix("shift-") || arg == "J" || arg == "K" ? .shift : []
+            if let e = NSEvent.keyEvent(with: .keyDown, location: .zero, modifierFlags: flags, timestamp: ProcessInfo.processInfo.systemUptime,
                                         windowNumber: w.windowNumber, context: nil, characters: chars,
                                         charactersIgnoringModifiers: chars, isARepeat: false, keyCode: code) {
                 NSApp.postEvent(e, atStart: false)
@@ -139,7 +142,8 @@ enum UITestHook {
             let view = model.sidebar.map { String(describing: $0) } ?? "nil"
             let onScreen = model.selectedTaskID.map { model.visibleRows?.ids.contains($0) == true }
             out("view=\(view) selected=\(model.selectedTaskID.flatMap { store.task($0)?.content } ?? "nil")"
-                + (onScreen.map { " onScreen=\($0)" } ?? "") + " editingText=\(model.isEditingText)")
+                + (onScreen.map { " onScreen=\($0)" } ?? "") + " editingText=\(model.isEditingText)"
+                + " multi=\(model.visibleTaskIDs().filter(model.multiSelection.contains).compactMap { store.task($0)?.content })")
             out("detail=\(model.detailTaskID.flatMap { store.task($0)?.content } ?? "nil") quickAdd=\(model.showQuickAdd) shortcuts=\(model.showShortcuts) editor=\(model.editor != nil) collapsed=\(model.collapsedSections.count)")
         case "addtask":
             // addtask TEXT: adds a raw (unparsed) task to the current project.

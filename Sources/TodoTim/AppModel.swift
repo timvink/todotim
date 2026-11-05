@@ -65,7 +65,22 @@ final class AppModel {
             if let id = selectedTaskID { anchor = .task(id) }
             if popover != nil { popover = nil }
             if hasSelection != (selectedTaskID != nil) { hasSelection = selectedTaskID != nil }
+            // Any other way of selecting a task ends a ⇧J/⇧K selection.
+            if !extendingSelection { clearMultiSelection() }
         }
+    }
+
+    /// The tasks selected with ⇧J/⇧K (⇧↓/⇧↑): the on-screen range from `selectionAnchor` to
+    /// `selectedTaskID`, both included. Empty while one task (or none) is selected.
+    private(set) var multiSelection: Set<EntityID> = []
+    /// Where a ⇧J/⇧K selection started; it stays put while `selectedTaskID` moves.
+    @ObservationIgnored private var selectionAnchor: EntityID?
+    /// Set while `extendSelection` moves `selectedTaskID`, so the move keeps the multi-selection.
+    @ObservationIgnored private var extendingSelection = false
+
+    private func clearMultiSelection() {
+        selectionAnchor = nil
+        if !multiSelection.isEmpty { multiSelection = [] }
     }
 
     /// Task shown in the detail sheet.
@@ -216,6 +231,7 @@ final class AppModel {
     /// j/k, ↓/↑. Without a selection, j selects the first task of the current section and k the
     /// last (`currentRun`).
     func moveSelection(_ delta: Int) {
+        clearMultiSelection()
         let d = cachedDisplay()
         let ids = d.taskIDs
         guard let cur = selectedTaskID, let i = d.position[cur] else {
@@ -224,6 +240,27 @@ final class AppModel {
             return
         }
         selectedTaskID = ids[max(0, min(ids.count - 1, i + delta))]
+    }
+
+    /// ⇧J/⇧K, ⇧↓/⇧↑: moves `selectedTaskID` and selects every task between it and where the
+    /// selection started. Without a selection it selects a task, like `moveSelection`.
+    func extendSelection(_ delta: Int) {
+        let d = cachedDisplay()
+        guard let cur = selectedTaskID, let i = d.position[cur] else { moveSelection(delta); return }
+        let anchorID = selectionAnchor.flatMap { d.position[$0] != nil ? $0 : nil } ?? cur
+        guard let a = d.position[anchorID] else { return }
+        let j = max(0, min(d.taskIDs.count - 1, i + delta))
+        setSelection(cursor: d.taskIDs[j], anchor: anchorID,
+                     multi: j == a ? [] : Set(d.taskIDs[min(a, j)...max(a, j)]))
+    }
+
+    /// Sets the selection without the `selectedTaskID` observer clearing the multi-selection.
+    private func setSelection(cursor: EntityID?, anchor: EntityID?, multi: Set<EntityID>) {
+        extendingSelection = true
+        selectedTaskID = cursor
+        extendingSelection = false
+        selectionAnchor = multi.isEmpty ? nil : anchor
+        if multiSelection != multi { multiSelection = multi }
     }
 
     /// Vim `gg` / `G`: selects the first or last task of the selected task's section (in label
@@ -328,6 +365,7 @@ final class AppModel {
         if popover != nil { popover = nil; return }
         if editor != nil { editor = nil; return }
         if sectionEditor != nil { sectionEditor = nil; return }
+        if !multiSelection.isEmpty { clearMultiSelection(); return }
         if sidebar == .search { leaveSearch(); return }
         selectedTaskID = nil
     }
@@ -410,31 +448,86 @@ final class AppModel {
             store.toggleComplete(id)
             return
         }
-        if let rule = t.recurrence, Recurrence.advance(rule, from: t.due ?? DueDate(Date())) != nil {
-            // A repeating task moves to its next date instead.
-            store.toggleComplete(id)
-            let restore: () -> Void = { [weak self] in
-                self?.store.updateTask(id) { $0.due = t.due; $0.recurrence = t.recurrence }
-            }
-            registerUndo("Complete Task", restore)
-            showToast("Next due \(store.task(id)?.due?.displayString() ?? "date set")", undo: restore)
+        completeTasks([id])
+    }
+
+    /// `x`, `e`, ⌘↩ in the list: completes the selected task, or every task of a ⇧J/⇧K
+    /// selection. When all of those are completed already (shown completed tasks), reopens them.
+    func completeSelection() {
+        guard !multiSelection.isEmpty else {
+            if let id = selectedTaskID { toggleComplete(id) }
             return
         }
+        let ids = cachedDisplay().taskIDs.filter(multiSelection.contains)
+        let open = ids.filter { store.task($0)?.isCompleted == false }
+        if open.isEmpty {
+            withAnimation(Theme.motion) { store.performBatch { for id in ids { store.toggleComplete(id) } } }
+        } else {
+            completeTasks(open)
+        }
+    }
+
+    /// One task's completion, and how to take it back.
+    private struct Completion {
+        var restore: () -> Void
+        /// Tasks completed: the task and its open sub-tasks (1 for a repeating task).
+        var count: Int
+        /// A repeating task's next date ("Next due …" in the toast).
+        var nextDue: String?
+    }
+
+    private func isRepeating(_ t: TodoTask) -> Bool {
+        t.recurrence.map { Recurrence.advance($0, from: t.due ?? DueDate(Date())) != nil } ?? false
+    }
+
+    /// Completes an open task with its sub-tasks; a repeating task moves to its next date instead.
+    private func complete(_ id: EntityID) -> Completion? {
+        guard let t = store.task(id), !t.isCompleted else { return nil }
+        if isRepeating(t) {
+            store.toggleComplete(id)
+            return Completion(restore: { [weak self] in
+                self?.store.updateTask(id) { $0.due = t.due; $0.recurrence = t.recurrence }
+            }, count: 1, nextDue: store.task(id)?.due?.displayString() ?? "date set")
+        }
         let affected = ([id] + store.descendantIDs(of: id)).filter { store.task($0)?.isCompleted == false }
-        if selectedTaskID == id, !showsCompleted(t.projectId) { selectedTaskID = neighbor(of: id) }
+        store.toggleComplete(id)
+        return Completion(restore: { [weak self] in
+            guard let self else { return }
+            for tid in affected { self.store.updateTask(tid) { $0.isCompleted = false; $0.completedAt = nil } }
+        }, count: affected.count)
+    }
+
+    /// Completes open tasks as one undo step, with one toast. The selection moves past tasks that
+    /// leave the list; undo brings the tasks back and selects again what was selected.
+    private func completeTasks(_ ids: [EntityID]) {
+        // A sub-task whose parent is in the list is completed with the parent.
+        let covered = Set(ids.flatMap { store.descendantIDs(of: $0) })
+        let roots = ids.filter { !covered.contains($0) && store.task($0)?.isCompleted == false }
+        guard !roots.isEmpty else { return }
+        let before = (sidebar: sidebar, cursor: selectedTaskID, anchor: selectionAnchor, multi: multiSelection)
+        let leaving = roots.filter { id in
+            store.task(id).map { !isRepeating($0) && !showsCompleted($0.projectId) } ?? false
+        }
+        let gone = Set(leaving + leaving.flatMap { store.descendantIDs(of: $0) })
+        if let cur = selectedTaskID, gone.contains(cur) { setSelection(cursor: neighbor(skipping: leaving), anchor: nil, multi: []) }
         // Completing the task in the detail sheet closes it and returns to the list.
-        if detailTaskID == id { detailTaskID = nil }
-        withAnimation(Theme.motion) { store.toggleComplete(id) }
+        if let open = detailTaskID, roots.contains(open), let t = store.task(open), !isRepeating(t) { detailTaskID = nil }
+        var completions: [Completion] = []
+        withAnimation(Theme.motion) { store.performBatch { completions = roots.compactMap(complete) } }
         let restore: () -> Void = { [weak self] in
             guard let self else { return }
-            withAnimation(Theme.motion) {
-                self.store.performBatch {
-                    for tid in affected { self.store.updateTask(tid) { $0.isCompleted = false; $0.completedAt = nil } }
-                }
+            withAnimation(Theme.motion) { self.store.performBatch { for c in completions.reversed() { c.restore() } } }
+            if self.sidebar == before.sidebar {
+                self.setSelection(cursor: before.cursor, anchor: before.anchor, multi: before.multi)
             }
         }
-        registerUndo("Complete Task", restore)
-        showToast(affected.count == 1 ? "1 task completed" : "\(affected.count) tasks completed", undo: restore)
+        registerUndo(roots.count == 1 ? "Complete Task" : "Complete Tasks", restore)
+        let count = completions.reduce(0) { $0 + $1.count }
+        if completions.count == 1, let next = completions[0].nextDue {
+            showToast("Next due \(next)", undo: restore)
+        } else {
+            showToast(count == 1 ? "1 task completed" : "\(count) tasks completed", undo: restore)
+        }
     }
 
     func requestDelete(_ id: EntityID? = nil) {
@@ -521,13 +614,18 @@ final class AppModel {
         return moved
     }
 
-    private func neighbor(of id: EntityID) -> EntityID? {
+    private func neighbor(of id: EntityID) -> EntityID? { neighbor(skipping: [id]) }
+
+    /// The task to select when `ids` (and their sub-tasks) leave the list: the first one below
+    /// the last of them, else the last one above the first.
+    private func neighbor(skipping ids: [EntityID]) -> EntityID? {
         let d = cachedDisplay()
-        let ids = d.taskIDs
-        guard let i = d.position[id] else { return nil }
-        let descendants = Set(store.descendantIDs(of: id))
-        if let next = ids[(i + 1)...].first(where: { !descendants.contains($0) }) { return next }
-        return i > 0 ? ids[i - 1] : nil
+        let all = d.taskIDs
+        let positions = ids.compactMap { d.position[$0] }
+        guard let lo = positions.min(), let hi = positions.max() else { return nil }
+        let gone = Set(ids + ids.flatMap { store.descendantIDs(of: $0) })
+        if let next = all[(hi + 1)...].first(where: { !gone.contains($0) }) { return next }
+        return all[..<lo].last { !gone.contains($0) }
     }
 
     // MARK: - Undo / toast

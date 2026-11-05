@@ -36,7 +36,7 @@ final class KeyRouter {
     /// Plain keys that are also menu key equivalents. While a modal panel is open they are
     /// swallowed so they do not act on the list behind it.
     private static let menuKeys: Set<String> = ["q", "a", "A", "s", "t", "@", "v", "j", "k", "h", "l", "e", "/", "?",
-                                                "g", "G", "1", "2", "3", "4"]
+                                                "g", "G", "1", "2", "3", "4", "x", "J", "K", "u"]
 
     /// Returns true when the event was consumed.
     private func handle(_ event: NSEvent) -> Bool {
@@ -74,7 +74,7 @@ final class KeyRouter {
             case (Key.escape, _): model.detailTaskID = nil
             case (Key.up, _), (_, "k"): model.moveDetail(-1)
             case (Key.down, _), (_, "j"): model.moveDetail(1)
-            case (_, "e"): if let id = model.detailTaskID { model.toggleComplete(id) }
+            case (_, "e"), (_, "x"): if let id = model.detailTaskID { model.toggleComplete(id) }
             case (_, "1"), (_, "2"), (_, "3"), (_, "4"):
                 model.setPriority(Priority(rawValue: Int(chars)!)!)
             case (_, "t"): model.popover = .date
@@ -99,9 +99,10 @@ final class KeyRouter {
             }
         }
 
+        let shift = event.modifierFlags.contains(.shift)
         switch event.keyCode {
-        case Key.up: model.moveSelection(-1); return true
-        case Key.down: model.moveSelection(1); return true
+        case Key.up: if shift { model.extendSelection(-1) } else { model.moveSelection(-1) }; return true
+        case Key.down: if shift { model.extendSelection(1) } else { model.moveSelection(1) }; return true
         case Key.returnKey, Key.enter:
             guard model.selectedTaskID != nil else { return false }
             model.openSelected(); return true
@@ -113,13 +114,15 @@ final class KeyRouter {
         switch chars {
         case "j": model.moveSelection(1)
         case "k": model.moveSelection(-1)
+        case "J": model.extendSelection(1)
+        case "K": model.extendSelection(-1)
         case "h": model.collapseSelected()
         case "l": model.expandSelected()
         case "G": model.moveSelectionToSectionEdge(last: true)
         case "q": model.showQuickAdd = true
         case "a": model.addTaskInCurrentSection(atTop: false)
         case "A": model.addTaskInCurrentSection(atTop: true)
-        case "e": if let id = model.selectedTaskID { model.toggleComplete(id) }
+        case "e", "x": model.completeSelection()
         case "1", "2", "3", "4":
             guard let id = model.selectedTaskID else { return false }
             model.setPriority(Priority(rawValue: Int(chars)!)!, for: id)

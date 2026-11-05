@@ -218,6 +218,7 @@ TodoTim moves like vim:
 | Key | Action |
 |---|---|
 | `j` / `k`, `↓` / `↑` | Next / previous task. With nothing selected, the top / bottom of the current section |
+| `J` / `K`, `⇧↓` / `⇧↑` | Select the next / previous task too (several tasks at once) |
 | `gg` / `G` | First / last task of the section |
 | `h` / `l` | Hide / show sub-tasks. On a sub-task, `h` hides its list and selects the parent |
 | `/` | Search. `Esc` leaves the search field, and a second `Esc` returns to the list you came from |
@@ -232,14 +233,14 @@ The other shortcuts follow Todoist and macOS (in Omarchy, `Ctrl` instead of `⌘
 | `a` / `⇧A` | Add task at the bottom / top of the current section |
 | `s` | Add section |
 | `Enter` | Open selected task |
-| `e`, `⌘↩` | Complete or reopen task |
+| `x`, `e`, `⌘↩` | Complete or reopen the selected tasks |
 | `1`–`4` | Set priority |
 | `t` / `@` / `v` | Set date / labels / move to project |
 | `⌘]` / `⌘[` | Indent / outdent (make subtask) |
 | `⌘↑` / `⌘↓` | Move task up / down |
 | `⌘⌫` | Delete task |
 | `⌘Z` | Undo complete or delete |
-| `u` | Undo, while the undo toast shows |
+| `u` | Undo, while the undo toast shows (selects the tasks again) |
 | `⌘F` | Search |
 | `⌘1` | Go to Inbox |
 | `⌘2`…`⌘9` | Go to project 1–8 |
