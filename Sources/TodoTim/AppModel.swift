@@ -147,6 +147,10 @@ final class AppModel {
     @ObservationIgnored private var displayCache: DisplayModel?
     /// Rows of the list that are on screen (set by the list view).
     @ObservationIgnored weak var visibleRows: VisibleRows?
+    /// The list's scroll view, for Page Up / Page Down (set by the list view).
+    @ObservationIgnored weak var listScrollView: NSScrollView?
+    /// A field the open task sheet should focus (Return: title, d: description); the sheet clears it.
+    var detailFocusRequest: DetailField?
     /// Where the keyboard was last in this list: the last selected task, or the section the
     /// inline editor opened in. Without a selection, j/k, gg and G start from its section.
     @ObservationIgnored private var anchor: NavigationAnchor?
@@ -290,6 +294,17 @@ final class AppModel {
         func isOnScreen(_ run: TaskRun) -> Bool { d.taskIDs[run.range].contains(where: onScreen.contains) }
         if let anchored, isOnScreen(anchored) { return anchored }
         return d.runs.first(where: isOnScreen) ?? anchored ?? d.runs.first
+    }
+
+    /// Page Up / Page Down: scrolls the list by most of its height, keeping the selection.
+    func pageList(_ direction: Int) {
+        guard let scroll = listScrollView, let doc = scroll.documentView else { return }
+        let clip = scroll.contentView
+        let step = clip.bounds.height * 0.8 * CGFloat(direction) * (doc.isFlipped ? 1 : -1)
+        let maxY = max(0, doc.frame.height - clip.bounds.height)
+        let y = min(max(clip.bounds.origin.y + step, 0), maxY)
+        clip.scroll(to: NSPoint(x: clip.bounds.origin.x, y: y))
+        scroll.reflectScrolledClipView(clip)
     }
 
     /// Vim `h`: collapses the selected task's sub-tasks when they are shown; else collapses the

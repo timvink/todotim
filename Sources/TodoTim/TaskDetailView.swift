@@ -65,6 +65,15 @@ fileprivate struct TaskDetailContent: View {
             newSubtask = ""
             addingSubtask = false
         }
+        .onChange(of: model.detailFocusRequest) { _, field in
+            guard let field else { return }
+            model.detailFocusRequest = nil
+            focus = field
+            // Focusing a field selects its text; put the cursor at the end instead.
+            DispatchQueue.main.async {
+                (model.mainWindow?.firstResponder as? NSTextView)?.moveToEndOfDocument(nil)
+            }
+        }
     }
 
     private func popoverBinding(_ kind: TaskPopover) -> Binding<Bool> {

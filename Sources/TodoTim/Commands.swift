@@ -150,6 +150,7 @@ enum ShortcutCatalog {
     static let groups: [(title: String, items: [Item])] = [
         ("General", [
             Item(keys: "Q  or  ⌘N", action: "Quick add task"),
+            Item(keys: "⇧⌘N", action: "Add project"),
             Item(keys: "/  or  ⌘F", action: "Search"),
             Item(keys: "?", action: "Show keyboard shortcuts"),
             Item(keys: "⌘R", action: "Sync now"),
@@ -166,8 +167,9 @@ enum ShortcutCatalog {
             Item(keys: "↑  or  K", action: "Select previous task"),
             Item(keys: "⇧↓  or  ⇧J", action: "Select the next task too"),
             Item(keys: "⇧↑  or  ⇧K", action: "Select the previous task too"),
-            Item(keys: "G  then  G", action: "Select first task in section"),
-            Item(keys: "⇧G", action: "Select last task in section"),
+            Item(keys: "G  then  G  or  Home", action: "Select first task in section"),
+            Item(keys: "⇧G  or  End", action: "Select last task in section"),
+            Item(keys: "PgUp  /  PgDn", action: "Scroll the list"),
             Item(keys: "←  /  →  or  H  /  L", action: "Hide / show sub-tasks"),
             Item(keys: "Esc", action: "Close editor / clear selection"),
             Item(keys: "Esc  (in search)", action: "Back to the list"),
@@ -186,12 +188,14 @@ enum ShortcutCatalog {
             Item(keys: "@", action: "Labels"),
             Item(keys: "V", action: "Move to project"),
             Item(keys: "⌘]  /  ⌘[", action: "Indent / outdent"),
-            Item(keys: "⌘↑  /  ⌘↓", action: "Move up / down"),
-            Item(keys: "⌘⌫", action: "Delete task"),
+            Item(keys: "⌘↑  /  ⌘↓  or  ⌘K  /  ⌘J", action: "Move up / down"),
+            Item(keys: "⌘⌫  or  ⌦", action: "Delete task"),
         ]),
         ("Task view", [
             Item(keys: "↑ ↓  or  K J", action: "Previous / next task"),
             Item(keys: "T  /  @  /  V", action: "Date / labels / move"),
+            Item(keys: "↩  /  D", action: "Edit title / description"),
+            Item(keys: "⌦", action: "Delete task"),
             Item(keys: "Esc  or  click outside", action: "Close"),
         ]),
     ]

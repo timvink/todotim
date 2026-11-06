@@ -636,6 +636,7 @@ FocusScope {
     if (!ctrl) return
     if (event.key === Qt.Key_Z) undo()
     else if (event.key === Qt.Key_R) syncNow()
+    else if (shiftKey && event.key === Qt.Key_N) newProject()
     else if (event.key === Qt.Key_N) openQuickAdd(defaultContext())
     else if (event.key === Qt.Key_F) focusSearch()
     else if (event.key === Qt.Key_Comma) openSettings()
@@ -653,6 +654,7 @@ FocusScope {
       chord = ""
       if (t === "g") { jumpEdge(false); event.accepted = true; return }
       if (t === "i") { goProject("inbox"); event.accepted = true; return }
+      if (t === "s") { focusSearch(); event.accepted = true; return }
     }
     if (ctrl) {
       if (event.key === Qt.Key_BracketRight) indent()

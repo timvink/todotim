@@ -2,7 +2,7 @@ import AppKit
 import SwiftUI
 import TodoCore
 
-/// Handles Todoist's single-key shortcuts (q, a, e, 1–4, …) and the vim motions (j/k, h/l or ←/→,
+/// Handles Todoist's single-key shortcuts (q, a, e, 1–4, …) and the vim motions (j/k, h/l or ←/→, Home/End,
 /// gg/G, g i, Esc).
 ///
 /// SwiftUI's `.onKeyPress` only fires for the focused view, and list rows are not
@@ -30,7 +30,9 @@ final class KeyRouter {
     }
 
     private enum Key {
-        static let up: UInt16 = 126, down: UInt16 = 125, left: UInt16 = 123, right: UInt16 = 124, returnKey: UInt16 = 36, enter: UInt16 = 76, escape: UInt16 = 53
+        static let up: UInt16 = 126, down: UInt16 = 125, left: UInt16 = 123, right: UInt16 = 124,
+                   home: UInt16 = 115, end: UInt16 = 119, pageUp: UInt16 = 116, pageDown: UInt16 = 121,
+                   forwardDelete: UInt16 = 117, returnKey: UInt16 = 36, enter: UInt16 = 76, escape: UInt16 = 53
     }
 
     /// Plain keys that are also menu key equivalents. While a modal panel is open they are
@@ -43,8 +45,16 @@ final class KeyRouter {
         // Only the main window; popovers, alerts and Settings handle their own keys.
         guard let window = event.window, let main = model.mainWindow, window === main,
               main.attachedSheet == nil else { return false }
-        if !event.modifierFlags.intersection([.command, .control, .option]).isEmpty { return false }
         let chars = event.charactersIgnoringModifiers ?? ""
+        // ⌘J / ⌘K move the task like ⌘↓ / ⌘↑ (Ctrl+J / Ctrl+K in Omarchy).
+        if event.modifierFlags.intersection([.command, .control, .option, .shift]) == .command,
+           chars == "j" || chars == "k" {
+            guard model.popover == nil, !model.showShortcuts, !model.showQuickAdd, !model.isEditingText,
+                  model.hasActionTask else { return false }
+            model.shift(chars == "j" ? 1 : -1)
+            return true
+        }
+        if !event.modifierFlags.intersection([.command, .control, .option]).isEmpty { return false }
         let isEscape = event.keyCode == Key.escape
 
         // A picker popover (t / @ / v) is open but the main window got the key: the popover is
@@ -72,6 +82,9 @@ final class KeyRouter {
             if model.isEditingText { return false }
             switch (event.keyCode, chars) {
             case (Key.escape, _): model.detailTaskID = nil
+            case (Key.returnKey, _), (Key.enter, _): model.detailFocusRequest = .title
+            case (_, "d"): model.detailFocusRequest = .details
+            case (Key.forwardDelete, _): model.requestDelete()
             case (Key.up, _), (_, "k"): model.moveDetail(-1)
             case (Key.down, _), (_, "j"): model.moveDetail(1)
             case (_, "e"), (_, "x"): if let id = model.detailTaskID { model.toggleComplete(id) }
@@ -110,6 +123,13 @@ final class KeyRouter {
             model.openSelected(); return true
         case Key.escape:
             model.escape(); return true
+        case Key.home: model.moveSelectionToSectionEdge(last: false); return true
+        case Key.end: model.moveSelectionToSectionEdge(last: true); return true
+        case Key.pageUp: model.pageList(-1); return true
+        case Key.pageDown: model.pageList(1); return true
+        case Key.forwardDelete:
+            guard model.hasActionTask else { return false }
+            model.requestDelete(); return true
         default: break
         }
 

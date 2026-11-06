@@ -21,7 +21,7 @@ import TodoCore
 ///     enddrag              cancel the drag
 ///     collapse S           toggle section S
 ///     order                print the visible task titles with depths
-///     key esc|up|down|return|j|k|h|l|g|G|a|e|t|v|@|/|u|x|J|K|shift-up|shift-down   post a key press to the app's own queue
+///     key esc|up|down|return|j|k|h|l|g|G|a|e|t|v|@|/|u|x|J|K|d|left|right|home|end|pageup|pagedown|delete|cmd-j|cmd-k|shift-up|shift-down   post a key press to the app's own queue
 ///     search TEXT          open search with this query
 ///     state                print the list, the selection and which modals are open
 ///     addtask TEXT         add a task with this raw title to the current project
@@ -126,10 +126,15 @@ enum UITestHook {
                                                     "return": ("\r", 36), "j": ("j", 38), "k": ("k", 40), "h": ("h", 4),
                                                     "l": ("l", 37), "g": ("g", 5), "G": ("G", 5), "a": ("a", 0), "e": ("e", 14),
                                                     "t": ("t", 17), "v": ("v", 9), "@": ("@", 19), "/": ("/", 44), "u": ("u", 32),
-                                                    "x": ("x", 7), "J": ("J", 38), "K": ("K", 40),
+                                                    "x": ("x", 7), "J": ("J", 38), "K": ("K", 40), "d": ("d", 2),
+                                                    "left": ("\u{F702}", 123), "right": ("\u{F703}", 124),
+                                                    "home": ("\u{F729}", 115), "end": ("\u{F72B}", 119),
+                                                    "pageup": ("\u{F72C}", 116), "pagedown": ("\u{F72D}", 121),
+                                                    "delete": ("\u{F728}", 117), "cmd-j": ("j", 38), "cmd-k": ("k", 40),
                                                     "shift-up": ("\u{F700}", 126), "shift-down": ("\u{F701}", 125)]
             guard let w = model.mainWindow, let (chars, code) = codes[arg] else { break }
-            let flags: NSEvent.ModifierFlags = arg.hasPrefix("shift-") || arg == "J" || arg == "K" ? .shift : []
+            let flags: NSEvent.ModifierFlags = arg.hasPrefix("cmd-") ? .command
+                : arg.hasPrefix("shift-") || arg == "J" || arg == "K" ? .shift : []
             if let e = NSEvent.keyEvent(with: .keyDown, location: .zero, modifierFlags: flags, timestamp: ProcessInfo.processInfo.systemUptime,
                                         windowNumber: w.windowNumber, context: nil, characters: chars,
                                         charactersIgnoringModifiers: chars, isARepeat: false, keyCode: code) {
@@ -144,7 +149,9 @@ enum UITestHook {
             out("view=\(view) selected=\(model.selectedTaskID.flatMap { store.task($0)?.content } ?? "nil")"
                 + (onScreen.map { " onScreen=\($0)" } ?? "") + " editingText=\(model.isEditingText)"
                 + " multi=\(model.visibleTaskIDs().filter(model.multiSelection.contains).compactMap { store.task($0)?.content })")
-            out("detail=\(model.detailTaskID.flatMap { store.task($0)?.content } ?? "nil") quickAdd=\(model.showQuickAdd) shortcuts=\(model.showShortcuts) editor=\(model.editor != nil) collapsed=\(model.collapsedSections.count)")
+            out("detail=\(model.detailTaskID.flatMap { store.task($0)?.content } ?? "nil") quickAdd=\(model.showQuickAdd) shortcuts=\(model.showShortcuts) editor=\(model.editor != nil) collapsed=\(model.collapsedSections.count)"
+                + " scrollY=\(Int(model.listScrollView?.contentView.bounds.origin.y ?? -1)) deleteAsk=\(model.confirmDeleteTaskID != nil)"
+                + " focusRequest=\(model.detailFocusRequest.map { "\($0)" } ?? "nil")")
         case "addtask":
             // addtask TEXT: adds a raw (unparsed) task to the current project.
             store.addTask(content: parts.dropFirst().joined(separator: " "), projectId: model.currentProjectID ?? TodoStore.inboxID)

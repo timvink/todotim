@@ -58,6 +58,7 @@ struct TaskListView<Header: View>: View {
                     .padding(.top, topPadding)
                     .padding(.bottom, 80)
                     .frame(maxWidth: .infinity)
+                    .background { ScrollViewHandle() }
                 }
                 .onScrollGeometryChange(for: Bool.self) { geo in
                     geo.contentOffset.y + geo.contentInsets.top > 1
@@ -523,5 +524,23 @@ struct AddSectionGap: View {
         guard !n.isEmpty else { return }
         store.addSection(projectId: projectId, name: n, at: index)
         model.sectionEditor = nil
+    }
+}
+
+/// Hands the list's NSScrollView to the model for Page Up / Page Down.
+private struct ScrollViewHandle: NSViewRepresentable {
+    @Environment(AppModel.self) private var model
+
+    func makeNSView(context: Context) -> Probe { Probe(model: model) }
+    func updateNSView(_ view: Probe, context: Context) {}
+
+    final class Probe: NSView {
+        weak var model: AppModel?
+        init(model: AppModel) { self.model = model; super.init(frame: .zero) }
+        required init?(coder: NSCoder) { nil }
+        override func viewDidMoveToWindow() {
+            super.viewDidMoveToWindow()
+            if window != nil, let scroll = enclosingScrollView { MainActor.assumeIsolated { model?.listScrollView = scroll } }
+        }
     }
 }
