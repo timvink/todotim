@@ -195,6 +195,7 @@ enum ShortcutCatalog {
             Item(keys: "↑ ↓  or  K J", action: "Previous / next task"),
             Item(keys: "T  /  @  /  V", action: "Date / labels / move"),
             Item(keys: "↩  /  D", action: "Edit title / description"),
+            Item(keys: "A", action: "Add sub-task"),
             Item(keys: "⌦", action: "Delete task"),
             Item(keys: "Esc  or  click outside", action: "Close"),
         ]),

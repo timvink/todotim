@@ -235,7 +235,7 @@ The other shortcuts follow Todoist and macOS (in Omarchy, `Ctrl` instead of `⌘
 | `⇧⌘N` | Add project |
 | `a` / `⇧A` | Add task at the bottom / top of the current section |
 | `s` | Add section |
-| `Enter` | Open selected task; in an open task, edit its title (`d`: its description) |
+| `Enter` | Open selected task; in an open task, edit its title (`d`: its description, `a`: add a sub-task) |
 | `x`, `e`, `⌘↩` | Complete or reopen the selected tasks |
 | `1`–`4` | Set priority |
 | `t` / `@` / `v` | Set date / labels / move to project |

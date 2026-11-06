@@ -14,7 +14,7 @@ Modal {
       ["/", "Search"], ["Esc", "Step back; hides TodoTim at the top"] ] },
     { title: "Add", keys: [
       ["q", "Quick Add"], ["Ctrl+Shift+N", "Add project"], ["a / A", "Add task at the bottom / top of the section"], ["s", "Add section"],
-      ["Enter", "Open task; in it, edit the title (d: notes)"] ] },
+      ["Enter", "Open task; in it, edit the title (d: notes, a: add sub-task)"] ] },
     { title: "Edit", keys: [
       ["x / e", "Complete or reopen the selected tasks"], ["1 – 4", "Set priority"], ["t", "Set date"], ["@", "Labels"],
       ["v", "Move to project or section"], ["Ctrl+] / Ctrl+[", "Indent / outdent"],

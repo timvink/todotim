@@ -51,6 +51,11 @@ Modal {
     app.closeOverlay("detail")
   }
 
+  function addSubtask() {
+    save()
+    app.openQuickAdd({ parentId: taskId, projectId: task ? task.projectId : null })
+  }
+
   function stopEditing() {
     save()
     root.forceActiveFocus()
@@ -77,6 +82,7 @@ Modal {
     else if (t === "@") app.openLabelPicker(taskId)
     else if (t === "v") app.openMovePicker(taskId)
     else if (t === "d") notes.forceActiveFocus()
+    else if (t === "a") addSubtask()
     else if (t === "u" && !ctrl) app.undoFromToast()
     else if (event.key === Qt.Key_Delete || (ctrl && event.key === Qt.Key_Backspace)) app.confirmDelete(taskId)
     else return
@@ -347,7 +353,7 @@ Modal {
         anchors.fill: parent
         hoverEnabled: true
         cursorShape: Qt.PointingHandCursor
-        onClicked: { root.save(); root.app.openQuickAdd({ parentId: root.taskId, projectId: root.task ? root.task.projectId : null }) }
+        onClicked: root.addSubtask()
       }
     }
   }
@@ -359,7 +365,7 @@ Modal {
       anchors.verticalCenter: parent.verticalCenter
       width: parent.width - deleteButton.width - doneButton.width - root.theme.space(24)
       elide: Text.ElideRight
-      text: "Enter edit · e complete · j/k next/previous · Esc close"
+      text: "Enter edit · a sub-task · e complete · j/k next/previous · Esc close"
       font.family: root.theme.font
       font.pixelSize: root.theme.small
       color: root.theme.faint

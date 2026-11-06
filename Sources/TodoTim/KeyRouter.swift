@@ -84,6 +84,7 @@ final class KeyRouter {
             case (Key.escape, _): model.detailTaskID = nil
             case (Key.returnKey, _), (Key.enter, _): model.detailFocusRequest = .title
             case (_, "d"): model.detailFocusRequest = .details
+            case (_, "a"): model.detailFocusRequest = .subtask
             case (Key.forwardDelete, _): model.requestDelete()
             case (Key.up, _), (_, "k"): model.moveDetail(-1)
             case (Key.down, _), (_, "j"): model.moveDetail(1)

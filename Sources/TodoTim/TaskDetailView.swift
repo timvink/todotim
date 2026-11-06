@@ -68,6 +68,8 @@ fileprivate struct TaskDetailContent: View {
         .onChange(of: model.detailFocusRequest) { _, field in
             guard let field else { return }
             model.detailFocusRequest = nil
+            // The sub-task field exists only while adding; its onAppear focuses it.
+            if field == .subtask, !addingSubtask { addingSubtask = true; return }
             focus = field
             // Focusing a field selects its text; put the cursor at the end instead.
             DispatchQueue.main.async {
