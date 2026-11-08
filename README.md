@@ -44,7 +44,8 @@ It leaves out creating projects and sections: make those on the Mac or in Omarch
 
 On [Omarchy](https://omarchy.org) 4, TodoTim is a plugin of the desktop shell itself (Omarchy's
 Quickshell-based bar, menus and panels), so it looks like the rest of your desktop and follows every theme switch
-live: colors, font and sizes come from the active Omarchy theme. A key opens it from anywhere and Esc hides it
+live: colors, font and sizes come from the active Omarchy theme. Its text is one pixel under Omarchy's text size
+by default; change it under **Text size** in Settings (`Ctrl+,`) or with `font_size` in `~/.todotim.toml`. A key opens it from anywhere and Esc hides it
 again; a bar widget shows how many tasks are in your Inbox.
 
 ![TodoTim on Omarchy with the Tokyo Night theme, showing a project with sections and sub-tasks](docs/screenshot-omarchy.png)
@@ -182,7 +183,16 @@ username = "USERNAME"
 password_command = "rbw get 'Nextcloud app password'"
 # Optional, Nextcloud only. Users each new list is shared with (read-write), e.g. an assistant's account.
 share_with = ["tasks-agent"]
+
+# Optional, Omarchy app only (the Mac app ignores it). Text size in pixels, 8 to 24, in the role of
+# Omarchy's own [font] base-size; the default is one under Omarchy's (11 on a stock install). While
+# it is set, Settings shows the text size read-only. Without it, Settings saves the size per device.
+[omarchy]
+font_size = 11
 ```
+
+The Mac app 0.9.4 and earlier, and the Omarchy app 0.1.2 and earlier, refuse a file with `[omarchy]` (an unknown key
+stops them from reading it, sync settings included), so update both before you add it.
 
 `password_command` runs in your login shell, so tools from Homebrew (or your Linux `PATH`) are found. Leave it out to enter the
 password in Settings instead. TodoTim versions before CalDAV sync used `folder` and a

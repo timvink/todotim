@@ -53,17 +53,34 @@ QtObject {
   readonly property color cursorEdge: accent
   readonly property color field: mix(bg, fg, light ? 0.05 : 0.07)
 
-  // Type: the shell's monospace family and its scale (Omarchy's `[font] base-size`).
+  // Type: the shell's monospace family and its type scale, scaled from one base size. `fontSize`
+  // plays the role of Omarchy's `[font] base-size` for TodoTim alone: the Settings dialog or
+  // `[omarchy] font_size` in ~/.todotim.toml set it (`fontSizeSetting`, 0 = not set). By default it
+  // is one pixel under the shell's base size (11 px on a stock Omarchy), so `omarchy display text
+  // size` still moves TodoTim. Spacing and dialog widths scale with it, as the shell's own
+  // `[spacing] scale-with-font` does, so a smaller font also makes the rows and gaps denser.
+  property int fontSizeSetting: 0
+  // The range the engine accepts (AppConfig.omarchyFontSizes).
+  readonly property int minFontSize: 8
+  readonly property int maxFontSize: 24
+  readonly property int defaultFontSize: Math.max(minFontSize, Math.min(maxFontSize, Style.font.baseSize - 1))
+  readonly property int fontSize: fontSizeSetting > 0 ? fontSizeSetting : defaultFontSize
+  readonly property real scale: fontSize / Math.max(1, Style.font.baseSize)
+  function fontPx(shellPx) { return Math.max(1, Math.round(shellPx * scale)) }
+
   readonly property string font: Style.font.family
-  readonly property int small: Style.font.bodySmall
-  readonly property int body: Style.font.subtitle
-  readonly property int task: Style.font.title
-  readonly property int heading: Style.font.heading
-  readonly property int title: Style.font.display
-  readonly property int icon: Style.font.icon
+  readonly property int small: fontPx(Style.font.bodySmall)
+  readonly property int body: fontPx(Style.font.subtitle)
+  readonly property int task: fontPx(Style.font.title)
+  readonly property int heading: fontPx(Style.font.heading)
+  readonly property int title: fontPx(Style.font.display)
+  readonly property int icon: fontPx(Style.font.icon)
   readonly property int radius: Style.cornerRadius
 
-  function space(px) { return Style.space(px) }
+  function space(px) {
+    var n = Style.spaceReal(px) * scale
+    return n <= 0 ? 0 : Math.max(1, Math.round(n))
+  }
   function duration(ms) { return Style.duration(ms) }
   readonly property var easeOut: Style.easeOut
 

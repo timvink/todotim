@@ -29,7 +29,8 @@ FocusScope {
 
   Rectangle {
     id: card
-    width: Math.min(root.cardWidth, root.width - root.theme.space(40))
+    // `cardWidth` is at the shell's default 12 px type; it scales with the text size.
+    width: Math.min(root.theme.space(root.cardWidth), root.width - root.theme.space(40))
     height: column.implicitHeight + 2 * root.theme.space(18)
     x: Math.round((root.width - width) / 2)
     y: root.centerVertically ? Math.round((root.height - height) / 2)

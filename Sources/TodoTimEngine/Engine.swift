@@ -14,7 +14,7 @@ public struct EnginePaths: Sendable {
     public var syncState: URL { dataDir.appendingPathComponent("caldav-state.json") }
     /// Sync settings entered in the app (server URL, username, enabled); the password is in the keyring.
     public var settings: URL { dataDir.appendingPathComponent("settings.json") }
-    /// Per-device view state: collapsed sections, projects that show completed tasks.
+    /// Per-device view state: collapsed sections, projects that show completed tasks, text size.
     public var ui: URL { dataDir.appendingPathComponent("ui.json") }
     public var lock: URL { dataDir.appendingPathComponent("engine.lock") }
 
@@ -59,6 +59,11 @@ public final class Engine {
     var view: ViewSpec = .project(TodoStore.inboxID)
     var showCompleted: Set<EntityID> = []
     var collapsedSections: Set<EntityID> = []
+    /// The text size chosen in the app's Settings (ui.json); nil is the app's default.
+    var fontSize: Int?
+    /// `omarchy.font_size` from `~/.todotim.toml`, which wins over `fontSize` and makes it read-only.
+    let configFontSize: Int?
+    let configPath: String
 
     struct UndoEntry {
         var message: String
@@ -76,7 +81,8 @@ public final class Engine {
     private var dayTimer: DispatchSourceTimer?
 
     /// - Parameters:
-    ///   - config: `~/.todotim.toml` when it has settings (`[sync]` makes them read-only here).
+    ///   - config: `~/.todotim.toml` when it has settings (`[sync]` and `[omarchy] font_size` make
+    ///     those settings read-only here).
     ///   - output: writes one protocol line (without the newline).
     public init(paths: EnginePaths, credentials: CredentialStore, config: AppConfig? = nil,
                 configPath: String = AppConfig.defaultURL.path, configError: String? = nil, startSyncing: Bool = true,
@@ -86,6 +92,8 @@ public final class Engine {
         self.output = output
         self.calendar = calendar
         self.now = now
+        self.configFontSize = config?.omarchyFontSize
+        self.configPath = configPath
         try? FileManager.default.createDirectory(at: paths.dataDir, withIntermediateDirectories: true,
                                                  attributes: [.posixPermissions: 0o700])
         chmod(paths.dataDir.path, 0o700)
@@ -305,11 +313,36 @@ public final class Engine {
         output(message)
     }
 
+    // MARK: - Appearance
+
+    /// `fontSize`: the base text size in pixels, or null for the app's default (which follows
+    /// Omarchy's `[font] base-size`); `managed`: the config file that sets it, else null.
+    func appearanceJSON() -> JSON {
+        let sizes = AppConfig.omarchyFontSizes
+        return ["fontSize": (configFontSize ?? fontSize).map(JSON.int) ?? .null,
+                "managed": .string(configFontSize == nil ? nil : configPath),
+                "minFontSize": .int(sizes.lowerBound), "maxFontSize": .int(sizes.upperBound)]
+    }
+
+    /// Saves the Settings' text size (`nil`: back to the default).
+    func setFontSize(_ size: Int?) throws {
+        guard configFontSize == nil else {
+            throw EngineError("The text size comes from \(configPath) ([omarchy] font_size). Change it there.")
+        }
+        if let size, !AppConfig.omarchyFontSizes.contains(size) {
+            throw EngineError("Text size must be from \(AppConfig.omarchyFontSizes.lowerBound) to \(AppConfig.omarchyFontSizes.upperBound) px")
+        }
+        fontSize = size
+        saveUIState()
+    }
+
     // MARK: - UI state (ui.json)
 
     private struct UIState: Codable {
         var collapsedSections: [String] = []
         var showCompleted: [String] = []
+        /// Optional, so ui.json from before the setting still decodes.
+        var fontSize: Int?
     }
 
     private func loadUIState() {
@@ -317,10 +350,12 @@ public final class Engine {
               let state = try? JSONDecoder().decode(UIState.self, from: data) else { return }
         collapsedSections = Set(state.collapsedSections)
         showCompleted = Set(state.showCompleted)
+        fontSize = state.fontSize.flatMap { AppConfig.omarchyFontSizes.contains($0) ? $0 : nil }
     }
 
     func saveUIState() {
-        let state = UIState(collapsedSections: collapsedSections.sorted(), showCompleted: showCompleted.sorted())
+        let state = UIState(collapsedSections: collapsedSections.sorted(), showCompleted: showCompleted.sorted(),
+                            fontSize: fontSize)
         if let data = try? JSONEncoder().encode(state) { try? LocalPersistence.writePrivately(data, to: paths.ui) }
     }
 }

@@ -32,9 +32,9 @@ final class EngineTests: XCTestCase {
         try? FileManager.default.removeItem(at: dir)
     }
 
-    private func makeEngine() -> Engine {
+    private func makeEngine(config: AppConfig? = nil) -> Engine {
         let fixedNow = now
-        return Engine(paths: EnginePaths(dataDir: dir), credentials: InMemoryCredentialStore(), config: nil,
+        return Engine(paths: EnginePaths(dataDir: dir), credentials: InMemoryCredentialStore(), config: config,
                       configPath: "/nonexistent", startSyncing: false, calendar: calendar, now: { fixedNow },
                       output: { [unowned self] line in self.lines.append(line) })
     }
@@ -447,6 +447,54 @@ final class EngineTests: XCTestCase {
         let loaded = try result("getSyncSettings")
         XCTAssertEqual(loaded["username"], "tim")
         XCTAssertEqual(loaded["enabled"], false)
+    }
+
+    func testFontSizeIsSavedPerDevice() async throws {
+        let hello = try result("hello")
+        XCTAssertEqual(hello["appearance"]?["fontSize"], .null, "the app's default")
+        XCTAssertEqual(hello["appearance"]?["managed"], .null)
+        XCTAssertEqual(hello["appearance"]?["minFontSize"], .int(AppConfig.omarchyFontSizes.lowerBound))
+        XCTAssertEqual(hello["appearance"]?["maxFontSize"], .int(AppConfig.omarchyFontSizes.upperBound))
+
+        XCTAssertEqual(try result("setAppearance", ["fontSize": 10])["fontSize"], 10)
+        XCTAssertEqual(try send("setAppearance", ["fontSize": 3]).reply["ok"], false)
+        XCTAssertEqual(try send("setAppearance", ["fontSize": 10.5]).reply["ok"], false)
+        XCTAssertEqual(try send("setAppearance", ["fontSize": "10"]).reply["ok"], false)
+        XCTAssertEqual(try send("setAppearance").reply["ok"], false)
+        XCTAssertEqual(try result("getAppearance")["fontSize"], 10)
+        let ui = try JSON.parse(String(contentsOf: dir.appendingPathComponent("ui.json"), encoding: .utf8))
+        XCTAssertEqual(ui["fontSize"], 10)
+
+        // A new engine on the same folder keeps it; null goes back to the default.
+        engine = makeEngine()
+        XCTAssertEqual(try result("getAppearance")["fontSize"], 10)
+        XCTAssertEqual(try result("setAppearance", ["fontSize": .null])["fontSize"], .null)
+        engine = makeEngine()
+        XCTAssertEqual(try result("getAppearance")["fontSize"], .null)
+    }
+
+    func testFontSizeFromConfigIsReadOnly() async throws {
+        try result("setAppearance", ["fontSize": 10])
+        var config = AppConfig()
+        config.omarchyFontSize = 13
+        engine = makeEngine(config: config)
+        let appearance = try result("getAppearance")
+        XCTAssertEqual(appearance["fontSize"], 13, "the config wins over the saved size")
+        XCTAssertEqual(appearance["managed"], "/nonexistent")
+        let refused = try send("setAppearance", ["fontSize": 12]).reply
+        XCTAssertEqual(refused["ok"], false)
+        XCTAssertTrue(refused["error"]?.string?.contains("font_size") == true)
+        // Without the key the saved size is back.
+        engine = makeEngine()
+        XCTAssertEqual(try result("getAppearance")["fontSize"], 10)
+    }
+
+    func testOldUIStateStillLoads() async throws {
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        try Data(#"{"collapsedSections":["s1"],"showCompleted":[]}"#.utf8).write(to: dir.appendingPathComponent("ui.json"))
+        engine = makeEngine()
+        XCTAssertEqual(engine.collapsedSections, ["s1"])
+        XCTAssertEqual(try result("getAppearance")["fontSize"], .null)
     }
 
     func testPathsFollowXDG() async throws {

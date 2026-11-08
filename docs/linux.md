@@ -40,7 +40,13 @@ Omarchy shell (Quickshell, QML)                 todotim-engine (Swift, TodoCore)
 
 Theme: `app/Theme.qml` binds to the shell's `Commons.Color` (foreground, background, accent, urgent,
 muted, popup surfaces) and `Style` (monospace family, type scale, spacing, corner radius, motion), so
-`omarchy-theme-set`, `omarchy font` and `[font] base-size` apply live. The named colors the shell does
+`omarchy-theme-set`, `omarchy font` and `[font] base-size` apply live. TodoTim has its own base text
+size, `Theme.fontSize`, from which every font size, spacing and dialog width scales (the shell's
+tokens times `fontSize / [font] base-size`, as the shell's `[spacing] scale-with-font` does): set in
+Settings (`setAppearance`, saved in `ui.json`) or by `[omarchy] font_size` in `~/.todotim.toml`
+(which wins and makes it read-only), else one pixel under the shell's base size (11 px by default),
+which puts the body and meta text on the shell's own `body` and `caption` sizes. The bar widget keeps
+the bar's sizes, like the other bar widgets. The named colors the shell does
 not expose (green, yellow, orange, magenta, cyan, selection) come from the active theme's
 `~/.local/state/omarchy/current/theme/colors.toml`, re-read whenever the shell's palette changes.
 Priorities and due dates use them with Todoist's meanings (p1 red, p2 orange, p3 blue; overdue red,
@@ -77,7 +83,9 @@ ranges are UTF-16 offsets, as QML strings index), `quickAdd`, `getTask`, `update
 `moveTasks`, `indentTask`, `outdentTask`, `shiftTask`, `setTaskCollapsed`, `parseDate`, `addProject`,
 `updateProject`, `deleteProject`, `moveProject`, `addSection`, `renameSection`, `deleteSection`,
 `moveSection`, `addLabel`, `updateLabel`, `deleteLabel`, `syncNow`, `getSyncSettings`, `configureSync`,
-`testConnection`. `Tests/TodoTimEngineTests` exercises them end to end.
+`testConnection`, `getAppearance` and `setAppearance` (`fontSize`: pixels, or null for the default;
+both reply `{fontSize, managed, minFontSize, maxFontSize}`, which `hello` also carries as `appearance`;
+`managed` is the config path while `[omarchy] font_size` sets it, and `setAppearance` then fails). `Tests/TodoTimEngineTests` exercises them end to end.
 
 The move dialog (`m`, `v`) uses two of them:
 
@@ -104,7 +112,7 @@ closes or on SIGTERM/SIGINT/SIGHUP.
 
 - Data: `$TODOTIM_DATA_DIR`, else `$XDG_DATA_HOME/todotim`, else `~/.local/share/todotim` (0700; files
   0600): `db.json` and `caldav-state.json` as on the Mac, `settings.json` (server URL, username,
-  enabled), `ui.json` (collapsed sections, projects showing completed tasks).
+  enabled), `ui.json` (collapsed sections, projects showing completed tasks, the text size chosen in Settings).
 - The password is in the Secret Service keyring (GNOME Keyring on Omarchy) through `secret-tool`
   (attributes `application=todotim`, `account=user@host[:port]`), passed on stdin, never in argv or a
   file. `~/.todotim.toml` works as on the Mac, including `password_command` (run with `$SHELL -lc`).

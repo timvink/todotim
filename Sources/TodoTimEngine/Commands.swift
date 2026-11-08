@@ -10,6 +10,7 @@ extension Engine {
             return [
                 "version": .string(Engine.version), "dataDir": .string(paths.dataDir.path),
                 "palette": RowBuilder.palette, "startupError": .string(startupError),
+                "appearance": appearanceJSON(),
             ]
 
         // MARK: View
@@ -157,6 +158,16 @@ extension Engine {
         case "deleteLabel":
             store.deleteLabel(try string(r, "id"))
             return .null
+
+        // MARK: Appearance
+        case "getAppearance":
+            return appearanceJSON()
+        case "setAppearance":
+            // `fontSize`: pixels, or null for the default.
+            guard let size = r["fontSize"] else { throw EngineError("Missing fontSize") }
+            guard size.isNull || size.int != nil else { throw EngineError("fontSize must be a whole number") }
+            try setFontSize(size.int)
+            return appearanceJSON()
 
         // MARK: Sync
         case "syncNow":

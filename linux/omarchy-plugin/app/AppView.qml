@@ -8,7 +8,12 @@ import "Icons.js" as Icons
 FocusScope {
   id: app
   property var service: null
-  property Theme theme: Theme {}
+  // The Settings dialog previews a text size here before saving it (-1: no preview, 0: the default).
+  property int fontSizePreview: -1
+  property Theme theme: Theme {
+    fontSizeSetting: app.fontSizePreview >= 0 ? app.fontSizePreview
+      : app.service && app.service.appearance && app.service.appearance.fontSize > 0 ? app.service.appearance.fontSize : 0
+  }
   signal closeRequested()
 
   readonly property var view: service ? service.view : ({ kind: "project", id: "inbox", name: "Inbox", isInbox: true })

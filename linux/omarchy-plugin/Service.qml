@@ -33,6 +33,9 @@ Item {
   property var rowList: []
   property ListModel rows: ListModel {}
   property var sync: ({ status: "disabled" })
+  // Text size: {fontSize (px, or null for the default), managed (the config file that sets it, or
+  // null)}, from `hello` and `setAppearance`.
+  property var appearance: ({ fontSize: null, managed: null })
   // The view the UI asked for, sent again when the engine restarts.
   property var requestedView: ({ kind: "project", id: "inbox" })
 
@@ -100,6 +103,7 @@ Item {
       root.engineVersion = result.version || ""
       root.palette = result.palette || []
       root.startupError = result.startupError || ""
+      if (result.appearance) root.appearance = result.appearance
       root.request("setView", { view: root.requestedView })
     })
   }

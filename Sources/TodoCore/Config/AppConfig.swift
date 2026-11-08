@@ -15,6 +15,11 @@ import Foundation
 ///     password_command = "rbw get 'Nextcloud app password'"
 ///     # Optional, Nextcloud only: users that new lists are shared with (read-write).
 ///     share_with = ["tasks-agent"]
+///
+///     # Omarchy (Linux) app only; the Mac app reads and ignores it. While set, the app's
+///     # Settings dialog shows the text size read-only.
+///     [omarchy]
+///     font_size = 11
 public struct AppConfig: Equatable, Sendable {
     public static let defaultRepository = "https://github.com/timvink/todotim"
 
@@ -24,6 +29,9 @@ public struct AppConfig: Equatable, Sendable {
     public var passwordCommand: String?
     /// `sync.share_with`: users each new calendar is shared with.
     public var shareWith: [String] = []
+    /// `omarchy.font_size`: the Omarchy app's base text size in pixels (the role of Omarchy's own
+    /// `[font] base-size`); nil leaves the app's default. Not used by the Mac app.
+    public var omarchyFontSize: Int?
     /// Keys that are accepted but no longer used (`sync.folder`, from the WebDAV-file sync).
     public var ignoredKeys: [String] = []
 
@@ -51,6 +59,9 @@ public struct AppConfig: Equatable, Sendable {
             }
         }
     }
+
+    /// The `omarchy.font_size` values accepted, in pixels.
+    public static let omarchyFontSizes = 8...24
 
     /// Largest config file read.
     static let maxFileSize = 1 << 20
@@ -133,7 +144,8 @@ public struct AppConfig: Equatable, Sendable {
     public static func parse(_ text: String) throws -> AppConfig {
         let values = try TOML.parse(text)
         let known: Set<String> = ["repository", "sync.enabled", "sync.server_url", "sync.username",
-                                  "sync.password_command", "sync.share_with", "sync.folder"]
+                                  "sync.password_command", "sync.share_with", "sync.folder",
+                                  "omarchy.font_size"]
         if let unknown = values.keys.sorted().first(where: { !known.contains($0) }) {
             throw SchemaError(message: "Unknown key '\(unknown)'")
         }
@@ -167,6 +179,13 @@ public struct AppConfig: Equatable, Sendable {
             default: throw SchemaError(message: "'sync.share_with' must be a list of user names, e.g. [\"tasks-agent\"]")
             }
             if values["sync.folder"] != nil { config.ignoredKeys.append("sync.folder") }
+        }
+        switch values["omarchy.font_size"] {
+        case nil: break
+        case let .int(size)? where omarchyFontSizes.contains(size): config.omarchyFontSize = size
+        default:
+            throw SchemaError(message: "'omarchy.font_size' must be a whole number of pixels from "
+                              + "\(omarchyFontSizes.lowerBound) to \(omarchyFontSizes.upperBound)")
         }
         return config
     }

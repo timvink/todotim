@@ -13,7 +13,7 @@ This copies the plugin to `~/.config/omarchy/plugins/timvink.todotim` and enable
     o.bind("SUPER + ALT + T", "TodoTim", { panel = "timvink.todotim" })
     o.bind("SUPER + ALT + Q", "TodoTim Quick Add", "omarchy-shell shell summon timvink.todotim '{\"action\":\"quickAdd\"}'")
 
-Press `?` in TodoTim for the keyboard shortcuts, and `Ctrl+,` to set up sync.
+Press `?` in TodoTim for the keyboard shortcuts, and `Ctrl+,` to set up sync or change the text size.
 
 ## Remove
 

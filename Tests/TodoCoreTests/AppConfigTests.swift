@@ -52,6 +52,23 @@ final class AppConfigTests: XCTestCase {
         XCTAssertThrowsError(try AppConfig.parse("a = 1\na = 2\n"))
     }
 
+    func testOmarchyFontSize() throws {
+        let config = try AppConfig.parse("[sync]\nusername = \"tim\"\n\n[omarchy]\nfont_size = 11\n")
+        XCTAssertEqual(config.omarchyFontSize, 11)
+        XCTAssertEqual(config.sync?.username, "tim")
+        // On its own it is not a [sync] table, so sync stays editable in the apps.
+        let alone = try AppConfig.parse("[omarchy]\nfont_size = 14\n")
+        XCTAssertEqual(alone.omarchyFontSize, 14)
+        XCTAssertNil(alone.sync)
+        XCTAssertNil(try AppConfig.parse("").omarchyFontSize)
+        XCTAssertEqual(try AppConfig.parse("[omarchy]\nfont_size = 8\n").omarchyFontSize, 8)
+        XCTAssertEqual(try AppConfig.parse("[omarchy]\nfont_size = 24\n").omarchyFontSize, 24)
+        for bad in ["7", "25", "11.5", "\"11\"", "true"] {
+            XCTAssertThrowsError(try AppConfig.parse("[omarchy]\nfont_size = \(bad)\n"), bad)
+        }
+        XCTAssertThrowsError(try AppConfig.parse("[omarchy]\nfont = 11\n"))
+    }
+
     func testLoadMissingFileReturnsNil() throws {
         let url = FileManager.default.temporaryDirectory.appendingPathComponent("missing-\(UUID()).toml")
         XCTAssertNil(try AppConfig.load(from: url))
