@@ -44,8 +44,29 @@ fi
 mv "$stage" "$dest"
 rm -rf "$plugins/.$id.old"
 
+# TodoTim has no bar widget; versions up to 0.1.2 put one on the bar, so move such an entry
+# from bar.layout to the plugins list, which keeps the plugin enabled without a spot on the bar.
+shell_config="$(readlink -f "${XDG_CONFIG_HOME:-$HOME/.config}/omarchy/shell.json" 2> /dev/null || true)"
+if [[ -n "$shell_config" && -f "$shell_config" ]] && command -v jq > /dev/null; then
+  migrated="$(mktemp "$shell_config.todotim.XXXXXX")"
+  if jq --arg id "$id" '
+      def mine: type == "object" and .id == $id;
+      if [(.bar.layout // {})[]? | arrays | .[] | select(mine)] | length > 0 then
+        .bar.layout |= map_values(if type == "array" then map(select(mine | not)) else . end)
+        | .plugins = ((.plugins // []) | if any(.[]; mine) then . else . + [{id: $id}] end)
+      else empty end' "$shell_config" > "$migrated" && [[ -s "$migrated" ]]; then
+    chmod --reference="$shell_config" "$migrated"
+    mv "$migrated" "$shell_config"
+    omarchy-shell -q shell reloadConfig > /dev/null || true
+    echo "Removed TodoTim from the bar (it stays enabled)."
+  else
+    rm -f "$migrated"
+  fi
+fi
+
 # The shell reloads an installed plugin's code by itself; a new one needs a rescan, which runs in
-# the background, so enabling is retried until the shell knows the plugin.
+# the background, so enabling is retried until the shell knows the plugin. Without a bar widget,
+# enabling adds it to shell.json's plugins list, not to the bar.
 omarchy-shell -q shell rescanPlugins
 if (( ! updating )); then
   enabled=0

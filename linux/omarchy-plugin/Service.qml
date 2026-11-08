@@ -4,7 +4,7 @@ import Quickshell.Io
 import "app/ModelSync.js" as ModelSync
 
 // TodoTim's headless half: runs `todotim-engine` (the Swift TodoCore engine that owns the
-// database and CalDAV sync) and mirrors what it pushes. The panel and the bar widget read from
+// database and CalDAV sync) and mirrors what it pushes. The panel reads from
 // here; every change goes back to the engine as a request. The protocol is JSON lines; see
 // docs/linux.md in the TodoTim repository.
 Item {

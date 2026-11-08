@@ -3,7 +3,8 @@
 The Linux app is a plugin for [Omarchy](https://omarchy.org) 4, whose whole desktop (bar, menus,
 notifications, lock screen) is one [Quickshell](https://quickshell.org) process with plugins. TodoTim
 runs inside it, so it uses the shell's live theme, fonts and spacing, opens from a key binding like
-Omarchy's own panels, and adds a bar widget.
+Omarchy's own panels. It has no bar widget: `install.sh` enables it in `shell.json`'s `plugins` list,
+not in `bar.layout`.
 
 ```
 Omarchy shell (Quickshell, QML)                 todotim-engine (Swift, TodoCore)
@@ -12,7 +13,7 @@ Omarchy shell (Quickshell, QML)                 todotim-engine (Swift, TodoCore)
 │   mirrors sidebar/rows/sync ◀─┼──events───────│ CalDAVSync / SyncController,     │
 │ Panel.qml (FloatingWindow)    │   stdout      │ QuickAddParser, undo             │
 │   app/AppView.qml …           │               └──────────────────────────────────┘
-│ BarWidget.qml                 │                 ~/.local/share/todotim/
+│                               │                 ~/.local/share/todotim/
 └───────────────────────────────┘                   db.json, caldav-state.json,
                                                     settings.json, ui.json
 ```
@@ -36,7 +37,6 @@ Omarchy shell (Quickshell, QML)                 todotim-engine (Swift, TodoCore)
 - `panel` (`Panel.qml`): a `FloatingWindow` titled "TodoTim" with `app/AppView.qml`. `keepLoaded`
   keeps it (and the selection) between summons. `omarchy-shell shell toggle timvink.todotim` shows or
   hides it; a payload `{"action":"quickAdd"}` opens Quick Add. Esc at the top of the list hides it.
-- `bar-widget` (`BarWidget.qml`): the Inbox count; click toggles the panel, right-click opens Quick Add.
 
 Theme: `app/Theme.qml` binds to the shell's `Commons.Color` (foreground, background, accent, urgent,
 muted, popup surfaces) and `Style` (monospace family, type scale, spacing, corner radius, motion), so
@@ -45,8 +45,7 @@ size, `Theme.fontSize`, from which every font size, spacing and dialog width sca
 tokens times `fontSize / [font] base-size`, as the shell's `[spacing] scale-with-font` does): set in
 Settings (`setAppearance`, saved in `ui.json`) or by `[omarchy] font_size` in `~/.todotim.toml`
 (which wins and makes it read-only), else one pixel under the shell's base size (11 px by default),
-which puts the body and meta text on the shell's own `body` and `caption` sizes. The bar widget keeps
-the bar's sizes, like the other bar widgets. The named colors the shell does
+which puts the body and meta text on the shell's own `body` and `caption` sizes. The named colors the shell does
 not expose (green, yellow, orange, magenta, cyan, selection) come from the active theme's
 `~/.local/state/omarchy/current/theme/colors.toml`, re-read whenever the shell's palette changes.
 Priorities and due dates use them with Todoist's meanings (p1 red, p2 orange, p3 blue; overdue red,

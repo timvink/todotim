@@ -46,7 +46,7 @@ On [Omarchy](https://omarchy.org) 4, TodoTim is a plugin of the desktop shell it
 Quickshell-based bar, menus and panels), so it looks like the rest of your desktop and follows every theme switch
 live: colors, font and sizes come from the active Omarchy theme. Its text is one pixel under Omarchy's text size
 by default; change it under **Text size** in Settings (`Ctrl+,`) or with `font_size` in `~/.todotim.toml`. A key opens it from anywhere and Esc hides it
-again; a bar widget shows how many tasks are in your Inbox.
+again. It stays out of the bar.
 
 ![TodoTim on Omarchy with the Tokyo Night theme, showing a project with sections and sub-tasks](docs/screenshot-omarchy.png)
 
