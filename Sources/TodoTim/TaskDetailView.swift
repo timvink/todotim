@@ -340,9 +340,14 @@ fileprivate struct TaskDetailContent: View {
                     Button("Cancel") { addingSubtask = false }.buttonStyle(SoftButtonStyle())
                 }
                 .padding(.vertical, 6)
-                .onAppear { focus = .subtask }
+                // Focusing in the same turn as the field appears is lost (it is not in the window
+                // yet), and typing would then go to the panel's shortcuts (d: description).
+                .onAppear { DispatchQueue.main.async { focus = .subtask } }
             } else {
-                AddTaskRow(title: "Add sub-task", leading: -Self.pillInset, column: Self.column) { addingSubtask = true }
+                // The same path as the a key.
+                AddTaskRow(title: "Add sub-task", leading: -Self.pillInset, column: Self.column) {
+                    model.detailFocusRequest = .subtask
+                }
             }
         }
     }
