@@ -3,7 +3,7 @@ import "Icons.js" as Icons
 import "Markdown.js" as Markdown
 
 // The task view: title, description, due date, priority, labels, project and sub-tasks.
-// Outside the text fields the list's keys work on this task (e, 1–4, t, @, v, j/k for the
+// Outside the text fields the list's keys work on this task (e, 1–4, t, @, m, j/k for the
 // next or previous task, Delete); Enter edits the title; Esc saves and closes.
 Modal {
   id: root
@@ -80,7 +80,7 @@ Modal {
     else if (t >= "1" && t <= "4" && !ctrl) app.setPriority(taskId, Number(t))
     else if (t === "t") app.openDatePicker(taskId)
     else if (t === "@") app.openLabelPicker(taskId)
-    else if (t === "v") app.openMovePicker(taskId)
+    else if (t === "m" || t === "v") app.openMoveDialog([taskId])
     else if (t === "d") notes.forceActiveFocus()
     else if (t === "a") addSubtask()
     else if (t === "u" && !ctrl) app.undoFromToast()
@@ -267,8 +267,8 @@ Modal {
       theme: root.theme
       icon: Icons.folder
       text: root.task && root.task.project ? root.task.project.name + (root.task.section ? " / " + root.task.section : "") : ""
-      key: "v"
-      onClicked: root.app.openMovePicker(root.taskId)
+      key: "m"
+      onClicked: root.app.openMoveDialog([root.taskId])
     }
     PropButton {
       theme: root.theme

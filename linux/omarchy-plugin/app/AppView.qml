@@ -28,7 +28,6 @@ FocusScope {
   property var overlays: []
   property string pickerTaskId: ""
   property var pickerLabels: []
-  property var moveTargets: []
   property var menuActions: []
   property var beforeSearch: null
   property bool leavingSearch: false
@@ -240,6 +239,42 @@ FocusScope {
     while (a > 0 && rows[a - 1].type === "task") a--
     while (b < rows.length - 1 && rows[b + 1].type === "task") b++
     select(rows[last ? b : a].id)
+  }
+
+  // The visible tasks of each section, as lists of row indices: the area above the sections is
+  // the first; label and search views are one section. Sections without visible tasks are left out.
+  function sectionBlocks() {
+    var blocks = [], block = []
+    for (var i = 0; i < rows.length; i++) {
+      if (rows[i].type === "section" && view.kind === "project") {
+        if (block.length > 0) blocks.push(block)
+        block = []
+      } else if (rows[i].type === "task") {
+        block.push(i)
+      }
+    }
+    if (block.length > 0) blocks.push(block)
+    return blocks
+  }
+
+  // } / {: like vim paragraphs. } goes to the first task of the next section, or to the last task
+  // of the last one; { goes to the first task of this section, or when already there, of the previous one.
+  function jumpSection(delta) {
+    var blocks = sectionBlocks()
+    if (blocks.length === 0) return
+    var i = indexOfId(selectedId), b = -1, at = -1
+    for (var n = 0; n < blocks.length && b < 0; n++) {
+      at = blocks[n].indexOf(i)
+      if (at >= 0) b = n
+    }
+    if (b < 0) return select(rows[blocks[0][0]].id)
+    if (delta > 0) {
+      if (b + 1 < blocks.length) select(rows[blocks[b + 1][0]].id)
+      else select(rows[blocks[b][blocks[b].length - 1]].id)
+    } else {
+      if (at > 0) select(rows[blocks[b][0]].id)
+      else if (b > 0) select(rows[blocks[b - 1][0]].id)
+    }
   }
 
   // The task to select after `id` disappears: the next one outside its sub-tasks, else the previous.
@@ -524,31 +559,25 @@ FocusScope {
     })
   }
 
-  function openMovePicker(id) {
-    if (!id) return
-    pickerTaskId = id
-    req("targets", {}, function(ok, r) {
-      if (!ok) return
-      var items = []
-      for (var i = 0; i < r.length; i++) {
-        var p = r[i]
-        items.push({ key: "p", projectId: p.id, sectionId: null, text: p.name, dot: true, color: app.theme.projectColor(p.color) })
-        for (var j = 0; j < p.sections.length; j++)
-          items.push({ key: "s", projectId: p.id, sectionId: p.sections[j].id, text: p.sections[j].name, indent: 1,
-                       icon: Icons.chevronRight, project: p.name })
-      }
-      app.moveTargets = items
-    })
-    openOverlay("move")
+  // The tasks an action in the list applies to: the J/K selection, else the selected task.
+  function selectedIds() { return multiIds.length > 0 ? multiIds.slice() : selectedId ? [selectedId] : [] }
+
+  // m, v: the move dialog for `ids` (in list order).
+  function openMoveDialog(ids) {
+    if (!ids || ids.length === 0) return
+    openOverlay("move", { ids: ids, subject: ids.length === 1 ? "\u201c" + taskTitle(ids[0]) + "\u201d" : ids.length + " tasks" })
   }
 
-  function moveTo(item) {
-    var id = pickerTaskId
-    if (id === selectedId && !(view.kind === "project" && view.id === item.projectId)) neighborId = neighborOf(id)
-    req("moveTask", { id: id, projectId: item.projectId, sectionId: item.sectionId }, function(ok, r) {
-      if (!ok) { toast.show(r, false); return }
+  // Moves `ids` to a target from `moveTargets`; `done(ok, error)` tells the dialog. When the
+  // selected task leaves the view, its neighbour is selected.
+  function moveTasksTo(ids, target, done) {
+    if (ids.indexOf(selectedId) >= 0) neighborId = neighborOfAll(ids)
+    var where = { kind: target.kind, projectId: target.projectId, sectionId: target.sectionId, parentId: target.parentId }
+    req("moveTasks", { ids: ids, target: where, selection: selectionState() }, function(ok, r) {
+      if (!ok) { app.neighborId = ""; done(false, r); return }
+      done(true, "")
       app.closeOverlay("move")
-      toast.show("Moved to " + r.projectName + (item.sectionId ? " / " + item.text : ""), false)
+      app.showResult(ok, r)
     })
   }
 
@@ -694,13 +723,15 @@ FocusScope {
           case "K": extendSelection(-1); break
           case "g": chord = "g"; break
           case "G": jumpEdge(true); break
+          case "}": jumpSection(1); break
+          case "{": jumpSection(-1); break
           case "h": collapseSelected(); break
           case "l": expandSelected(); break
           case "e": case "x": completeSelected(); break
           case "1": case "2": case "3": case "4": setPriority(selectedId, Number(t)); break
           case "t": openDatePicker(selectedId); break
           case "@": openLabelPicker(selectedId); break
-          case "v": openMovePicker(selectedId); break
+          case "m": case "v": openMoveDialog(selectedIds()); break
           case "a": addInSection(false); break
           case "A": addInSection(true); break
           case "q": openQuickAdd(defaultContext()); break
@@ -938,16 +969,7 @@ FocusScope {
     onPicked: function(item) { app.toggleLabel(item.key); labelPicker.clearText() }
   }
 
-  ListPicker {
-    id: movePicker
-    name: "move"
-    theme: app.theme
-    app: app
-    title: "Move to"
-    placeholder: "Project or section"
-    items: app.moveTargets
-    onPicked: function(item) { app.moveTo(item) }
-  }
+  MovePicker { id: movePicker; theme: app.theme; app: app }
 
   ListPicker {
     id: priorityPicker

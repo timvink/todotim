@@ -188,14 +188,6 @@ struct RowBuilder {
         ]
     }
 
-    /// Projects with their sections, for the move picker and Quick Add.
-    static func targets(_ store: TodoStore) -> JSON {
-        .array(([store.inbox] + store.projects).map { p in
-            ["id": .string(p.id), "name": .string(p.name), "color": projectColor(p), "isInbox": .bool(p.isInbox),
-             "sections": .array(store.sections(in: p.id).map { ["id": .string($0.id), "name": .string($0.name)] })]
-        })
-    }
-
     static var palette: JSON {
         .array(ProjectColor.entries.map { ["key": .string($0.key), "name": .string($0.name), "hex": .string(ProjectColor.hex($0.key))] })
     }

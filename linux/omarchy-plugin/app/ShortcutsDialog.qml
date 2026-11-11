@@ -9,7 +9,7 @@ Modal {
 
   readonly property var groups: [
     { title: "Move", keys: [
-      ["j / k", "Next / previous task"], ["J / K", "Select the next / previous task too"], ["gg / G, Home / End", "First / last task of the section"], ["PgUp / PgDn", "Scroll the list"],
+      ["j / k", "Next / previous task"], ["J / K", "Select the next / previous task too"], ["gg / G, Home / End", "First / last task of the section"], ["{ / }", "Previous / next section"], ["PgUp / PgDn", "Scroll the list"],
       ["h / l, \u2190 / \u2192", "Hide / show sub-tasks"], ["g i", "Go to Inbox"], ["g s", "Search"], ["Ctrl+1 … 9", "Inbox, projects 1–8"],
       ["/", "Search"], ["Esc", "Step back; hides TodoTim at the top"] ] },
     { title: "Add", keys: [
@@ -17,8 +17,8 @@ Modal {
       ["Enter", "Open task; in it, edit the title (d: notes, a: add sub-task)"] ] },
     { title: "Edit", keys: [
       ["x / e", "Complete or reopen the selected tasks"], ["1 – 4", "Set priority"], ["t", "Set date"], ["@", "Labels"],
-      ["v", "Move to project or section"], ["Ctrl+] / Ctrl+[", "Indent / outdent"],
-      ["Ctrl+↑ / Ctrl+↓, Ctrl+K / Ctrl+J", "Move up / down"], ["Delete, Ctrl+Backspace", "Delete task"], ["Ctrl+Z", "Undo complete or delete"],
+      ["m / v", "Move to a section, project or task"], ["Ctrl+] / Ctrl+[", "Indent / outdent"],
+      ["Ctrl+↑ / Ctrl+↓, Ctrl+K / Ctrl+J", "Move up / down"], ["Delete, Ctrl+Backspace", "Delete task"], ["Ctrl+Z", "Undo complete, delete or move"],
       ["u", "Undo, while the toast shows it"] ] },
     { title: "App", keys: [
       ["Ctrl+Shift+C", "Show or hide completed tasks"], ["Ctrl+R", "Sync now"], ["Ctrl+,", "Sync settings"],

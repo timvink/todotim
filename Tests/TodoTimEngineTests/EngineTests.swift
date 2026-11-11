@@ -229,6 +229,156 @@ final class EngineTests: XCTestCase {
         XCTAssertEqual(try send("moveTask", ["id": b, "projectId": "nope"]).reply["error"], "Unknown project")
     }
 
+    func testMoveTaskRejectsInvalidParents() async throws {
+        let a = try result("quickAdd", ["text": "A"])["taskId"]!
+        let child = try result("quickAdd", ["text": "Child", "parentId": a])["taskId"]!
+        let done = try result("quickAdd", ["text": "Done"])["taskId"]!
+        let gone = try result("quickAdd", ["text": "Gone"])["taskId"]!
+        try result("toggleComplete", ["id": done])
+        try result("deleteTask", ["id": gone])
+        func move(_ parent: JSON) throws -> JSON { try send("moveTask", ["id": a, "projectId": "inbox", "parentId": parent]).reply }
+        XCTAssertEqual(try move("nope")["error"], "Unknown parent task")
+        XCTAssertEqual(try move(gone)["error"], "Unknown parent task")
+        XCTAssertEqual(try move(done)["error"], "A task cannot be moved under a completed task")
+        XCTAssertEqual(try move(a)["error"], "A task cannot be moved under itself")
+        XCTAssertEqual(try move(child)["error"], "A task cannot be moved under itself")
+        XCTAssertEqual(try result("getTask", ["id": a])["parentId"], .null)
+    }
+
+    /// A project with sections and tasks for the move dialog: Inbox (Alpha, Beta, Gamma), Work
+    /// (section Meetings with "Write report"), Home.
+    private func moveFixture() throws -> (work: String, meetings: String, home: String, alpha: JSON, beta: JSON,
+                                         gamma: JSON, report: JSON) {
+        let work = try result("addProject", ["name": "Work", "color": "blue"])["id"]!.string!
+        let meetings = try result("addSection", ["projectId": .string(work), "name": "Meetings"])["id"]!.string!
+        let home = try result("addProject", ["name": "Home"])["id"]!.string!
+        let report = try result("quickAdd", ["text": "Write report", "projectId": .string(work),
+                                             "sectionId": .string(meetings)])["taskId"]!
+        let alpha = try result("quickAdd", ["text": "Alpha"])["taskId"]!
+        let beta = try result("quickAdd", ["text": "Beta"])["taskId"]!
+        let gamma = try result("quickAdd", ["text": "Gamma"])["taskId"]!
+        try result("setView", ["view": ["kind": "project", "id": "inbox"]])
+        return (work, meetings, home, alpha, beta, gamma, report)
+    }
+
+    func testMoveTargetsAreRankedWithMatchRanges() async throws {
+        let f = try moveFixture()
+        // Empty query: the task's own project first (it is there already), then the other projects.
+        var targets = try result("moveTargets", ["ids": [f.beta], "query": ""]).array!
+        XCTAssertEqual(targets.map { $0["title"]!.string! }, ["Inbox", "Work", "Home"])
+        XCTAssertEqual(targets[0]["group"], "currentProject")
+        XCTAssertEqual(targets[0]["isCurrent"], true)
+        XCTAssertEqual(targets[0]["projectIsInbox"], true)
+        XCTAssertEqual(targets[0]["projectColor"], .null)
+        XCTAssertEqual(targets[1]["projectColor"], .string(ProjectColor.hex("blue")))
+        XCTAssertEqual(targets[1]["id"], .string("p:" + f.work))
+
+        // Words match in the title or its context; tasks only while typing.
+        targets = try result("moveTargets", ["ids": [f.beta], "query": "work mee"]).array!
+        XCTAssertEqual(targets.count, 1)
+        XCTAssertEqual(targets[0]["kind"], "section")
+        XCTAssertEqual(targets[0]["group"], "sections")
+        XCTAssertEqual(targets[0]["sectionId"], .string(f.meetings))
+        XCTAssertEqual(targets[0]["projectName"], "Work")
+        XCTAssertEqual(targets[0]["matches"], [[0, 3]])
+
+        targets = try result("moveTargets", ["ids": [f.beta], "query": "r"]).array!
+        let report = try XCTUnwrap(targets.first { $0["kind"]?.string == "task" })
+        XCTAssertEqual(report["title"], "Write report")
+        XCTAssertEqual(report["group"], "tasks")
+        XCTAssertEqual(report["parentId"], f.report)
+        XCTAssertEqual(report["sectionName"], "Meetings")
+        XCTAssertEqual(report["matches"], [[1, 2], [6, 7], [10, 11]])
+        XCTAssertFalse(targets.contains { $0["parentId"] == f.beta }, "never the moved task itself")
+        XCTAssertEqual(try result("moveTargets", ["ids": [f.beta], "query": "zzz"]), [])
+        XCTAssertEqual(try send("moveTargets", ["ids": []]).reply["error"], "Missing ids")
+    }
+
+    func testMatchRangesAreUTF16Offsets() async throws {
+        // "🎉" is two UTF-16 units, "é" one; the match is found case- and width-correctly.
+        XCTAssertEqual(Engine.matchRanges(of: ["café"], in: "🎉 Le CAFÉ du coin").map { [$0.start, $0.end] }, [[6, 10]])
+        XCTAssertEqual(Engine.matchRanges(of: ["ab", "bc"], in: "abc abc").map { [$0.start, $0.end] }, [[0, 3], [4, 7]])
+        XCTAssertTrue(Engine.matchRanges(of: [], in: "abc").isEmpty)
+    }
+
+    func testMoveTasksToSectionProjectAndTaskWithUndo() async throws {
+        let f = try moveFixture()
+        let selection: JSON = ["cursor": f.beta, "ids": []]
+        var moved = try result("moveTasks", ["ids": [f.beta], "selection": selection,
+                                             "target": ["kind": "section", "projectId": .string(f.work), "sectionId": .string(f.meetings)]])
+        XCTAssertEqual(moved["toast"]?["message"], "Moved to Work / Meetings")
+        XCTAssertEqual(moved["toast"]?["undo"], true)
+        XCTAssertEqual(moved["ids"], [f.beta])
+        XCTAssertEqual(taskRows().map { $0["content"]!.string! }, ["Alpha", "Gamma"])
+        var beta = try result("getTask", ["id": f.beta])
+        XCTAssertEqual(beta["projectId"], .string(f.work))
+        XCTAssertEqual(beta["sectionId"], .string(f.meetings))
+
+        // Undo puts the middle task back in its place and hands back the selection.
+        let undone = try result("undo")
+        XCTAssertEqual(undone["selection"], selection)
+        XCTAssertEqual(taskRows().map { $0["content"]!.string! }, ["Alpha", "Beta", "Gamma"])
+
+        // Under a task: a sub-task, in that task's project and section.
+        moved = try result("moveTasks", ["ids": [f.beta], "target": ["kind": "task", "parentId": f.report]])
+        XCTAssertEqual(moved["toast"]?["message"], "Made a sub-task of “Write report”")
+        beta = try result("getTask", ["id": f.beta])
+        XCTAssertEqual(beta["parentId"], f.report)
+        XCTAssertEqual(beta["sectionId"], .string(f.meetings))
+        try result("undo")
+        XCTAssertEqual(taskRows().map { $0["content"]!.string! }, ["Alpha", "Beta", "Gamma"])
+        XCTAssertEqual(try result("getTask", ["id": f.beta])["parentId"], .null)
+
+        // Several tasks, with a sub-task that goes along with its parent: one step, one undo.
+        let child = try result("quickAdd", ["text": "Alpha child", "parentId": f.alpha])["taskId"]!
+        moved = try result("moveTasks", ["ids": [f.alpha, child, f.gamma],
+                                         "target": ["kind": "project", "projectId": .string(f.home)]])
+        XCTAssertEqual(moved["toast"]?["message"], "3 tasks moved to Home")
+        XCTAssertEqual(taskRows().map { $0["content"]!.string! }, ["Beta"])
+        try result("setView", ["view": ["kind": "project", "id": .string(f.home)]])
+        XCTAssertEqual(taskRows().map { $0["content"]!.string! }, ["Alpha", "Alpha child", "Gamma"])
+        XCTAssertEqual(taskRows()[1]["depth"], 1)
+        try result("undo")
+        XCTAssertTrue(taskRows().isEmpty)
+        try result("setView", ["view": ["kind": "project", "id": "inbox"]])
+        XCTAssertEqual(taskRows().map { $0["content"]!.string! }, ["Alpha", "Alpha child", "Beta", "Gamma"])
+        XCTAssertEqual(try result("getTask", ["id": child])["parentId"], f.alpha)
+    }
+
+    func testMoveTasksUndoRecollapsesTheParent() async throws {
+        let f = try moveFixture()
+        try result("quickAdd", ["text": "Draft", "parentId": f.report, "projectId": .string(f.work), "sectionId": .string(f.meetings)])
+        try result("setTaskCollapsed", ["id": f.report, "collapsed": true])
+        try result("moveTasks", ["ids": [f.beta], "target": ["kind": "task", "parentId": f.report]])
+        try result("setView", ["view": ["kind": "project", "id": .string(f.work)]])
+        XCTAssertEqual(taskRows().map { $0["content"]!.string! }, ["Write report", "Draft", "Beta"], "the parent opens")
+        try result("undo")
+        XCTAssertEqual(taskRows().map { $0["content"]!.string! }, ["Write report"])
+        XCTAssertEqual(taskRows()[0]["expanded"], false)
+    }
+
+    func testMoveTasksRejectsInvalidTargets() async throws {
+        let f = try moveFixture()
+        let child = try result("quickAdd", ["text": "Beta child", "parentId": f.beta])["taskId"]!
+        let done = try result("quickAdd", ["text": "Done"])["taskId"]!
+        try result("toggleComplete", ["id": done])
+        func move(_ ids: [JSON], _ target: JSON) throws -> JSON {
+            try send("moveTasks", ["ids": .array(ids), "target": target]).reply
+        }
+        XCTAssertEqual(try move([f.beta], ["kind": "task", "parentId": child])["error"], "The tasks cannot be moved there")
+        XCTAssertEqual(try move([f.beta], ["kind": "task", "parentId": f.beta])["error"], "The tasks cannot be moved there")
+        XCTAssertEqual(try move([f.beta], ["kind": "task", "parentId": done])["error"], "The tasks cannot be moved there")
+        XCTAssertEqual(try move([f.beta], ["kind": "task", "parentId": "nope"])["error"], "The task no longer exists")
+        XCTAssertEqual(try move([f.beta], ["kind": "section", "projectId": .string(f.home), "sectionId": .string(f.meetings)])["error"],
+                       "Unknown section")
+        XCTAssertEqual(try move([f.beta], ["kind": "project", "projectId": "nope"])["error"], "Unknown project")
+        XCTAssertEqual(try move([f.beta], ["kind": "galaxy"])["error"], "Unknown move target")
+        XCTAssertEqual(try move(["nope"], ["kind": "project", "projectId": .string(f.home)])["error"], "The tasks cannot be moved there")
+        // Nothing moved, so nothing was pushed: the last undo step is still the completion.
+        XCTAssertEqual(try result("undo")["message"], "1 task completed")
+        XCTAssertEqual(try result("getTask", ["id": f.beta])["projectId"], "inbox")
+    }
+
     // MARK: - Views
 
     func testSectionsCollapseAndCompletedTasks() async throws {

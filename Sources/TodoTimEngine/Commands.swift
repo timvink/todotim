@@ -27,8 +27,6 @@ extension Engine {
             if r["collapsed"]?.bool == true { collapsedSections.insert(sid) } else { collapsedSections.remove(sid) }
             saveUIState()
             return .null
-        case "targets":
-            return RowBuilder.targets(store)
 
         // MARK: Tasks
         case "parseQuickAdd":
@@ -69,8 +67,21 @@ extension Engine {
             let sid = r["sectionId"]?.string
             if let sid, !store.sections(in: pid).contains(where: { $0.id == sid }) { throw EngineError("Unknown section") }
             let parentId = r["parentId"]?.string
+            if let parentId {
+                guard let parent = store.task(parentId) else { throw EngineError("Unknown parent task") }
+                guard !parent.isCompleted else { throw EngineError("A task cannot be moved under a completed task") }
+                guard parentId != t.id, !store.descendantIDs(of: t.id).contains(parentId) else {
+                    throw EngineError("A task cannot be moved under itself")
+                }
+            }
             store.moveTask(t.id, projectId: pid, sectionId: sid, parentId: parentId, at: r["index"]?.int)
             return ["projectName": .string(store.project(pid)?.name)]
+        case "moveTargets":
+            guard let ids = r["ids"]?.array?.compactMap(\.string), !ids.isEmpty else { throw EngineError("Missing ids") }
+            return moveTargetsJSON(ids, query: r["query"]?.string ?? "")
+        case "moveTasks":
+            guard let ids = r["ids"]?.array?.compactMap(\.string), !ids.isEmpty else { throw EngineError("Missing ids") }
+            return try moveTasks(ids, to: try resolveMoveTarget(ids, r["target"]), selection: r["selection"] ?? .null)
         case "indentTask":
             store.indentTask(try task(r).id)
             return .null
@@ -336,7 +347,7 @@ extension Engine {
         return pushUndo(affected.count == 1 ? "1 task deleted" : "\(affected.count) tasks deleted", restore: restore, extra: [:])
     }
 
-    private func pushUndo(_ message: String, restore: @escaping () -> Void, selection: JSON = .null,
+    func pushUndo(_ message: String, restore: @escaping () -> Void, selection: JSON = .null,
                           extra: [String: JSON]) -> JSON {
         undoStack.append(UndoEntry(message: message, restore: restore, selection: selection))
         if undoStack.count > 50 { undoStack.removeFirst(undoStack.count - 50) }

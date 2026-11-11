@@ -2,7 +2,7 @@ import QtQuick
 import "Icons.js" as Icons
 
 // A keyboard picker: an optional filter field over a list. ↑/↓ (or Ctrl+J/K) move, Enter picks,
-// Esc closes. Used for dates, labels, moving a task, priorities and menus.
+// Esc closes. Used for dates, labels, priorities and menus.
 Modal {
   id: root
   property var app

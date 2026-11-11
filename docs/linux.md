@@ -69,14 +69,32 @@ The engine sends `sidebar` and `rows` only when they changed, and always before 
 request that changed them, so an id in a reply (a new task to select) is already in the rows.
 
 Commands: `hello`, `setView` (`view`: `{kind: "project", id}` / `{kind: "label", name}` /
-`{kind: "search", query}`), `setShowCompleted`, `setSectionCollapsed`, `targets`, `parseQuickAdd` (token
+`{kind: "search", query}`), `setShowCompleted`, `setSectionCollapsed`, `parseQuickAdd` (token
 ranges are UTF-16 offsets, as QML strings index), `quickAdd`, `getTask`, `updateTask` (`content`,
 `description`, `priority`, `due` or `dueText`, `labels`), `toggleComplete`, `completeTasks` (`ids`, one undo step), `deleteTask`, `undo` (hands back the
-`selection` a completion request carried, so the client selects those tasks again),
-`moveTask`, `indentTask`, `outdentTask`, `shiftTask`, `setTaskCollapsed`, `parseDate`, `addProject`,
+`selection` a completion or move request carried, so the client selects those tasks again),
+`moveTask` (`projectId`, `sectionId`, `parentId`: a live, open task outside the moved one), `moveTargets`,
+`moveTasks`, `indentTask`, `outdentTask`, `shiftTask`, `setTaskCollapsed`, `parseDate`, `addProject`,
 `updateProject`, `deleteProject`, `moveProject`, `addSection`, `renameSection`, `deleteSection`,
 `moveSection`, `addLabel`, `updateLabel`, `deleteLabel`, `syncNow`, `getSyncSettings`, `configureSync`,
 `testConnection`. `Tests/TodoTimEngineTests` exercises them end to end.
+
+The move dialog (`m`, `v`) uses two of them:
+
+- `moveTargets` (`ids`, `query`) replies with TodoCore's ranked targets (`TodoStore.moveTargets`) for
+  moving those tasks, as an array in display order of `{id, kind: "section" | "project" | "task", group:
+  "currentProject" | "sections" | "projects" | "tasks", projectId, sectionId, parentId, title,
+  projectName, projectColor (hex; null for the inbox), projectIsInbox, sectionName (a task's section),
+  isCurrent, matches}`. `matches` are the query words' occurrences in `title` as merged `[start, end)`
+  UTF-16 ranges, for highlighting. The dialog asks on every keystroke and applies only the reply to
+  its latest request.
+- `moveTasks` (`ids`, `target: {kind, projectId, sectionId, parentId}`, `selection`) looks the target
+  up among those TodoCore offers for the tasks (so a parent is never one of them, below them, completed
+  or deleted), moves them to its end (`TodoStore.moveTasks`; a sub-task whose parent moves too goes
+  along) and pushes one undo step that puts every moved task and its sub-tasks back (project,
+  section, parent and order) and re-collapses a parent the move opened. It replies with the moved
+  `ids`, `projectId` and a `toast` ("Moved to Work / Meetings", "Made a sub-task of “Write report”",
+  "3 tasks moved to Home"), or an error when the target is not valid for them.
 
 One engine runs per data folder (`engine.lock`); a second one waits five seconds for the first to exit
 (a restarting shell), then reports `fatal`. The engine writes the database and exits when stdin
