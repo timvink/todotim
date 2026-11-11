@@ -33,7 +33,7 @@ final class KeyRouter {
     private enum Key {
         static let up: UInt16 = 126, down: UInt16 = 125, left: UInt16 = 123, right: UInt16 = 124,
                    home: UInt16 = 115, end: UInt16 = 119, pageUp: UInt16 = 116, pageDown: UInt16 = 121,
-                   forwardDelete: UInt16 = 117, returnKey: UInt16 = 36, enter: UInt16 = 76, escape: UInt16 = 53
+                   forwardDelete: UInt16 = 117, delete: UInt16 = 51, returnKey: UInt16 = 36, enter: UInt16 = 76, escape: UInt16 = 53
     }
 
     /// Plain keys that are also menu key equivalents. While a modal panel is open they are
@@ -185,6 +185,15 @@ final class KeyRouter {
             case "k", "p": move.step(-1); return true
             default: break
             }
+        }
+        // ⌘ shortcuts of the menus act on the task behind the dialog (⌘↩ completes, ⌘] indents,
+        // ⌘⌫ deletes): only text editing and app-level ones pass; ⌘⌫ edits the field.
+        if mods.contains(.command) {
+            if event.keyCode == Key.delete {
+                event.window?.firstResponder?.doCommand(by: #selector(NSResponder.deleteToBeginningOfLine(_:)))
+                return true
+            }
+            return !["a", "c", "v", "x", "z", "q", "w", "h", ",", "`"].contains(chars.lowercased())
         }
         // Before the field has focus, nothing may reach the list behind the dialog.
         if !model.isEditingText {

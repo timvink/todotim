@@ -38,6 +38,9 @@ public final class TodoStore {
     /// completion, deletion, or a task's labels. Not bumped by content edits (title, description,
     /// priority, due date, collapsed). Views can use it as a cache key for flattened rows.
     public private(set) var structureVersion = 0
+    /// Changes whenever a project, section or task changes (names and content included): the
+    /// counters only grow, so their sum does too. A cache key for the move dialog's targets.
+    public var nameVersion: Int { projectsVersion &+ sectionsVersion &+ taskContentVersion }
     private var projectsVersion = 0
     private var sectionsVersion = 0
     private var labelsVersion = 0

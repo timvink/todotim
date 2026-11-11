@@ -636,10 +636,17 @@ final class AppModel {
         if target.isCurrent { return }
         let places = ids.compactMap { id -> Place? in
             guard let t = store.task(id) else { return nil }
-            let siblings = t.parentId.map { store.subtaskIDs(of: $0) }
+            // A completed task (shown completed tasks) has no open index: it goes back before the
+            // open sibling that followed it.
+            let all = t.parentId.map { store.subtaskIDs(of: $0, includeCompleted: true) }
+                ?? store.taskIDs(projectId: t.projectId, sectionId: t.sectionId, includeCompleted: true)
+            let open = t.parentId.map { store.subtaskIDs(of: $0) }
                 ?? store.taskIDs(projectId: t.projectId, sectionId: t.sectionId)
+            let openIndex = open.firstIndex(of: id) ?? all.firstIndex(of: id).map { i in
+                all[..<i].filter { $0 != id && open.contains($0) }.count
+            }
             return Place(id: id, projectId: t.projectId, sectionId: t.sectionId, parentId: t.parentId,
-                         index: siblings.firstIndex(of: id))
+                         index: openIndex)
         }
         let parentWasCollapsed = target.parentId.flatMap { store.task($0)?.collapsed } ?? false
         let before = (sidebar: sidebar, cursor: selectedTaskID, anchor: selectionAnchor, multi: multiSelection)

@@ -26,10 +26,10 @@ final class MoveDialogState {
 
     init(taskIDs: [EntityID]) { self.taskIDs = taskIDs }
 
-    /// Recomputes the targets when the query or the store's structure changed. The highlight goes
+    /// Recomputes the targets when the query or any project, section or task changed. The highlight goes
     /// to the first row that is not where the task already is.
     func refresh(_ store: TodoStore) {
-        let version = store.structureVersion
+        let version = store.nameVersion &+ store.structureVersion
         guard computedQuery != query || computedVersion != version else { return }
         let queryChanged = computedQuery != query
         computedQuery = query
@@ -104,6 +104,7 @@ struct MoveDialogView: View {
         }
         .onChange(of: state.query) { state.refresh(store) }
         .onChange(of: store.structureVersion) { state.refresh(store) }
+        .onChange(of: store.nameVersion) { state.refresh(store) }
     }
 
     /// What is moved: "Move “Title”" or "Move 3 tasks".
