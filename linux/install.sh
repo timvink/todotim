@@ -64,6 +64,23 @@ if [[ -n "$shell_config" && -f "$shell_config" ]] && command -v jq > /dev/null; 
   fi
 fi
 
+# A launcher entry, so TodoTim shows up in Omarchy's app launcher (Super+Space) like an app. It
+# toggles the panel, as a key bound to { panel = "timvink.todotim" } does. Rewritten on every
+# install, so it follows the plugin folder.
+apps="${XDG_DATA_HOME:-$HOME/.local/share}/applications"
+mkdir -p "$apps"
+cat > "$apps/todotim.desktop" <<EOF
+[Desktop Entry]
+Type=Application
+Name=TodoTim
+Comment=Keyboard-driven to-do lists that sync with your CalDAV server
+Exec=omarchy-shell shell toggle $id
+Icon=$dest/icon.svg
+Terminal=false
+Categories=Office;ProjectManagement;
+Keywords=todo;tasks;todoist;
+EOF
+
 # The shell reloads an installed plugin's code by itself; a new one needs a rescan, which runs in
 # the background, so enabling is retried until the shell knows the plugin. Without a bar widget,
 # enabling adds it to shell.json's plugins list, not to the bar.

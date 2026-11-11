@@ -1,0 +1,16 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024">
+  <!-- The TodoTim icon, as scripts/make_icon.swift draws it for the Mac: a completed checkbox in
+       Catppuccin peach, with the faint ring of its completion burst, on a Mocha squircle. -->
+  <defs>
+    <linearGradient id="body" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#313244"/>
+      <stop offset="1" stop-color="#1E1E2E"/>
+    </linearGradient>
+  </defs>
+  <rect x="100" y="100" width="824" height="824" rx="185" fill="url(#body)"/>
+  <circle cx="512" cy="512" r="325" fill="none" stroke="#FAB387" stroke-opacity="0.18" stroke-width="12"/>
+  <circle cx="512" cy="512" r="280" fill="none" stroke="#FAB387" stroke-opacity="0.35" stroke-width="16"/>
+  <circle cx="512" cy="512" r="220" fill="#FAB387"/>
+  <polyline points="410,504 485,584 625,429" fill="none" stroke="#11111B" stroke-width="50"
+            stroke-linecap="round" stroke-linejoin="round"/>
+</svg>

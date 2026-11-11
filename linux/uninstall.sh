@@ -12,6 +12,7 @@ if command -v omarchy-shell > /dev/null; then
   omarchy plugin disable "$id" > /dev/null 2>&1 || true
 fi
 rm -rf "$dest"
+rm -f "${XDG_DATA_HOME:-$HOME/.local/share}/applications/todotim.desktop"
 command -v omarchy-shell > /dev/null && omarchy-shell -q shell rescanPlugins
 echo "Removed the TodoTim plugin."
 

@@ -7,7 +7,7 @@ desktop. Your tasks sync with your own CalDAV server, together with the TodoTim 
 
     ./install.sh
 
-This copies the plugin to `~/.config/omarchy/plugins/timvink.todotim` and enables it. Then bind a key in
+This copies the plugin to `~/.config/omarchy/plugins/timvink.todotim` and enables it, and adds a TodoTim entry to the app launcher (Super+Space). To open it with a key, bind one in
 `~/.config/hypr/bindings.lua`:
 
     o.bind("SUPER + ALT + T", "TodoTim", { panel = "timvink.todotim" })
