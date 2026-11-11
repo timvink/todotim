@@ -14,7 +14,8 @@ final class EngineProcessTests: XCTestCase {
         var fds: [Int32] = [-1, -1]
         XCTAssertEqual(pipe(&fds), 0)
         let writer = Thread {
-            for chunk in ["{\"a\":1}\n{\"b\"", ":2}\r\n\n", "last"] {
+            let long = String(repeating: "x", count: 100_000)
+            for chunk in ["{\"a\":1}\n{\"b\"", ":2}\r\n\n", long, long + "\n", "last"] {
                 _ = chunk.utf8CString.withUnsafeBufferPointer { write(fds[1], $0.baseAddress, $0.count - 1) }
                 usleep(10_000)
             }
@@ -24,7 +25,7 @@ final class EngineProcessTests: XCTestCase {
         var lines: [String] = []
         EngineMain.readLines(from: fds[0]) { lines.append($0) }
         close(fds[0])
-        XCTAssertEqual(lines, ["{\"a\":1}", "{\"b\":2}", "", "last"])
+        XCTAssertEqual(lines, ["{\"a\":1}", "{\"b\":2}", "", String(repeating: "x", count: 200_000), "last"])
     }
 
     /// SIGTERM, SIGINT and SIGHUP save and exit while the reader waits on stdin. The engine used
@@ -45,6 +46,12 @@ final class EngineProcessTests: XCTestCase {
             let exited = DispatchSemaphore(value: 0)
             process.terminationHandler = { _ in exited.signal() }
             try process.run()
+            defer {
+                // Also when a check below throws: never leave an engine behind.
+                try? stdin.fileHandleForWriting.close()
+                if process.isRunning { kill(process.processIdentifier, SIGKILL) }
+                process.waitUntilExit()
+            }
 
             stdin.fileHandleForWriting.write(Data("{\"req\":1,\"cmd\":\"quickAdd\",\"text\":\"saved on quit\"}\n".utf8))
             let reply = try Self.readUntil("\"re\":1", from: stdout.fileHandleForReading, timeout: 10)
@@ -53,8 +60,6 @@ final class EngineProcessTests: XCTestCase {
             // Usually within the 0.3 s save delay, so the quit handler's flush saves it.
             kill(process.processIdentifier, sig)
             if exited.wait(timeout: .now() + 5) == .timedOut {
-                kill(process.processIdentifier, SIGKILL)
-                process.waitUntilExit()
                 XCTFail("signal \(sig): the engine did not exit")
                 continue
             }
@@ -62,7 +67,6 @@ final class EngineProcessTests: XCTestCase {
             XCTAssertEqual(process.terminationStatus, 0, "signal \(sig)")
             let db = try String(contentsOf: dir.appendingPathComponent("db.json"), encoding: .utf8)
             XCTAssertTrue(db.contains("saved on quit"), "signal \(sig): the task was not saved")
-            try? stdin.fileHandleForWriting.close()
         }
     }
 

@@ -129,11 +129,14 @@ public enum EngineMain {
             let n = buffer.withUnsafeMutableBytes { read(fd, $0.baseAddress, $0.count) }
             if n < 0 && errno == EINTR { continue }
             guard n > 0 else { break }
+            // Only the new bytes can hold a newline: `pending` had none (a long line stays linear).
+            var scan = pending.count
             pending.append(contentsOf: buffer[0..<n])
-            var start = pending.startIndex
-            while let newline = pending[start...].firstIndex(of: 10) {
+            var start = 0
+            while let newline = pending[scan...].firstIndex(of: 10) {
                 emit(pending[start..<newline])
                 start = newline + 1
+                scan = start
             }
             pending.removeSubrange(..<start)
         }
