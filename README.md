@@ -191,7 +191,7 @@ share_with = ["tasks-agent"]
 font_size = 11
 ```
 
-The Mac app 0.9.4 and earlier, and the Omarchy app 0.1.2 and earlier, refuse a file with `[omarchy]` (an unknown key
+The Mac app 0.10.0 and earlier, and the Omarchy app 0.2.0 and earlier, refuse a file with `[omarchy]` (an unknown key
 stops them from reading it, sync settings included), so update both before you add it.
 
 `password_command` runs in your login shell, so tools from Homebrew (or your Linux `PATH`) are found. Leave it out to enter the

@@ -44,7 +44,7 @@ fi
 mv "$stage" "$dest"
 rm -rf "$plugins/.$id.old"
 
-# TodoTim has no bar widget; versions up to 0.1.2 put one on the bar, so move such an entry
+# TodoTim has no bar widget; versions up to 0.2.0 put one on the bar, so move such an entry
 # from bar.layout to the plugins list, which keeps the plugin enabled without a spot on the bar.
 shell_config="$(readlink -f "${XDG_CONFIG_HOME:-$HOME/.config}/omarchy/shell.json" 2> /dev/null || true)"
 if [[ -n "$shell_config" && -f "$shell_config" ]] && command -v jq > /dev/null; then
