@@ -76,6 +76,7 @@ Modal {
   // Asks for the targets of the current text; only the reply to the latest request is applied.
   function load() {
     var mine = ++seq
+    acceptWhenLoaded = false  // an Enter pressed for an older query does not carry over
     query = field.text
     app.req("moveTargets", { ids: ids, query: field.text }, function(ok, result) {
       if (mine !== root.seq || !root.visible) return

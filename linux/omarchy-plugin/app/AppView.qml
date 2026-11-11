@@ -20,6 +20,8 @@ FocusScope {
   // order, both included. Empty while one task (or none) is selected. Like the Mac's `multiSelection`.
   property var multiIds: []
   property string selectionAnchor: ""
+  // Bumped when the move dialog opens and when it sends a move: a late reply checks it.
+  property int moveGeneration: 0
   property bool extendingSelection: false
   // Any other way of selecting a task ends a J/K selection.
   onSelectedIdChanged: if (!extendingSelection) clearMultiSelection()
@@ -565,6 +567,7 @@ FocusScope {
   // m, v: the move dialog for `ids` (in list order).
   function openMoveDialog(ids) {
     if (!ids || ids.length === 0) return
+    moveGeneration++
     openOverlay("move", { ids: ids, subject: ids.length === 1 ? "\u201c" + taskTitle(ids[0]) + "\u201d" : ids.length + " tasks" })
   }
 
@@ -573,10 +576,12 @@ FocusScope {
   function moveTasksTo(ids, target, done) {
     if (ids.indexOf(selectedId) >= 0) neighborId = neighborOfAll(ids)
     var where = { kind: target.kind, projectId: target.projectId, sectionId: target.sectionId, parentId: target.parentId }
+    var generation = ++moveGeneration
     req("moveTasks", { ids: ids, target: where, selection: selectionState() }, function(ok, r) {
-      if (!ok) { app.neighborId = ""; done(false, r); return }
-      done(true, "")
-      app.closeOverlay("move")
+      // A reply for a dialog that was closed (and maybe opened again) only shows its result.
+      var same = generation === app.moveGeneration
+      if (!ok) { app.neighborId = ""; if (same) done(false, r); else app.showResult(ok, r); return }
+      if (same) { done(true, ""); app.closeOverlay("move") }
       app.showResult(ok, r)
     })
   }

@@ -109,13 +109,17 @@ extension Engine {
         let restore: () -> Void = { [weak self] in
             guard let store = self?.store else { return }
             store.performBatch {
-                for (id, p) in before {
-                    store.updateTask(id) { t in
-                        t.projectId = p.projectId
-                        t.sectionId = p.sectionId
-                        t.parentId = p.parentId
-                        t.order = p.order
-                    }
+                // Parents first, so a restored sub-task follows its parent; places that are gone since
+                // (a deleted project, section or parent) fall back to the nearest live one.
+                // `updateTask` must not change the location, so the order is restored with `moveTask`'s
+                // location and then the saved order.
+                let ordered = before.sorted { a, b in (a.value.parentId == nil ? 0 : 1, a.key) < (b.value.parentId == nil ? 0 : 1, b.key) }
+                for (id, p) in ordered where store.task(id) != nil {
+                    guard store.project(p.projectId) != nil else { continue }
+                    let section = p.sectionId.flatMap { sid in store.sections(in: p.projectId).contains { $0.id == sid } ? sid : nil }
+                    let parent = p.parentId.flatMap { store.task($0) != nil ? $0 : nil }
+                    store.moveTask(id, projectId: p.projectId, sectionId: section, parentId: parent)
+                    store.updateTask(id) { $0.order = p.order }
                 }
                 if parentWasCollapsed, let pid = target.parentId { store.updateTask(pid) { $0.collapsed = true } }
             }

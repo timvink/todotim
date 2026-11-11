@@ -674,9 +674,14 @@ final class AppModel {
             guard let self else { return }
             withAnimation(Theme.motion) {
                 self.store.performBatch {
-                    for p in restorePlaces where self.store.task(p.id) != nil {
-                        self.store.moveTask(p.id, projectId: p.projectId, sectionId: p.sectionId,
-                                            parentId: p.parentId, at: p.index)
+                    // A place deleted since (project, section, parent) falls back to the nearest live one.
+                    for p in restorePlaces where self.store.task(p.id) != nil && self.store.project(p.projectId) != nil {
+                        let section = p.sectionId.flatMap { sid in
+                            self.store.sections(in: p.projectId).contains { $0.id == sid } ? sid : nil
+                        }
+                        let parent = p.parentId.flatMap { self.store.task($0) != nil ? $0 : nil }
+                        self.store.moveTask(p.id, projectId: p.projectId, sectionId: section,
+                                            parentId: parent, at: p.index)
                     }
                     if parentWasCollapsed, let pid = target.parentId {
                         self.store.updateTask(pid) { $0.collapsed = true }
