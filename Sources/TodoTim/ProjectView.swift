@@ -225,6 +225,13 @@ private struct SelectionScroller: View {
                     proxy.scrollTo(id)
                 } else {
                     withAnimation(.easeOut(duration: 0.12)) { proxy.scrollTo(id) }
+                    // An animated scroll to a row the lazy stack has not built yet (one just
+                    // above the screen, e.g. `{` to a task whose sub-tasks are on screen) can
+                    // leave the list where it was. Once it would have ended, jump instead.
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.25) {
+                        guard model.selectedTaskID == id, !visible.ids.contains(id) else { return }
+                        proxy.scrollTo(id)
+                    }
                 }
             }
             // The inline editor (`a`, "Add task", a new subtask) opens without a selection, and
