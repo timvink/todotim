@@ -433,21 +433,7 @@ struct TaskMenuItems: View {
             }
         }
         Button("Labels…") { model.selectedTaskID = task.id; model.popover = .labels }
-        Menu("Move to") {
-            ForEach(model.allProjects) { p in
-                let sections = store.sections(in: p.id)
-                if sections.isEmpty {
-                    Button(p.name) { model.move(task.id, toProject: p.id, section: nil) }
-                } else {
-                    Menu(p.name) {
-                        Button("(No section)") { model.move(task.id, toProject: p.id, section: nil) }
-                        ForEach(sections) { s in
-                            Button(s.name) { model.move(task.id, toProject: p.id, section: s.id) }
-                        }
-                    }
-                }
-            }
-        }
+        Button("Move…") { model.showMoveDialog(for: task.id) }
         Divider()
         Button(task.isCompleted ? "Reopen task" : "Complete task") { model.toggleComplete(task.id) }
         Button("Delete task…", role: .destructive) { model.requestDelete(task.id) }

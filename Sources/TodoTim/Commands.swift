@@ -77,9 +77,9 @@ struct AppCommands: Commands {
             Button("Labels…") { model.showPopover(.labels) }
                 .keyboardShortcut("@", modifiers: [])
                 .disabled(!model.hasSelection)
-            Button("Move to Project…") { model.showPopover(.move) }
-                .keyboardShortcut("v", modifiers: [])
-                .disabled(!model.hasSelection)
+            Button("Move…") { model.showMoveDialog() }
+                .keyboardShortcut("m", modifiers: [])
+                .disabled(!model.hasActionTask)
             Divider()
             Button("Delete Task…") {
                 textOr(#selector(NSResponder.deleteToBeginningOfLine(_:))) { model.requestDelete() }
@@ -169,6 +169,7 @@ enum ShortcutCatalog {
             Item(keys: "⇧↑  or  ⇧K", action: "Select the previous task too"),
             Item(keys: "G  then  G  or  Home", action: "Select first task in section"),
             Item(keys: "⇧G  or  End", action: "Select last task in section"),
+            Item(keys: "}  /  {", action: "Next / previous section"),
             Item(keys: "PgUp  /  PgDn", action: "Scroll the list"),
             Item(keys: "←  /  →  or  H  /  L", action: "Hide / show sub-tasks"),
             Item(keys: "Esc", action: "Close editor / clear selection"),
@@ -186,14 +187,14 @@ enum ShortcutCatalog {
             Item(keys: "1  2  3  4", action: "Set priority"),
             Item(keys: "T", action: "Set date"),
             Item(keys: "@", action: "Labels"),
-            Item(keys: "V", action: "Move to project"),
+            Item(keys: "M  or  V", action: "Move to a section, project or task"),
             Item(keys: "⌘]  /  ⌘[", action: "Indent / outdent"),
             Item(keys: "⌘↑  /  ⌘↓  or  ⌘K  /  ⌘J", action: "Move up / down"),
             Item(keys: "⌘⌫  or  ⌦", action: "Delete task"),
         ]),
         ("Task view", [
             Item(keys: "↑ ↓  or  K J", action: "Previous / next task"),
-            Item(keys: "T  /  @  /  V", action: "Date / labels / move"),
+            Item(keys: "T  /  @  /  M", action: "Date / labels / move"),
             Item(keys: "↩  /  D", action: "Edit title / description"),
             Item(keys: "A", action: "Add sub-task"),
             Item(keys: "⌦", action: "Delete task"),

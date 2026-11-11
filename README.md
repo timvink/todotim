@@ -13,7 +13,7 @@ the calendar and board views.
 
 ## Features
 
-- Vim motions: `j` `k` to move through tasks, `gg` `G` to jump to the top or bottom of a section, `h` `l` to hide
+- Vim motions: `j` `k` to move through tasks, `gg` `G` to jump to the top or bottom of a section, `{` `}` to jump between sections, `h` `l` to hide
   and show sub-tasks, `/` to search and `Esc` to step back out. Todoist's single-key shortcuts do the rest
   (press `?` in the app for all of them)
 - Catppuccin colours: Mocha in Dark Mode, Latte in Light Mode
@@ -220,6 +220,7 @@ TodoTim moves like vim:
 | `j` / `k`, `↓` / `↑` | Next / previous task. With nothing selected, the top / bottom of the current section |
 | `J` / `K`, `⇧↓` / `⇧↑` | Select the next / previous task too (several tasks at once) |
 | `gg` / `G`, `Home` / `End` | First / last task of the section |
+| `}` / `{` | First task of the next / previous section |
 | `h` / `l`, `←` / `→` | Hide / show sub-tasks. On a sub-task, `h` hides its list and selects the parent |
 | `/` | Search. `Esc` leaves the search field, and a second `Esc` returns to the list you came from |
 | `g` then `i` | Go to Inbox |
@@ -238,7 +239,8 @@ The other shortcuts follow Todoist and macOS (in Omarchy, `Ctrl` instead of `⌘
 | `Enter` | Open selected task; in an open task, edit its title (`d`: its description, `a`: add a sub-task) |
 | `x`, `e`, `⌘↩` | Complete or reopen the selected tasks |
 | `1`–`4` | Set priority |
-| `t` / `@` / `v` | Set date / labels / move to project |
+| `t` / `@` | Set date / labels |
+| `m`, `v` | Move to a section, project or task (type to search; a task target makes it a sub-task) |
 | `⌘]` / `⌘[` | Indent / outdent (make subtask) |
 | `⌘↑` / `⌘↓`, `⌘K` / `⌘J` | Move task up / down |
 | `⌘⌫`, `Delete` (`⌦`) | Delete task |

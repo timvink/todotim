@@ -88,7 +88,7 @@ fileprivate struct TaskDetailContent: View {
     private var header: some View {
         HStack(spacing: 2) {
             if let p = store.project(task.projectId) {
-                Button { model.popover = .move } label: {
+                Button { model.showMoveDialog(for: task.id) } label: {
                     // On the panel's grid: the icon in the checkbox column, the name where titles start.
                     HStack(spacing: Self.columnGap) {
                         ProjectIcon(p, fill: 1, size: 9).frame(width: Self.column)
@@ -107,8 +107,7 @@ fileprivate struct TaskDetailContent: View {
                     .contentShape(Rectangle())
                 }
                 .buttonStyle(HoverButtonStyle())
-                .help("Move to project (V)")
-                .popover(isPresented: popoverBinding(.move), arrowEdge: .bottom) { movePicker }
+                .help("Move (M)")
             }
             Spacer()
             headerButton("chevron.up", help: "Previous task (↑ / K)") { model.moveDetail(-1) }
@@ -158,14 +157,6 @@ fileprivate struct TaskDetailContent: View {
         .buttonStyle(HoverButtonStyle())
         .foregroundStyle(Theme.tertiaryText)
         .help(help)
-    }
-
-    private var movePicker: some View {
-        MovePicker(current: (task.projectId, task.sectionId)) { pid, sid in
-            model.popover = nil
-            model.move(task.id, toProject: pid, section: sid)
-        }
-        .environment(model).environment(store)
     }
 
     // MARK: Body

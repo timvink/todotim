@@ -34,7 +34,7 @@ struct ContentView: View {
         })
         .onAppear { model.undoManager = undoManager }
         .onChange(of: undoManager) { _, um in model.undoManager = um }
-        // Task view, Quick Add and the shortcuts list are panels inside the window, like Todoist.
+        // Task view, Quick Add, the move dialog and the shortcuts list are panels inside the window, like Todoist.
         .overlay { ModalLayer().ignoresSafeArea() }
         .sheet(isPresented: $model.showAddProject) {
             ProjectFormView(project: nil).environment(model).environment(store)
@@ -118,6 +118,7 @@ private struct ModalLayer: View {
         let detail = model.detailTaskID != nil
         let quickAdd = model.showQuickAdd
         let shortcuts = model.showShortcuts
+        let move = model.moveDialog
         // Panels center on the list pane (the backdrop covers the whole window).
         let left = model.detailMinX
         GeometryReader { geo in
@@ -143,6 +144,16 @@ private struct ModalLayer: View {
                         .padding(.leading, left)
                         .padding(.top, max(56, size.height * 0.14))
                 }
+                // Above the task view, which it can open from.
+                if let move {
+                    Backdrop { model.closeMoveDialog() }
+                    MoveDialogView(state: move)
+                        .frame(width: min(520, paneWidth - 48))
+                        .modalPanel(lift: 8)
+                        .frame(maxWidth: .infinity)
+                        .padding(.leading, left)
+                        .padding(.top, max(56, size.height * 0.14))
+                }
                 if shortcuts {
                     Backdrop { model.showShortcuts = false }
                     ShortcutsHelpView()
@@ -160,6 +171,7 @@ private struct ModalLayer: View {
         .animation(detail ? Theme.panelIn : Theme.panelOut, value: detail)
         .animation(quickAdd ? Theme.panelIn : Theme.panelOut, value: quickAdd)
         .animation(shortcuts ? Theme.panelIn : Theme.panelOut, value: shortcuts)
+        .animation(move != nil ? Theme.panelIn : Theme.panelOut, value: move != nil)
     }
 }
 

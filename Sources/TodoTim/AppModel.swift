@@ -24,7 +24,7 @@ struct SectionEditorTarget: Equatable {
     var index: Int?
 }
 
-enum TaskPopover: Equatable { case date, labels, move }
+enum TaskPopover: Equatable { case date, labels }
 
 /// A task, or the section the inline editor opened in (see `AppModel.anchor`).
 enum NavigationAnchor { case task(EntityID), area(TaskArea) }
@@ -113,8 +113,10 @@ final class AppModel {
     static let collapsedSectionsKey = "collapsedSectionIDs"
     /// Drag-to-reorder state; observed only by the task list and the sidebar.
     @ObservationIgnored let drag = DragState()
-    /// Whether an in-window modal (task view, Quick Add, shortcuts) covers the window.
-    var hasModal: Bool { detailTaskID != nil || showQuickAdd || showShortcuts }
+    /// The move dialog (`m` / `v`) while it is open.
+    var moveDialog: MoveDialogState?
+    /// Whether an in-window modal (task view, Quick Add, move, shortcuts) covers the window.
+    var hasModal: Bool { detailTaskID != nil || showQuickAdd || showShortcuts || moveDialog != nil }
     var editor: EditorTarget? {
         didSet {
             guard let e = editor else { return }
@@ -274,6 +276,28 @@ final class AppModel {
         guard let run = selectedTaskID.flatMap({ d.position[$0] }).flatMap(d.run(containing:)) ?? currentRun(in: d)
         else { return }
         selectedTaskID = d.taskIDs[last ? run.range.upperBound - 1 : run.range.lowerBound]
+    }
+
+    /// Vim `}` / `{`: `}` selects the first task of the next section (the last task in the last
+    /// section); `{` the first task of this section, or of the previous one when already there.
+    /// Sections without tasks are skipped.
+    func jumpSection(_ direction: Int) {
+        let d = cachedDisplay()
+        let runs = d.runs.filter { !$0.range.isEmpty }
+        guard !runs.isEmpty else { return }
+        guard let i = selectedTaskID.flatMap({ d.position[$0] }),
+              let r = runs.firstIndex(where: { $0.range.contains(i) }) else {
+            guard let run = currentRun(in: d), !run.range.isEmpty else { return }
+            selectedTaskID = d.taskIDs[run.range.lowerBound]
+            return
+        }
+        if direction > 0 {
+            selectedTaskID = d.taskIDs[r + 1 < runs.count ? runs[r + 1].range.lowerBound : runs[r].range.upperBound - 1]
+        } else if i > runs[r].range.lowerBound {
+            selectedTaskID = d.taskIDs[runs[r].range.lowerBound]
+        } else if r > 0 {
+            selectedTaskID = d.taskIDs[runs[r - 1].range.lowerBound]
+        }
     }
 
     /// The section the keyboard is in while no task is selected: the anchor's while any of it is
@@ -570,11 +594,108 @@ final class AppModel {
     func outdent() { if let id = actionTaskID { withAnimation(Theme.motion) { store.outdentTask(id) } } }
     func shift(_ delta: Int) { if let id = actionTaskID { withAnimation(Theme.motion) { store.shiftTask(id, by: delta) } } }
 
-    func move(_ id: EntityID, toProject pid: EntityID, section sid: EntityID?) {
-        guard let t = store.task(id), t.projectId != pid || t.sectionId != sid || t.parentId != nil else { return }
-        store.moveTask(id, projectId: pid, sectionId: sid, parentId: nil)
-        let name = store.project(pid)?.name ?? ""
-        showToast("Task moved to \(name)", undo: nil)
+    // MARK: - Move dialog
+
+    /// `m` / `v`: opens the move dialog for `id`, else the open task, else the ⇧J/⇧K selection
+    /// (in list order), else the selected task.
+    func showMoveDialog(for id: EntityID? = nil) {
+        let ids: [EntityID]
+        if let id {
+            ids = [id]
+        } else if detailTaskID == nil, !multiSelection.isEmpty {
+            ids = cachedDisplay().taskIDs.filter(multiSelection.contains)
+        } else if let id = actionTaskID {
+            ids = [id]
+        } else {
+            return
+        }
+        guard !ids.isEmpty else { return }
+        popover = nil
+        moveDialog = MoveDialogState(taskIDs: ids)
+    }
+
+    func closeMoveDialog() { moveDialog = nil }
+
+    /// Where a task was before a move, to put it back on undo.
+    private struct Place {
+        let id: EntityID
+        let projectId: EntityID
+        let sectionId: EntityID?
+        let parentId: EntityID?
+        /// Index among its open siblings (what `moveTask(at:)` takes); nil for a completed task.
+        let index: Int?
+    }
+
+    /// Moves the open dialog's tasks to `target` (its highlighted row when Enter is pressed), with
+    /// an undo toast. Picking where a single task already is only closes the dialog.
+    func performMove(_ target: MoveTarget?) {
+        guard let dialog = moveDialog else { return }
+        guard let target else { return }  // no matches: Enter does nothing
+        moveDialog = nil
+        let ids = dialog.taskIDs
+        if target.isCurrent { return }
+        let places = ids.compactMap { id -> Place? in
+            guard let t = store.task(id) else { return nil }
+            let siblings = t.parentId.map { store.subtaskIDs(of: $0) }
+                ?? store.taskIDs(projectId: t.projectId, sectionId: t.sectionId)
+            return Place(id: id, projectId: t.projectId, sectionId: t.sectionId, parentId: t.parentId,
+                         index: siblings.firstIndex(of: id))
+        }
+        let parentWasCollapsed = target.parentId.flatMap { store.task($0)?.collapsed } ?? false
+        let before = (sidebar: sidebar, cursor: selectedTaskID, anchor: selectionAnchor, multi: multiSelection)
+        let fallback = neighbor(skipping: ids)
+        var moved: [EntityID] = []
+        withAnimation(Theme.motion) { moved = store.moveTasks(ids, to: target) }
+        guard !moved.isEmpty else { return }
+
+        // The list keeps a selection on screen: a task that left it hands over to its neighbour.
+        if detailTaskID == nil {
+            let position = cachedDisplay().position
+            if let cur = selectedTaskID, position[cur] == nil {
+                setSelection(cursor: fallback, anchor: nil, multi: [])
+            } else if multiSelection.contains(where: { position[$0] == nil }) {
+                setSelection(cursor: selectedTaskID, anchor: selectionAnchor,
+                             multi: multiSelection.filter { position[$0] != nil })
+            }
+        }
+
+        // Back in their old places, in list order, so each index counts the same siblings as before.
+        let movedSet = Set(moved)
+        let restorePlaces = places.filter { movedSet.contains($0.id) }
+            .sorted { ($0.index ?? .max) < ($1.index ?? .max) }
+        let restore: () -> Void = { [weak self] in
+            guard let self else { return }
+            withAnimation(Theme.motion) {
+                self.store.performBatch {
+                    for p in restorePlaces where self.store.task(p.id) != nil {
+                        self.store.moveTask(p.id, projectId: p.projectId, sectionId: p.sectionId,
+                                            parentId: p.parentId, at: p.index)
+                    }
+                    if parentWasCollapsed, let pid = target.parentId {
+                        self.store.updateTask(pid) { $0.collapsed = true }
+                    }
+                }
+            }
+            if self.sidebar == before.sidebar, self.detailTaskID == nil {
+                self.setSelection(cursor: before.cursor, anchor: before.anchor, multi: before.multi)
+            }
+        }
+        registerUndo(moved.count == 1 ? "Move Task" : "Move Tasks", restore)
+        showToast(Self.moveMessage(count: moved.count, target: target), undo: restore)
+    }
+
+    /// "Moved to Work / Meetings", "Made a sub-task of “Write report”", "3 tasks moved to Home".
+    private static func moveMessage(count: Int, target: MoveTarget) -> String {
+        func short(_ s: String) -> String { s.count > 40 ? String(s.prefix(39)) + "…" : s }
+        let place = switch target.kind {
+        case .project: short(target.projectName)
+        case .section: "\(short(target.projectName)) / \(short(target.title))"
+        case .task: "“\(short(target.title))”"
+        }
+        if target.kind == .task {
+            return count == 1 ? "Made a sub-task of \(place)" : "\(count) tasks made sub-tasks of \(place)"
+        }
+        return count == 1 ? "Moved to \(place)" : "\(count) tasks moved to \(place)"
     }
 
     /// Starts a drag of a task row (called when the drag session begins).

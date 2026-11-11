@@ -9,7 +9,8 @@ import TodoCore
 /// focusable, so a local NSEvent monitor is used instead. Keys pass through untouched
 /// while a text field has focus, while a modifier (⌘/⌃/⌥) is held (menu commands
 /// handle those), and in windows other than the main window (popovers, alerts, Settings).
-/// While a picker popover is open, keys that reach the main window are forwarded to it.
+/// While a picker popover is open, keys that reach the main window are forwarded to it. The move
+/// dialog takes its keys first: ↑/↓ and ⌃J/⌃K (⌘J/⌘K) step its highlight, Esc closes it.
 @MainActor
 final class KeyRouter {
     private let model: AppModel
@@ -37,8 +38,8 @@ final class KeyRouter {
 
     /// Plain keys that are also menu key equivalents. While a modal panel is open they are
     /// swallowed so they do not act on the list behind it.
-    private static let menuKeys: Set<String> = ["q", "a", "A", "s", "t", "@", "v", "j", "k", "h", "l", "e", "/", "?",
-                                                "g", "G", "1", "2", "3", "4", "x", "J", "K", "u"]
+    private static let menuKeys: Set<String> = ["q", "a", "A", "s", "t", "@", "v", "m", "j", "k", "h", "l", "e", "/", "?",
+                                                "g", "G", "{", "}", "1", "2", "3", "4", "x", "J", "K", "u"]
 
     /// Returns true when the event was consumed.
     private func handle(_ event: NSEvent) -> Bool {
@@ -46,6 +47,9 @@ final class KeyRouter {
         guard let window = event.window, let main = model.mainWindow, window === main,
               main.attachedSheet == nil else { return false }
         let chars = event.charactersIgnoringModifiers ?? ""
+        // The move dialog is topmost (it can open over the task view), and its keys come before
+        // ⌘J/⌘K, which would otherwise move the task behind it.
+        if let move = model.moveDialog { return handleMoveDialog(event, chars: chars, move) }
         // ⌘J / ⌘K move the task like ⌘↓ / ⌘↑ (Ctrl+J / Ctrl+K in Omarchy).
         if event.modifierFlags.intersection([.command, .control, .option, .shift]) == .command,
            chars == "j" || chars == "k" {
@@ -93,7 +97,7 @@ final class KeyRouter {
                 model.setPriority(Priority(rawValue: Int(chars)!)!)
             case (_, "t"): model.popover = .date
             case (_, "@"): model.popover = .labels
-            case (_, "v"): model.popover = .move
+            case (_, "m"), (_, "v"): model.showMoveDialog()
             case (_, "u"): return model.undoFromToast()
             default: return Self.menuKeys.contains(chars)
             }
@@ -142,6 +146,8 @@ final class KeyRouter {
         case "h": model.collapseSelected()
         case "l": model.expandSelected()
         case "G": model.moveSelectionToSectionEdge(last: true)
+        case "}": model.jumpSection(1)
+        case "{": model.jumpSection(-1)
         case "q": model.showQuickAdd = true
         case "a": model.addTaskInCurrentSection(atTop: false)
         case "A": model.addTaskInCurrentSection(atTop: true)
@@ -151,7 +157,9 @@ final class KeyRouter {
             model.setPriority(Priority(rawValue: Int(chars)!)!, for: id)
         case "t": model.showPopover(.date)
         case "@": model.showPopover(.labels)
-        case "v": model.showPopover(.move)
+        case "m", "v":
+            guard model.hasActionTask else { return false }
+            model.showMoveDialog()
         case "s": model.addSectionAtEnd()
         case "/": model.focusSearch()
         case "?": model.showShortcuts = true
@@ -160,5 +168,31 @@ final class KeyRouter {
         default: return false
         }
         return true
+    }
+
+    /// Keys while the move dialog is open. Typing goes to its field; Return is the field's submit.
+    private func handleMoveDialog(_ event: NSEvent, chars: String, _ move: MoveDialogState) -> Bool {
+        let mods = event.modifierFlags.intersection([.command, .control, .option, .shift])
+        switch event.keyCode {
+        case Key.escape: model.closeMoveDialog(); return true
+        case Key.up where mods.isEmpty: move.step(-1); return true
+        case Key.down where mods.isEmpty: move.step(1); return true
+        default: break
+        }
+        if mods == .control || mods == .command {
+            switch chars {
+            case "j", "n": move.step(1); return true
+            case "k", "p": move.step(-1); return true
+            default: break
+            }
+        }
+        // Before the field has focus, nothing may reach the list behind the dialog.
+        if !model.isEditingText {
+            if event.keyCode == Key.returnKey || event.keyCode == Key.enter {
+                model.performMove(move.highlighted)
+            }
+            return mods.intersection([.command, .control, .option]).isEmpty
+        }
+        return false
     }
 }

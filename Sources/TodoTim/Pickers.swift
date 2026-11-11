@@ -2,7 +2,7 @@ import AppKit
 import SwiftUI
 import TodoCore
 
-/// Popover shown for the selected task by `t` / `l` / `v` (and the row's calendar button).
+/// Popover shown for the selected task by `t` / `@` (and the row's calendar button).
 struct TaskPopoverContent: View {
     @Environment(AppModel.self) private var model
     @Environment(TodoStore.self) private var store
@@ -21,11 +21,6 @@ struct TaskPopoverContent: View {
                 LabelsPicker(selection: Binding(
                     get: { store.task(taskID)?.labels ?? [] },
                     set: { new in store.updateTask(taskID) { $0.labels = new } }))
-            case .move:
-                MovePicker(current: (task.projectId, task.sectionId)) { pid, sid in
-                    model.popover = nil
-                    model.move(taskID, toProject: pid, section: sid)
-                }
             }
         }
     }
@@ -279,63 +274,6 @@ struct LabelsPicker: View {
 
     private func toggle(_ name: String) {
         if let i = selection.firstIndex(of: name) { selection.remove(at: i) } else { selection.append(name) }
-    }
-}
-
-/// Searchable list of projects and sections (Todoist's "Move to…").
-struct MovePicker: View {
-    @Environment(AppModel.self) private var model
-    @Environment(TodoStore.self) private var store
-    let current: (EntityID, EntityID?)
-    let onPick: (EntityID, EntityID?) -> Void
-    @State private var filter = ""
-    @FocusState private var focused: Bool
-
-    private struct Choice: Identifiable {
-        let project: Project
-        let section: TodoCore.Section?
-        var id: String { project.id + "/" + (section?.id ?? "") }
-        var title: String { section?.name ?? project.name }
-    }
-
-    var body: some View {
-        let q = filter.trimmingCharacters(in: .whitespaces)
-        let choices = model.allProjects.flatMap { p in
-            [Choice(project: p, section: nil)] + store.sections(in: p.id).map { Choice(project: p, section: $0) }
-        }.filter {
-            q.isEmpty || $0.title.localizedCaseInsensitiveContains(q) || $0.project.name.localizedCaseInsensitiveContains(q)
-        }
-        VStack(alignment: .leading, spacing: 0) {
-            PickerField(prompt: "Type a project name", text: $filter, focused: $focused) {
-                if let c = choices.first { onPick(c.project.id, c.section?.id) }
-            }
-            ScrollView {
-                VStack(alignment: .leading, spacing: 0) {
-                    ForEach(choices) { c in
-                        let isCurrent = current.0 == c.project.id && current.1 == c.section?.id
-                        Button { onPick(c.project.id, c.section?.id) } label: {
-                            // A section sits under its project's name.
-                            PickerRow(c.title, indent: c.section == nil ? 0 : PickerStyle.iconWidth + 8) {
-                                if c.section == nil {
-                                    ProjectIcon(c.project)
-                                } else {
-                                    Image(systemName: "rectangle.split.1x2").foregroundStyle(Theme.tertiaryText)
-                                }
-                            } trailing: {
-                                if isCurrent {
-                                    Image(systemName: "checkmark").font(Fonts.icon).foregroundStyle(Theme.accent)
-                                }
-                            }
-                        }
-                        .buttonStyle(HoverRowButtonStyle())
-                    }
-                }
-                .padding(.vertical, 4)
-            }
-            .frame(maxHeight: 300)
-        }
-        .pickerSurface(width: 260)
-        .onAppear { focused = true }
     }
 }
 

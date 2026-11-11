@@ -13,7 +13,8 @@ import TodoCore
 ///     close                close every modal
 ///     quickadd TEXT        open Quick Add (TEXT is typed into it when given)
 ///     shortcuts            open the shortcuts list
-///     popover date|labels|move
+///     popover date|labels
+///     move [TEXT]          open the move dialog for the action task (TEXT is typed into it when given)
 ///     drag I [panel]       start dragging visible task I (in the task panel's sub-task list)
 ///     target before|after|child I    set the drop target to visible task I
 ///     target start|end S   section S (index; -1 = no section)
@@ -21,7 +22,7 @@ import TodoCore
 ///     enddrag              cancel the drag
 ///     collapse S           toggle section S
 ///     order                print the visible task titles with depths
-///     key esc|up|down|return|j|k|h|l|g|G|a|e|t|v|@|/|u|x|J|K|d|left|right|home|end|pageup|pagedown|delete|cmd-j|cmd-k|shift-up|shift-down   post a key press to the app's own queue
+///     key esc|up|down|return|j|k|h|l|g|G|a|e|t|v|m|@|/|u|x|J|K|{|}|d|left|right|home|end|pageup|pagedown|delete|cmd-j|cmd-k|ctrl-j|ctrl-k|shift-up|shift-down   post a key press to the app's own queue
 ///     search TEXT          open search with this query
 ///     state                print the list, the selection and which modals are open
 ///     addtask TEXT         add a task with this raw title to the current project
@@ -79,6 +80,15 @@ enum UITestHook {
             if let i = Int(arg), let id = visible(i) { model.openTask(id) } else { model.openSelected() }
         case "close":
             model.detailTaskID = nil; model.showQuickAdd = false; model.showShortcuts = false; model.popover = nil
+            model.closeMoveDialog()
+        case "move":
+            model.showMoveDialog()
+            let text = parts.dropFirst().joined(separator: " ")
+            if !text.isEmpty {
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.4) {
+                    (model.mainWindow?.firstResponder as? NSTextView)?.insertText(text, replacementRange: NSRange(location: NSNotFound, length: 0))
+                }
+            }
         case "quickadd":
             model.showQuickAdd = true
             let text = parts.dropFirst().joined(separator: " ")
@@ -89,7 +99,7 @@ enum UITestHook {
             }
         case "shortcuts": model.showShortcuts = true
         case "popover":
-            model.popover = ["date": .date, "labels": .labels, "move": .move][arg]
+            model.popover = ["date": .date, "labels": .labels][arg]
         case "drag":
             if let id = visible(Int(arg) ?? 0) { model.beginDrag(id, rowHeight: 50, inPanel: arg2 == "panel", trackMouse: false) }
         case "target":
@@ -131,10 +141,11 @@ enum UITestHook {
                                                     "home": ("\u{F729}", 115), "end": ("\u{F72B}", 119),
                                                     "pageup": ("\u{F72C}", 116), "pagedown": ("\u{F72D}", 121),
                                                     "delete": ("\u{F728}", 117), "cmd-j": ("j", 38), "cmd-k": ("k", 40),
+                                                    "m": ("m", 46), "{": ("{", 33), "}": ("}", 30), "ctrl-j": ("j", 38), "ctrl-k": ("k", 40),
                                                     "shift-up": ("\u{F700}", 126), "shift-down": ("\u{F701}", 125)]
             guard let w = model.mainWindow, let (chars, code) = codes[arg] else { break }
-            let flags: NSEvent.ModifierFlags = arg.hasPrefix("cmd-") ? .command
-                : arg.hasPrefix("shift-") || arg == "J" || arg == "K" ? .shift : []
+            let flags: NSEvent.ModifierFlags = arg.hasPrefix("cmd-") ? .command : arg.hasPrefix("ctrl-") ? .control
+                : arg.hasPrefix("shift-") || ["J", "K", "{", "}"].contains(arg) ? .shift : []
             if let e = NSEvent.keyEvent(with: .keyDown, location: .zero, modifierFlags: flags, timestamp: ProcessInfo.processInfo.systemUptime,
                                         windowNumber: w.windowNumber, context: nil, characters: chars,
                                         charactersIgnoringModifiers: chars, isARepeat: false, keyCode: code) {
@@ -149,7 +160,7 @@ enum UITestHook {
             out("view=\(view) selected=\(model.selectedTaskID.flatMap { store.task($0)?.content } ?? "nil")"
                 + (onScreen.map { " onScreen=\($0)" } ?? "") + " editingText=\(model.isEditingText)"
                 + " multi=\(model.visibleTaskIDs().filter(model.multiSelection.contains).compactMap { store.task($0)?.content })")
-            out("detail=\(model.detailTaskID.flatMap { store.task($0)?.content } ?? "nil") quickAdd=\(model.showQuickAdd) shortcuts=\(model.showShortcuts) editor=\(model.editor != nil) collapsed=\(model.collapsedSections.count)"
+            out("detail=\(model.detailTaskID.flatMap { store.task($0)?.content } ?? "nil") quickAdd=\(model.showQuickAdd) move=\(model.moveDialog.map { "\($0.highlighted?.title ?? "-")" } ?? "nil") shortcuts=\(model.showShortcuts) editor=\(model.editor != nil) collapsed=\(model.collapsedSections.count)"
                 + " scrollY=\(Int(model.listScrollView?.contentView.bounds.origin.y ?? -1)) deleteAsk=\(model.confirmDeleteTaskID != nil)"
                 + " focusRequest=\(model.detailFocusRequest.map { "\($0)" } ?? "nil")")
         case "addtask":
