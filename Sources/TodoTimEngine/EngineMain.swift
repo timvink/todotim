@@ -97,7 +97,7 @@ public enum EngineMain {
         }
 
         let reader = Thread {
-            while let line = readLine(strippingNewline: true) {
+            readLines(from: STDIN_FILENO) { line in
                 DispatchQueue.main.async { MainActor.assumeIsolated { engine.handle(line) } }
             }
             DispatchQueue.main.async {
@@ -108,6 +108,36 @@ public enum EngineMain {
         reader.start()
         keepAlive.append(reader)
         dispatchMain()
+    }
+
+    /// Calls `body` with each line read from `fd` (without "\n" or "\r\n"), until end of file or a
+    /// read error; a last line without a newline counts too.
+    ///
+    /// With read(2), not `readLine`: stdio holds stdin's lock while `readLine` waits for input, and
+    /// `exit` takes every stdio lock (musl's `__stdio_exit`), so a SIGTERM, SIGINT or SIGHUP left the
+    /// engine hung in `exit` forever: alive, holding the data folder's lock, its main queue blocked
+    /// (no replies, no sync), and deaf to further signals.
+    static func readLines(from fd: Int32, _ body: (String) -> Void) {
+        var buffer = [UInt8](repeating: 0, count: 64 * 1024)
+        var pending: [UInt8] = []
+        func emit(_ bytes: ArraySlice<UInt8>) {
+            var line = bytes
+            if line.last == 13 { line = line.dropLast() }
+            body(String(decoding: line, as: UTF8.self))
+        }
+        while true {
+            let n = buffer.withUnsafeMutableBytes { read(fd, $0.baseAddress, $0.count) }
+            if n < 0 && errno == EINTR { continue }
+            guard n > 0 else { break }
+            pending.append(contentsOf: buffer[0..<n])
+            var start = pending.startIndex
+            while let newline = pending[start...].firstIndex(of: 10) {
+                emit(pending[start..<newline])
+                start = newline + 1
+            }
+            pending.removeSubrange(..<start)
+        }
+        if !pending.isEmpty { emit(pending[...]) }
     }
 
     static func credentialStore() -> CredentialStore {
