@@ -73,4 +73,50 @@ final class MoveTargetsTests: XCTestCase {
     func testCaseAndDiacriticsFollowTheSearch() {
         XCTAssertEqual(ids("GARDEN"), ["s:" + garden.id])
     }
+
+    func testTasksUnderACompletedTaskAreNotTargets() {
+        store.toggleComplete(task.id)
+        XCTAssertEqual(ids("outline", [other.id]), [])
+    }
+
+    func testMoveTasksMakesASubtaskAndExpandsTheParent() {
+        store.updateTask(other.id) { $0.collapsed = true }
+        let target = store.moveTargets(for: [task.id], query: "lawn")[0]
+        XCTAssertEqual(store.moveTasks([task.id], to: target), [task.id])
+        XCTAssertEqual(store.task(task.id)?.parentId, other.id)
+        XCTAssertEqual(store.task(task.id)?.sectionId, garden.id)
+        XCTAssertEqual(store.task(child.id)?.projectId, home.id)
+        XCTAssertEqual(store.task(other.id)?.collapsed, false)
+    }
+
+    func testMoveTasksKeepsSelectedSubtasksUnderTheirParent() {
+        let target = store.moveTargets(for: [task.id], query: "garden")[0]
+        XCTAssertEqual(store.moveTasks([task.id, child.id], to: target), [task.id])
+        XCTAssertEqual(store.task(child.id)?.parentId, task.id)
+        XCTAssertEqual(store.task(task.id)?.sectionId, garden.id)
+    }
+
+    func testMoveTasksRefusesInvalidParents() {
+        let target = store.moveTargets(for: [other.id], query: "outline")[0]
+        // The parent is a subtask of the moved task.
+        XCTAssertEqual(store.moveTasks([task.id], to: target), [])
+        store.toggleComplete(child.id)
+        XCTAssertEqual(store.moveTasks([other.id], to: target), [])
+        XCTAssertNil(store.task(other.id)?.parentId)
+    }
+
+    func testOneLetterQueryOnALargeDatabaseIsFast() {
+        var db = store.db
+        for i in 0..<10_000 {
+            let t = TodoTask(projectId: home.id, content: "Task number \(i) about apples", order: Double(i))
+            db.tasks[t.id] = t
+        }
+        store = TodoStore(db: db)
+        _ = store.moveTargets(for: [task.id], query: "a")
+        let start = Date()
+        for q in ["a", "ap", "app", "appl"] { _ = store.moveTargets(for: [task.id], query: q) }
+        let perQuery = Date().timeIntervalSince(start) / 4
+        print("moveTargets per query, 10k tasks: \(Int(perQuery * 1000)) ms")
+        XCTAssertLessThan(perQuery, 0.25)
+    }
 }

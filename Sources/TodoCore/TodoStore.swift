@@ -148,6 +148,30 @@ public final class TodoStore {
         return result
     }
 
+    /// Open, live tasks whose ancestors are all open and live, with a sort key (content folded for
+    /// case and diacritics), unsorted: the move dialog's task targets. Observes task changes only,
+    /// unlike `db`. Cached while no task changed.
+    func openTasksWithOpenAncestors() -> [(task: TodoTask, sortKey: String)] {
+        let version = taskContentVersion
+        if let c = lastOpenTasks, c.version == version { return c.tasks }
+        var open: [EntityID: Bool] = [:]
+        func isOpen(_ id: EntityID, depth: Int = 0) -> Bool {
+            if let known = open[id] { return known }
+            guard depth < 64, let t = storage.tasks[id], !t.deleted, !t.isCompleted else { open[id] = false; return false }
+            let result = t.parentId.map { isOpen($0, depth: depth + 1) } ?? true
+            open[id] = result
+            return result
+        }
+        let locale = Locale.current
+        let tasks = storage.tasks.values.filter { isOpen($0.id) }.map {
+            (task: $0, sortKey: $0.content.folding(options: [.caseInsensitive, .diacriticInsensitive], locale: locale))
+        }
+        lastOpenTasks = (version, tasks)
+        return tasks
+    }
+
+    @ObservationIgnored private var lastOpenTasks: (version: Int, tasks: [(task: TodoTask, sortKey: String)])?
+
     /// Every task change bumps `taskContentVersion` (structure changes too), so it keys the cache.
     @ObservationIgnored private var lastSearch: (query: String, version: Int, locale: String, result: [TodoTask])?
 

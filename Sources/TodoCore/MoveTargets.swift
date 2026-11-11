@@ -58,7 +58,8 @@ extension TodoStore {
     /// Results are grouped (sections of the current project, other sections, projects, tasks) and
     /// sorted alphabetically within a group. At most `taskLimit` tasks are returned.
     ///
-    /// The moved tasks, their subtasks, completed tasks and deleted entities are never targets.
+    /// The moved tasks, their subtasks, completed tasks (and tasks under them) and deleted entities
+    /// are never targets.
     public func moveTargets(for taskIDs: [EntityID], query: String, taskLimit: Int = 50) -> [MoveTarget] {
         let moving = taskIDs.compactMap { task($0) }
         let home = moving.first?.projectId ?? Self.inboxID
@@ -103,17 +104,22 @@ extension TodoStore {
             let projectsByID = Dictionary(allProjects.map { ($0.id, $0) }, uniquingKeysWith: { a, _ in a })
             var sectionNames: [EntityID: String] = [:]
             for p in allProjects { for s in sections(in: p.id) { sectionNames[s.id] = s.name } }
-            var tasks: [MoveTarget] = []
-            for t in db.tasks.values where !t.deleted && !t.isCompleted && !excluded.contains(t.id) {
+            // Match first, then sort only the matches by their cached key, then build at most `taskLimit`.
+            var found: [(key: String, task: TodoTask, sectionName: String?)] = []
+            for (t, key) in openTasksWithOpenAncestors() where !excluded.contains(t.id) {
                 guard let p = projectsByID[t.projectId] else { continue }
                 let sectionName = t.sectionId.flatMap { sectionNames[$0] }
                 guard matches(t.content, context: [p.name] + (sectionName.map { [$0] } ?? [])) else { continue }
-                tasks.append(MoveTarget(kind: .task, group: .tasks, projectId: p.id, sectionId: t.sectionId,
-                                        parentId: t.id, title: t.content, projectName: p.name, projectColor: p.color,
-                                        projectIsInbox: p.isInbox, sectionName: sectionName,
-                                        isCurrent: single?.parentId == t.id))
+                found.append((key, t, sectionName))
             }
-            tasks.sort(by: Self.alphabetical)
+            found.sort { $0.key != $1.key ? $0.key < $1.key : $0.task.id < $1.task.id }
+            let tasks = found.prefix(taskLimit).compactMap { f -> MoveTarget? in
+                guard let p = projectsByID[f.task.projectId] else { return nil }
+                return MoveTarget(kind: .task, group: .tasks, projectId: p.id, sectionId: f.task.sectionId,
+                                  parentId: f.task.id, title: f.task.content, projectName: p.name,
+                                  projectColor: p.color, projectIsInbox: p.isInbox, sectionName: f.sectionName,
+                                  isCurrent: single?.parentId == f.task.id)
+            }
             result += tasks.prefix(taskLimit)
         }
 
@@ -128,6 +134,40 @@ extension TodoStore {
             if a.element.group == .tasks { return a.offset < b.offset }  // sorted above
             return Self.alphabetical(a.element, b.element)
         }.map(\.element)
+    }
+
+    /// Moves `taskIDs` (in this order, e.g. the list order of a selection) to the end of `target`.
+    /// A task whose ancestor is moved too stays under it. A parent must be a live, open task that
+    /// is not one of the moved tasks or below them; a collapsed parent is expanded so the moved task
+    /// stays visible. Returns the ids that moved (empty when the target is invalid).
+    @discardableResult
+    public func moveTasks(_ taskIDs: [EntityID], to target: MoveTarget) -> [EntityID] {
+        var seen = Set<EntityID>()
+        let live = taskIDs.filter { seen.insert($0).inserted && task($0) != nil }
+        let selected = Set(live)
+        // Skip tasks whose ancestor is selected: they move with it.
+        let roots = live.filter { id in
+            var cur = task(id)?.parentId, depth = 0
+            while let p = cur, depth < 64 {
+                if selected.contains(p) { return false }
+                cur = task(p)?.parentId; depth += 1
+            }
+            return true
+        }
+        guard !roots.isEmpty, project(target.projectId) != nil else { return [] }
+        if let pid = target.parentId {
+            guard let parent = task(pid), !parent.isCompleted,
+                  !roots.contains(where: { $0 == pid || descendantIDs(of: $0).contains(pid) }) else { return [] }
+        } else if let sid = target.sectionId, !sections(in: target.projectId).contains(where: { $0.id == sid }) {
+            return []
+        }
+        performBatch {
+            for id in roots {
+                moveTask(id, projectId: target.projectId, sectionId: target.sectionId, parentId: target.parentId)
+            }
+            if let pid = target.parentId, task(pid)?.collapsed == true { updateTask(pid) { $0.collapsed = false } }
+        }
+        return roots
     }
 
     nonisolated private static func alphabetical(_ a: MoveTarget, _ b: MoveTarget) -> Bool {
