@@ -14,16 +14,16 @@ the calendar and board views.
 ## Features
 
 - Vim motions: `j` `k` to move through tasks, `gg` `G` to jump to the top or bottom of a section, `{` `}` to jump between sections, `h` `l` to hide
-  and show sub-tasks, `/` to search and `Esc` to step back out. Todoist's single-key shortcuts do the rest
-  (press `?` in the app for all of them)
-- Catppuccin colours: Mocha in Dark Mode, Latte in Light Mode
+  and show sub-tasks, `/` to search and `Esc` to step back out. Press `?` for all of the shortcuts
+- Catppuccin colours on the Mac: [Mocha](https://catppuccin.com/palette/#flavor-mocha) in Dark Mode, [Latte](https://catppuccin.com/palette/#flavor-latte) in Light Mode
 - Projects with colours, sections, tasks and nested sub-tasks
 - Priorities (p1–p4), due dates, labels and descriptions
 - Import from Todoist (File › Import from Todoist…, with your API token)
 - Quick Add with natural language: `Renew passport next friday p1 @errands #Home /Admin`
 - Search, label views, completed-task view, and undo for complete and delete
 - Local-first: works offline, and syncs over CalDAV in the background
-- Native SwiftUI app with no third-party dependencies
+- Native clients for macOS (SwiftUI), Omarchy on Arch Linux (a Quickshell plugin with a Swift engine) and Android
+  (Jetpack Compose). The macOS and Omarchy apps have no third-party dependencies
 
 ## Android
 
@@ -42,7 +42,7 @@ It leaves out creating projects and sections: make those on the Mac or in Omarch
 
 ## Omarchy (Linux)
 
-On [Omarchy](https://omarchy.org) 4, TodoTim is a plugin of the desktop shell itself (Omarchy's
+On [Omarchy](https://omarchy.org), TodoTim is a plugin of the desktop shell itself (Omarchy's
 Quickshell-based bar, menus and panels), so it looks like the rest of your desktop and follows every theme switch
 live: colors, font and sizes come from the active Omarchy theme. Its text is one pixel under Omarchy's text size
 by default; change it under **Text size** in Settings (`Ctrl+,`) or with `font_size` in `~/.todotim.toml`. A key opens it from anywhere and Esc hides it
@@ -275,22 +275,7 @@ The other shortcuts follow Todoist and macOS (in Omarchy, `Ctrl` instead of `⌘
 
 ## Build from source
 
-    swift build
-    swift test
-    scripts/bundle.sh && open build/TodoTim.app
-
-The Android app is a Gradle project in `android/` (JDK 21 and the Android SDK):
-
-    cd android && ./gradlew :core:test :app:assembleDebug
-
-The Omarchy app is the QML plugin in `linux/omarchy-plugin` and the `todotim-engine` Swift executable. These run
-in Docker, so they work from a Mac too:
-
-    scripts/linux-test.sh                  # TodoCore and engine tests on Linux
-    scripts/linux-build.sh                 # static engines in build/linux/<arch>/
-
-See [CONTRIBUTING.md](CONTRIBUTING.md) for development and the release process, [AGENTS.md](AGENTS.md) for the
-architecture, and [docs/linux.md](docs/linux.md) for the Omarchy app.
+See [CONTRIBUTING.md](CONTRIBUTING.md#build-from-source).
 
 ## License
 

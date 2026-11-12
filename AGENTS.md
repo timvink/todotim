@@ -117,7 +117,7 @@ UserDefaults. `~/.todotim.toml` is only read when owned by the user and not grou
 
 ## Omarchy app (`linux/`)
 
-Omarchy 4's desktop is one Quickshell (QML) process with plugins; TodoTim is one of them
+Omarchy's desktop (since 4) is one Quickshell (QML) process with plugins; TodoTim is one of them
 (`timvink.todotim`, kinds `service`, `panel`; no bar widget), installed in `~/.config/omarchy/plugins/`. Details and
 the protocol: [docs/linux.md](docs/linux.md).
 

@@ -1,9 +1,8 @@
 # Contributing
 
-## Development setup
+## Build from source
 
-Requirements: macOS 15 or later and Xcode 26 (Swift 6.2). There are no third-party dependencies. The Linux
-scripts need Docker; [docs/linux.md](docs/linux.md) covers developing the Omarchy app.
+The Mac app needs macOS 15 or later and Xcode 26 (Swift 6.2), with no third-party dependencies:
 
     git clone git@github.com:timvink/todotim.git
     cd todotim
@@ -15,7 +14,17 @@ To try the app without touching your real data, point it at a scratch data direc
 
     TODOTIM_DATA_DIR=/tmp/todotim-dev TODOTIM_SEED=1 build/TodoTim.app/Contents/MacOS/TodoTim
 
-See `AGENTS.md` for the architecture, data model and sync format.
+The Android app is a Gradle project in `android/` (JDK 21 and the Android SDK):
+
+    cd android && ./gradlew :core:test :app:assembleDebug
+
+The Omarchy app is the QML plugin in `linux/omarchy-plugin` and the `todotim-engine` Swift executable. Its scripts
+run in Docker, so they work from a Mac too; [docs/linux.md](docs/linux.md) covers developing it:
+
+    scripts/linux-test.sh                  # TodoCore and engine tests on Linux
+    scripts/linux-build.sh                 # static engines in build/linux/<arch>/
+
+See [AGENTS.md](AGENTS.md) for the architecture, data model and sync format.
 
 ## Pull requests
 

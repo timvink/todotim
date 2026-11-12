@@ -1,6 +1,6 @@
 # TodoTim for Omarchy (Linux)
 
-The Linux app is a plugin for [Omarchy](https://omarchy.org) 4, whose whole desktop (bar, menus,
+The Linux app is a plugin for [Omarchy](https://omarchy.org) (4 and later), whose whole desktop (bar, menus,
 notifications, lock screen) is one [Quickshell](https://quickshell.org) process with plugins. TodoTim
 runs inside it, so it uses the shell's live theme, fonts and spacing, opens from a key binding like
 Omarchy's own panels. It has no bar widget: `install.sh` enables it in `shell.json`'s `plugins` list,
