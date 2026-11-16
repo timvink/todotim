@@ -4,11 +4,15 @@ import TodoCore
 
 /// The open move dialog (`m` / `v`): what is moved, the query, its ranked targets and the
 /// highlighted row. Owned by `AppModel` while the dialog shows; `KeyRouter` steps the highlight.
+/// Without tasks it is the `g p` project picker, whose targets are the projects.
 @MainActor
 @Observable
 final class MoveDialogState {
-    /// The tasks to move, in list order.
+    /// The tasks to move, in list order; empty for the project picker.
     let taskIDs: [EntityID]
+    /// The project picker's current project (marked current).
+    let currentProjectID: EntityID?
+    var picksProject: Bool { taskIDs.isEmpty }
     var query = ""
     private(set) var targets: [MoveTarget] = []
     /// Index into `targets`.
@@ -24,7 +28,16 @@ final class MoveDialogState {
     @ObservationIgnored private var computedQuery: String?
     @ObservationIgnored private var computedVersion = -1
 
-    init(taskIDs: [EntityID]) { self.taskIDs = taskIDs }
+    init(taskIDs: [EntityID]) {
+        self.taskIDs = taskIDs
+        currentProjectID = nil
+    }
+
+    /// The `g p` project picker.
+    init(pickingProjectFrom current: EntityID?) {
+        taskIDs = []
+        currentProjectID = current
+    }
 
     /// Recomputes the targets when the query or any project, section or task changed. The highlight goes
     /// to the first row that is not where the task already is.
@@ -35,7 +48,8 @@ final class MoveDialogState {
         computedQuery = query
         computedVersion = version
         let previous = targets.indices.contains(highlight) ? targets[highlight].id : nil
-        targets = store.moveTargets(for: taskIDs, query: query)
+        targets = picksProject ? store.projectTargets(query: query, current: currentProjectID)
+            : store.moveTargets(for: taskIDs, query: query)
         words = query.split(whereSeparator: \.isWhitespace).map(String.init)
         if !queryChanged, let previous, let i = targets.firstIndex(where: { $0.id == previous }) {
             highlight = i
@@ -81,13 +95,14 @@ struct MoveDialogView: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             VStack(alignment: .leading, spacing: 8) {
-                subject
+                if !state.picksProject { subject }
                 TextField("", text: $state.query)
                     .textFieldStyle(.plain)
                     .foregroundStyle(Theme.text)
                     .focused($focused)
                     .onSubmit { model.performMove(state.highlighted) }
-                    .fieldPrompt("Move to a section, project or task…", show: state.query.isEmpty)
+                    .fieldPrompt(state.picksProject ? "Go to a project…" : "Move to a section, project or task…",
+                                 show: state.query.isEmpty)
                     .font(Fonts.quickAdd)
             }
             .padding(.horizontal, 16)
@@ -223,7 +238,7 @@ struct MoveDialogView: View {
     private var footer: some View {
         HStack(spacing: 16) {
             hint("↑ ↓", "Choose")
-            hint("↩", "Move")
+            hint("↩", state.picksProject ? "Go" : "Move")
             hint("esc", "Close")
             Spacer(minLength: 0)
         }

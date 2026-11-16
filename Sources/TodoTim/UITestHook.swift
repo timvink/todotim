@@ -23,12 +23,13 @@ import TodoCore
 ///     enddrag              cancel the drag
 ///     collapse S           toggle section S
 ///     order                print the visible task titles with depths
-///     key esc|up|down|return|j|k|h|l|g|G|i|s|a|e|t|v|m|@|/|u|x|J|K|{|}|d|left|right|home|end|pageup|pagedown|delete|cmd-j|cmd-k|ctrl-j|ctrl-k|shift-up|shift-down   post a key press to the app's own queue
+///     key esc|up|down|return|j|k|h|l|g|G|i|s|a|e|t|v|m|@|/|u|x|J|K|{|}|d|left|right|home|end|pageup|pagedown|delete|cmd-j|cmd-k|cmd-a|cmd-c|ctrl-j|ctrl-k|shift-up|shift-down|y|q|?|p   post a key press to the app's own queue
 ///     search TEXT          open search with this query
 ///     state                print the list, the selection and which modals are open
 ///     addtask TEXT         add a task with this raw title to the current project
 ///     hittest X Y          print the views a click at window point (X, Y) from the top left would reach
 ///     appearance light|dark|system   switch the app's appearance (for screenshots)
+///     window W H           resize the main window's content to W × H points
 ///     sidebar show|hide    show or hide the sidebar
 ///     snapshot PATH [popover]   render the window (or the open popover) into a PNG at PATH (works on
 ///                          any Space, no capture permission)
@@ -143,7 +144,9 @@ enum UITestHook {
                                                     "pageup": ("\u{F72C}", 116), "pagedown": ("\u{F72D}", 121),
                                                     "delete": ("\u{F728}", 117), "cmd-j": ("j", 38), "cmd-k": ("k", 40),
                                                     "m": ("m", 46), "{": ("{", 33), "}": ("}", 30), "ctrl-j": ("j", 38), "ctrl-k": ("k", 40),
-                                                    "shift-up": ("\u{F700}", 126), "shift-down": ("\u{F701}", 125)]
+                                                    "shift-up": ("\u{F700}", 126), "shift-down": ("\u{F701}", 125),
+                                                    "y": ("y", 16), "q": ("q", 12), "?": ("?", 44), "p": ("p", 35),
+                                                    "cmd-a": ("a", 0), "cmd-c": ("c", 8)]
             guard let w = model.mainWindow, let (chars, code) = codes[arg] else { break }
             let flags: NSEvent.ModifierFlags = arg.hasPrefix("cmd-") ? .command : arg.hasPrefix("ctrl-") ? .control
                 : arg.hasPrefix("shift-") || ["J", "K", "{", "}"].contains(arg) ? .shift : []
@@ -180,6 +183,8 @@ enum UITestHook {
             try? rep.representation(using: .png, properties: [:])?.write(to: URL(fileURLWithPath: arg))
         case "syncerror":
             model.showSyncError = true
+        case "window":
+            if let w = Double(arg), let h = Double(arg2) { model.mainWindow?.setContentSize(NSSize(width: w, height: h)) }
         case "sidebar":
             model.columnVisibility = arg == "hide" ? .detailOnly : .all
         case "hittest":

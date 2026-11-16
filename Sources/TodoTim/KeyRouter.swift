@@ -3,7 +3,7 @@ import SwiftUI
 import TodoCore
 
 /// Handles Todoist's single-key shortcuts (q, a, e, 1–4, …) and the vim motions (j/k, h/l or ←/→, Home/End,
-/// gg/G, g i, g x, Esc).
+/// gg/G, g i, g p, g x, y, Esc), plus ⌘A and ⌘C on tasks.
 ///
 /// SwiftUI's `.onKeyPress` only fires for the focused view, and list rows are not
 /// focusable, so a local NSEvent monitor is used instead. Keys pass through untouched
@@ -46,7 +46,7 @@ final class KeyRouter {
     /// Plain keys that are also menu key equivalents. While a modal panel is open they are
     /// swallowed so they do not act on the list behind it.
     private static let menuKeys: Set<String> = ["q", "a", "A", "s", "t", "@", "v", "m", "j", "k", "h", "l", "e", "/", "?",
-                                                "g", "G", "{", "}", "1", "2", "3", "4", "x", "J", "K", "u"]
+                                                "g", "G", "{", "}", "1", "2", "3", "4", "x", "J", "K", "u", "y"]
 
     /// Returns true when the event was consumed.
     private func handle(_ event: NSEvent) -> Bool {
@@ -67,6 +67,19 @@ final class KeyRouter {
             guard model.popover == nil, !model.showShortcuts, !model.showQuickAdd, !model.isEditingText,
                   model.hasActionTask else { return false }
             model.shift(chars == "j" ? 1 : -1)
+            return true
+        }
+        // ⌘A selects every task, ⌘C copies the selected tasks' titles (text fields keep both).
+        if event.modifierFlags.intersection([.command, .control, .option, .shift]) == .command,
+           chars == "a" || chars == "c" {
+            guard model.popover == nil, !model.showShortcuts, !model.showQuickAdd, !model.isEditingText else { return false }
+            if chars == "c" {
+                guard model.hasActionTask else { return false }
+                model.copySelection()
+            } else {
+                guard model.detailTaskID == nil else { return false }
+                model.selectAll()
+            }
             return true
         }
         if !event.modifierFlags.intersection([.command, .control, .option]).isEmpty { return false }
@@ -110,6 +123,9 @@ final class KeyRouter {
             case (_, "@"): model.popover = .labels
             case (_, "m"), (_, "v"): model.showMoveDialog()
             case (_, "u"): return model.undoFromToast()
+            case (_, "y"): model.copySelection()
+            case (_, "q"): model.showQuickAdd = true
+            case (_, "?"): model.showShortcuts = true
             case (_, "g"): model.beginChord()
             default: return Self.menuKeys.contains(chars)
             }
@@ -165,6 +181,9 @@ final class KeyRouter {
         case "?": model.showShortcuts = true
         case "g": model.beginChord()
         case "u": return model.undoFromToast()
+        case "y":
+            guard model.hasActionTask else { return false }
+            model.copySelection()
         default: return false
         }
         return true
@@ -177,6 +196,7 @@ final class KeyRouter {
         let inList = model.detailTaskID == nil
         switch chars {
         case "x": model.openLink()
+        case "p": model.showProjectPicker()
         case "g" where inList: model.moveSelectionToSectionEdge(last: false)
         case "i" where inList: model.goToInbox()
         case "s" where inList, "/" where inList: model.focusSearch()

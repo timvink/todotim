@@ -160,7 +160,7 @@ private struct ModalLayer: View {
                     ShortcutsHelpView()
                         // Its content's height, up to the window's bottom margin.
                         .frame(width: min(680, paneWidth - 48))
-                        .frame(maxHeight: max(300, size.height - Theme.titleBarHeight - 8 - 24))
+                        .modifier(MaxHeight(max(300, size.height - Theme.titleBarHeight - 8 - 24)))
                         .modalPanel()
                         .frame(maxWidth: .infinity)
                         .padding(.leading, left)
@@ -173,6 +173,28 @@ private struct ModalLayer: View {
         .animation(quickAdd ? Theme.panelIn : Theme.panelOut, value: quickAdd)
         .animation(shortcuts ? Theme.panelIn : Theme.panelOut, value: shortcuts)
         .animation(move != nil ? Theme.panelIn : Theme.panelOut, value: move != nil)
+    }
+}
+
+/// Caps the height offered to the content without growing to the cap, as `.frame(maxHeight:)` does
+/// when its parent offers more: the panel stays its content's height.
+private struct MaxHeight: ViewModifier {
+    let limit: CGFloat
+    init(_ limit: CGFloat) { self.limit = limit }
+
+    func body(content: Content) -> some View { CapLayout(limit: limit) { content } }
+
+    private struct CapLayout: Layout {
+        let limit: CGFloat
+        private func capped(_ p: ProposedViewSize) -> ProposedViewSize {
+            ProposedViewSize(width: p.width, height: min(p.height ?? limit, limit))
+        }
+        func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) -> CGSize {
+            subviews.first?.sizeThatFits(capped(proposal)) ?? .zero
+        }
+        func placeSubviews(in bounds: CGRect, proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) {
+            subviews.first?.place(at: bounds.origin, proposal: capped(proposal))
+        }
     }
 }
 
@@ -222,6 +244,7 @@ struct ChordHintView: View {
                 row("i", "Inbox")
                 row("s", "Search")
             }
+            row("p", "Go to project")
             row("x", "Open link", enabled: hasLink)
         }
         .padding(.horizontal, 14).padding(.vertical, 10)

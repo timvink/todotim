@@ -229,12 +229,13 @@ TodoTim moves like vim:
 | Key | Action |
 |---|---|
 | `j` / `k`, `↓` / `↑` | Next / previous task. With nothing selected, the top / bottom of the current section |
-| `J` / `K`, `⇧↓` / `⇧↑` | Select the next / previous task too (several tasks at once) |
-| `gg` / `G`, `Home` / `End` | First / last task of the section |
+| `⇧j` / `⇧k`, `⇧↓` / `⇧↑` | Select the next / previous task too (several tasks at once) |
+| `gg` / `⇧g`, `Home` / `End` | First / last task of the section |
 | `}` / `{` | First task of the next / previous section |
 | `h` / `l`, `←` / `→` | Hide / show sub-tasks. On a sub-task, `h` hides its list and selects the parent |
 | `/` | Search. `Esc` leaves the search field, and a second `Esc` returns to the list you came from |
 | `g` then `i` | Go to Inbox |
+| `g` then `p` | Go to a project (type to search) |
 | `g` then `s` | Search |
 | `g` then `x` | Open the selected or open task's first link in the browser |
 | `g`, then wait | Show the keys that can follow `g` |
@@ -248,12 +249,14 @@ The other shortcuts follow Todoist and macOS (in Omarchy, `Ctrl` instead of `⌘
 | `q`, `⌘N` | Quick Add |
 | `⇧⌘N` | Add project |
 | `a` | Add a sub-task to the selected task; with none selected, a task at the bottom of the section |
-| `⇧A` | Add task at the top of the current section |
+| `⇧a` | Add task at the top of the current section |
 | `s` | Add section |
-| `Enter` | Open selected task; in an open task, edit its title (`d`: its description, `a`: add a sub-task) |
+| `Enter` | Open selected task; in an open task, edit its title (`d`: its description, `a`: add a sub-task; `q` and `?` work there too) |
 | `x`, `e`, `⌘↩` | Complete or reopen the selected tasks |
 | `1`–`4` | Set priority |
 | `t` / `@` | Set date / labels |
+| `⌘A` | Select all tasks in the list |
+| `y`, `⌘C` | Copy the selected or open tasks' titles (one per line) |
 | `m`, `v` | Move to a section, project or task (type to search; a task target makes it a sub-task) |
 | `⌘]` / `⌘[` | Indent / outdent (make subtask) |
 | `⌘↑` / `⌘↓`, `⌘K` / `⌘J` | Move task up / down |

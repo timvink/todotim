@@ -47,6 +47,17 @@ public struct MoveTarget: Identifiable, Equatable, Sendable {
 }
 
 extension TodoStore {
+    /// Projects for the `g p` picker: the inbox, then the projects in sidebar order; with a query,
+    /// those whose name contains every word (case-insensitively). `current` is marked current.
+    public func projectTargets(query: String, current: EntityID?) -> [MoveTarget] {
+        let matchers = query.split(whereSeparator: \.isWhitespace).map { TextMatcher(String($0)) }
+        return ([inbox] + projects).filter { p in matchers.allSatisfy { $0.matches(p.name) } }.map { p in
+            MoveTarget(kind: .project, group: .projects, projectId: p.id, sectionId: nil, parentId: nil, title: p.name,
+                       projectName: p.name, projectColor: p.color, projectIsInbox: p.isInbox, sectionName: nil,
+                       isCurrent: p.id == current)
+        }
+    }
+
     /// Move targets for `taskIDs`, ranked for the move dialog.
     ///
     /// With an empty query: the moved task's project, its sections (in order), then the other

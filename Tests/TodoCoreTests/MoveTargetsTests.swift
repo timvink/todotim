@@ -24,6 +24,15 @@ final class MoveTargetsTests: XCTestCase {
         store.moveTargets(for: taskIDs ?? [task.id], query: query).map(\.id)
     }
 
+    func testProjectTargetsListProjectsInSidebarOrderAndFilterByEveryWord() {
+        let all = store.projectTargets(query: "", current: work.id)
+        XCTAssertEqual(all.map(\.id), ["p:inbox", "p:" + work.id, "p:" + home.id])
+        XCTAssertEqual(all.filter(\.isCurrent).map(\.id), ["p:" + work.id])
+        XCTAssertEqual(store.projectTargets(query: "o", current: nil).map(\.id), ["p:inbox", "p:" + work.id, "p:" + home.id])
+        XCTAssertEqual(store.projectTargets(query: "HO me", current: nil).map(\.id), ["p:" + home.id])
+        XCTAssertEqual(store.projectTargets(query: "garden", current: nil), [])
+    }
+
     func testEmptyQueryListsHomeProjectAndSectionsThenProjects() {
         let targets = store.moveTargets(for: [task.id], query: "")
         XCTAssertEqual(targets.map(\.id), ["p:" + work.id, "s:" + meetings.id, "s:" + admin.id, "p:inbox", "p:" + home.id])

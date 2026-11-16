@@ -621,6 +621,12 @@ final class AppModel {
         moveDialog = MoveDialogState(taskIDs: ids)
     }
 
+    /// `g p`: the project picker (the move dialog listing projects).
+    func showProjectPicker() {
+        popover = nil
+        moveDialog = MoveDialogState(pickingProjectFrom: currentProjectID)
+    }
+
     func closeMoveDialog() { moveDialog = nil }
 
     /// Where a task was before a move, to put it back on undo.
@@ -639,6 +645,11 @@ final class AppModel {
         guard let dialog = moveDialog else { return }
         guard let target else { return }  // no matches: Enter does nothing
         moveDialog = nil
+        if dialog.picksProject {
+            detailTaskID = nil
+            sidebar = .project(target.projectId)
+            return
+        }
         let ids = dialog.taskIDs
         if target.isCurrent { return }
         let places = ids.compactMap { id -> Place? in
@@ -853,6 +864,33 @@ final class AppModel {
             return
         }
         NSWorkspace.shared.open(url)
+    }
+
+    // MARK: - Select all, copy
+
+    /// ⌘A: selects every task in the list.
+    func selectAll() {
+        let ids = cachedDisplay().taskIDs
+        guard let first = ids.first else { return }
+        let cursor = selectedTaskID.flatMap { ids.contains($0) ? $0 : nil } ?? first
+        setSelection(cursor: cursor, anchor: first, multi: ids.count > 1 ? Set(ids) : [])
+    }
+
+    /// ⌘C / `y`: copies the titles of the open task, else the selected tasks (one per line, in list order).
+    func copySelection() {
+        let ids: [EntityID]
+        if detailTaskID == nil, !multiSelection.isEmpty {
+            ids = cachedDisplay().taskIDs.filter(multiSelection.contains)
+        } else if let id = actionTaskID {
+            ids = [id]
+        } else {
+            return
+        }
+        let titles = ids.compactMap { store.task($0)?.content }
+        guard !titles.isEmpty else { return }
+        NSPasteboard.general.clearContents()
+        NSPasteboard.general.setString(titles.joined(separator: "\n"), forType: .string)
+        showToast(titles.count == 1 ? "Copied “\(titles[0])”" : "Copied \(titles.count) tasks", undo: nil)
     }
 
     func showToast(_ message: String, undo: (() -> Void)?) {

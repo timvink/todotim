@@ -44,6 +44,8 @@ struct AppCommands: Commands {
                 .disabled(!model.hasSelection)
             Button("Open Link  g x") { model.openLink() }
                 .disabled(!model.hasActionTask)
+            Button("Copy Title  y") { model.copySelection() }
+                .disabled(!model.hasActionTask)
             Button("Complete Task") {
                 if let id = model.detailTaskID { model.toggleComplete(id) } else { model.completeSelection() }
             }
@@ -99,6 +101,7 @@ struct AppCommands: Commands {
                 Button(p.name) { model.goToProject(number: i + 2) }
                     .keyboardShortcut(KeyEquivalent(Character(String(i + 2))))
             }
+            Button("Go to Project…  g p") { model.showProjectPicker() }
             Divider()
             Button("Next Task") { model.moveSelection(1) }
                 .keyboardShortcut("j", modifiers: [])
@@ -151,57 +154,63 @@ enum ShortcutCatalog {
 
     static let groups: [(title: String, items: [Item])] = [
         ("General", [
-            Item(keys: "Q  or  ⌘N", action: "Quick add task"),
+            Item(keys: "q  or  ⌘N", action: "Quick add task"),
             Item(keys: "⇧⌘N", action: "Add project"),
             Item(keys: "/  or  ⌘F", action: "Search"),
             Item(keys: "?", action: "Show keyboard shortcuts"),
             Item(keys: "⌘R", action: "Sync now"),
             Item(keys: "⌘Z", action: "Undo complete / delete"),
-            Item(keys: "U", action: "Undo, while the toast shows it"),
+            Item(keys: "u", action: "Undo, while the toast shows it"),
             Item(keys: "⌘,", action: "Settings"),
         ]),
         ("Navigate", [
-            Item(keys: "G  then  I", action: "Go to Inbox"),
-            Item(keys: "G  then  S", action: "Go to Search"),
-            Item(keys: "G  (wait)", action: "Show what can follow G"),
+            Item(keys: "g  then  i", action: "Go to Inbox"),
+            Item(keys: "g  then  p", action: "Go to a project"),
+            Item(keys: "g  then  s", action: "Go to Search"),
+            Item(keys: "g  (wait)", action: "Show what can follow g"),
             Item(keys: "⌘1", action: "Go to Inbox"),
             Item(keys: "⌘2 … ⌘9", action: "Go to project 1 … 8"),
-            Item(keys: "↓  or  J", action: "Select next task"),
-            Item(keys: "↑  or  K", action: "Select previous task"),
-            Item(keys: "⇧↓  or  ⇧J", action: "Select the next task too"),
-            Item(keys: "⇧↑  or  ⇧K", action: "Select the previous task too"),
-            Item(keys: "G  then  G  or  Home", action: "Select first task in section"),
-            Item(keys: "⇧G  or  End", action: "Select last task in section"),
+            Item(keys: "↓  or  j", action: "Select next task"),
+            Item(keys: "↑  or  k", action: "Select previous task"),
+            Item(keys: "⇧↓  or  ⇧j", action: "Select the next task too"),
+            Item(keys: "⇧↑  or  ⇧k", action: "Select the previous task too"),
+            Item(keys: "⌘A", action: "Select all tasks"),
+            Item(keys: "g  then  g  or  Home", action: "Select first task in section"),
+            Item(keys: "⇧g  or  End", action: "Select last task in section"),
             Item(keys: "}  /  {", action: "Next / previous section"),
             Item(keys: "PgUp  /  PgDn", action: "Scroll the list"),
-            Item(keys: "←  /  →  or  H  /  L", action: "Hide / show sub-tasks"),
+            Item(keys: "←  /  →  or  h  /  l", action: "Hide / show sub-tasks"),
             Item(keys: "Esc", action: "Close editor / clear selection"),
             Item(keys: "Esc  (in search)", action: "Back to the list"),
         ]),
         ("Add", [
-            Item(keys: "A", action: "Add sub-task to the selected task, else task at bottom of section"),
-            Item(keys: "⇧A", action: "Add task at top of section"),
-            Item(keys: "S", action: "Add section"),
+            Item(keys: "a", action: "Add sub-task to the selected task"),
+            Item(keys: "a  (no selection)", action: "Add task at bottom of section"),
+            Item(keys: "⇧a", action: "Add task at top of section"),
+            Item(keys: "s", action: "Add section"),
             Item(keys: "↩ (in editor)", action: "Add task, keep editor open"),
         ]),
         ("Selected task", [
             Item(keys: "↩", action: "Open task"),
-            Item(keys: "G  then  X", action: "Open the first link in the browser"),
-            Item(keys: "X  or  E  or  ⌘↩", action: "Complete the selected tasks"),
+            Item(keys: "g  then  x", action: "Open the first link in the browser"),
+            Item(keys: "x  or  e  or  ⌘↩", action: "Complete the selected tasks"),
             Item(keys: "1  2  3  4", action: "Set priority"),
-            Item(keys: "T", action: "Set date"),
+            Item(keys: "t", action: "Set date"),
             Item(keys: "@", action: "Labels"),
-            Item(keys: "M  or  V", action: "Move to a section, project or task"),
+            Item(keys: "m  or  v", action: "Move to a section, project or task"),
+            Item(keys: "y  or  ⌘C", action: "Copy the titles"),
             Item(keys: "⌘]  /  ⌘[", action: "Indent / outdent"),
             Item(keys: "⌘↑  /  ⌘↓  or  ⌘K  /  ⌘J", action: "Move up / down"),
             Item(keys: "⌘⌫  or  ⌦", action: "Delete task"),
         ]),
         ("Task view", [
-            Item(keys: "↑ ↓  or  K J", action: "Previous / next task"),
-            Item(keys: "T  /  @  /  M", action: "Date / labels / move"),
-            Item(keys: "↩  /  D", action: "Edit title / description"),
-            Item(keys: "A", action: "Add sub-task"),
-            Item(keys: "G  then  X", action: "Open the first link"),
+            Item(keys: "↑ ↓  or  k j", action: "Previous / next task"),
+            Item(keys: "t  /  @  /  m", action: "Date / labels / move"),
+            Item(keys: "↩  /  d", action: "Edit title / description"),
+            Item(keys: "a", action: "Add sub-task"),
+            Item(keys: "y  or  ⌘C", action: "Copy the title"),
+            Item(keys: "g  then  x", action: "Open the first link"),
+            Item(keys: "q  /  ?", action: "Quick add / shortcuts"),
             Item(keys: "⌦", action: "Delete task"),
             Item(keys: "Esc  or  click outside", action: "Close"),
         ]),
