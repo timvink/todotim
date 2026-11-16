@@ -197,6 +197,23 @@ final class EngineTests: XCTestCase {
         XCTAssertEqual(try send("completeTasks", ["ids": []]).reply["error"], "Missing ids")
     }
 
+    func testCompletingARepeatingParentWithItsSubtaskCompletesTheSubtask() async throws {
+        let parent = try result("quickAdd", ["text": "Water plants today"])["taskId"]!
+        let child = try result("quickAdd", ["text": "Balcony", "parentId": parent])["taskId"]!
+        engine.store.updateTask(parent.string!) { $0.recurrence = "FREQ=WEEKLY" }
+        try result("setView", ["view": ["kind": "project", "id": "inbox"]])
+        let due = engine.store.task(parent.string!)?.due
+        XCTAssertNotNil(due)
+
+        try result("completeTasks", ["ids": [parent, child]])
+        XCTAssertEqual(engine.store.task(child.string!)?.isCompleted, true)
+        XCTAssertEqual(engine.store.task(parent.string!)?.isCompleted, false, "a repeating task moves on")
+        XCTAssertNotEqual(engine.store.task(parent.string!)?.due, due)
+        try result("undo")
+        XCTAssertEqual(engine.store.task(child.string!)?.isCompleted, false)
+        XCTAssertEqual(engine.store.task(parent.string!)?.due, due)
+    }
+
     func testUpdateTaskFields() async throws {
         let id = try result("quickAdd", ["text": "Read a book"])["taskId"]!
         var task = try result("updateTask", ["id": id, "priority": 2, "dueText": "next friday", "labels": ["a", "A", " b "]])

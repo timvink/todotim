@@ -151,9 +151,12 @@ public final class Engine {
         observeSync()
     }
 
-    /// Writes pending changes to disk (on quit).
-    public func flush() {
-        writer?.flush()
+    /// Writes pending changes to disk (on quit). Returns false when the write failed (the changes
+    /// stay pending, so another flush tries again); true without a writer (an unreadable database
+    /// is never overwritten).
+    @discardableResult
+    public func flush() -> Bool {
+        writer?.flush() ?? true
     }
 
     /// Re-renders date labels ("Today", "Tomorrow") after midnight; call about once a minute.
