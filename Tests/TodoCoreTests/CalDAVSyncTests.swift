@@ -174,6 +174,40 @@ final class CalDAVSyncTests: XCTestCase {
         XCTAssertNil(a.store.projects.first { $0.id == p.id })
     }
 
+    /// A list deleted on another device takes its tasks along, except those added or changed here
+    /// since the last sync: they move to the inbox, with a warning.
+    func testTasksChangedHereSurviveAListDeletedElsewhere() async throws {
+        let server = FakeCalDAVServer()
+        let a = Device(), b = Device()
+        let p = a.store.addProject(name: "Doomed")
+        let sec = a.store.addSection(projectId: p.id, name: "Part")
+        let untouched = a.store.addTask(content: "untouched", projectId: p.id)
+        let edited = a.store.addTask(content: "edited", projectId: p.id, sectionId: sec.id)
+        try await a.sync(server)
+        try await b.sync(server)
+
+        b.store.deleteProject(p.id)
+        try await b.sync(server)
+        a.store.updateTask(edited.id) { $0.content = "edited here" }
+        let added = a.store.addTask(content: "added here", projectId: p.id)
+        let r = try await a.sync(server)
+
+        XCTAssertEqual(a.store.db.projects[p.id]?.deleted ?? true, true)
+        XCTAssertNil(a.store.task(untouched.id).flatMap { $0.deleted ? nil : $0 })
+        for (id, content) in [(edited.id, "edited here"), (added.id, "added here")] {
+            let t = try XCTUnwrap(a.store.task(id))
+            XCTAssertFalse(t.deleted)
+            XCTAssertEqual(t.content, content)
+            XCTAssertEqual(t.projectId, TodoStore.inboxID)
+            XCTAssertNil(t.sectionId)
+            let stored = await server.ics("\(inbox)/\(id).ics")
+            XCTAssertNotNil(stored)
+        }
+        XCTAssertTrue(r.warnings.contains { $0.contains("Doomed") && $0.contains("2 tasks") }, "\(r.warnings)")
+        try await b.sync(server)
+        XCTAssertEqual(b.store.task(added.id)?.projectId, TodoStore.inboxID)
+    }
+
     func testMoveBetweenListsUsesMove() async throws {
         let server = FakeCalDAVServer()
         let a = Device()

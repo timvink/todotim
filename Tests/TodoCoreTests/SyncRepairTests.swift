@@ -85,6 +85,23 @@ final class SyncRepairTests: XCTestCase {
         XCTAssertNil(merged.tasks["t"]?.sectionId)
     }
 
+    /// A task added to a list while the sync found that list deleted on the server moves to the
+    /// inbox instead of hiding in the deleted list (where the next sync would drop it).
+    func testRebaseMovesATaskAddedToAListTheSyncDeleted() {
+        let p = Project(id: "p", name: "P", order: 1, updatedAt: ago(100))
+        var deadP = p; deadP.deleted = true; deadP.updatedAt = ago(1)
+        let kept = TodoTask(id: "k", projectId: "p", content: "k", order: 1, updatedAt: ago(100))
+        let added = TodoTask(id: "t", projectId: "p", sectionId: "s", content: "t", order: 2, updatedAt: ago(5))
+        let snapshot = db(projects: [p], tasks: [kept])
+        let latest = db(projects: [p], tasks: [kept, added])
+        let merged = db(projects: [deadP], tasks: [])
+        let out = SyncEngine.rebase(latest: latest, snapshot: snapshot, merged: merged)
+        XCTAssertEqual(out.tasks["t"]?.projectId, TodoStore.inboxID)
+        XCTAssertNil(out.tasks["t"]?.sectionId)
+        XCTAssertNil(out.tasks["k"], "an unchanged task goes with its list")
+        XCTAssertEqual(out.projects["p"]?.deleted, true)
+    }
+
     func testConcurrentHelperPreservesOrderAndLimit() async throws {
         actor Counter { var current = 0, peak = 0
             func enter() { current += 1; peak = max(peak, current) }

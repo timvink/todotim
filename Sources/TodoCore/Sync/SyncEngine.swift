@@ -227,7 +227,8 @@ public enum SyncEngine {
 
     /// Combines a sync result with local edits made while it ran: an entity the user changed
     /// since `snapshot` (the database the sync started from) keeps the local version, every
-    /// other entity takes `merged`'s. The edits are pushed by the next sync.
+    /// other entity takes `merged`'s. The edits are pushed by the next sync. A changed task whose
+    /// list the sync deleted (deleted on the server) moves to the inbox, as in the merge.
     public static func rebase(latest: Database, snapshot: Database, merged: Database) -> Database {
         func pick<T: Equatable>(_ l: [EntityID: T], _ s: [EntityID: T], _ m: [EntityID: T]) -> [EntityID: T] {
             var out = m
@@ -239,6 +240,11 @@ public enum SyncEngine {
         out.sections = pick(latest.sections, snapshot.sections, merged.sections)
         out.tasks = pick(latest.tasks, snapshot.tasks, merged.tasks)
         out.labels = pick(latest.labels, snapshot.labels, merged.labels)
+        for (id, t) in out.tasks where !t.deleted && t != snapshot.tasks[id]
+            && latest.projects[t.projectId]?.deleted == false && out.projects[t.projectId]?.deleted != false {
+            out.tasks[id]!.projectId = TodoStore.inboxID
+            out.tasks[id]!.sectionId = nil
+        }
         repairStructure(&out)
         return out
     }

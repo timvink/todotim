@@ -265,6 +265,9 @@ private struct Pass {
         var db = Database()
 
         // Projects: field by field, a local change wins; otherwise the server's value.
+        /// Lists deleted on the server that were live here: their tasks go with them, except those
+        /// changed here since the last sync.
+        var removedLists: [EntityID: String] = [:]
         for id in Set(local.projects.keys).union(base.projects.keys).union(remote.projects.keys) {
             let l = local.projects[id], b = base.projects[id], r = remote.projects[id]
             switch (r, b) {
@@ -284,7 +287,10 @@ private struct Pass {
             case (nil, _?):
                 // Deleted on the server (the inbox is recreated).
                 if var l {
-                    if !l.isInbox && !l.deleted { l.deleted = true; l.updatedAt = now }
+                    if !l.isInbox && !l.deleted {
+                        removedLists[id] = l.name
+                        l.deleted = true; l.updatedAt = now
+                    }
                     db.projects[id] = l
                 }
             case (nil, nil):
@@ -337,15 +343,28 @@ private struct Pass {
             case let (r?, nil):
                 // New on the server, or created on both sides (e.g. a migration run twice).
                 db.tasks[id] = l.map { SyncEngine.winner($0, r) } ?? r
-            case (nil, _?):
-                // Deleted on the server.
+            case let (nil, b?):
+                // Deleted on the server; with its list, only if it did not change here.
                 if var l {
-                    if !l.deleted { l.deleted = true; l.updatedAt = now }
+                    if !l.deleted && !(removedLists[l.projectId] != nil && l != b) { l.deleted = true; l.updatedAt = now }
                     db.tasks[id] = l
                 }
             case (nil, nil):
                 if let l { db.tasks[id] = l }
             }
+        }
+
+        // Tasks still live in a list deleted on the server (new or changed here) move to the inbox.
+        var rescued: [EntityID: Int] = [:]
+        for (id, t) in db.tasks where !t.deleted && removedLists[t.projectId] != nil {
+            rescued[t.projectId, default: 0] += 1
+            db.tasks[id]!.projectId = TodoStore.inboxID
+            db.tasks[id]!.sectionId = nil
+            db.tasks[id]!.updatedAt = now
+        }
+        for (pid, count) in rescued.sorted(by: { $0.key < $1.key }) {
+            warnings.append("“\(removedLists[pid]!)” was deleted on another device; \(count == 1 ? "a task" : "\(count) tasks") "
+                + "changed here moved to the Inbox")
         }
 
         // Tags from other clients (CATEGORIES) become labels; the id is derived from the name,
