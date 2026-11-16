@@ -282,6 +282,25 @@ class CalDAVSyncTest {
         assertEquals(0, store.snapshot.value.unsyncedCount)
     }
 
+    @Test fun aTaskMovedAwayBeforeItsListWasDeletedFollowsTheMove() = runTest {
+        put(work, "b", "Draft")
+        sync()
+        now += HOUR
+        store.updateTask("b") { copy(content = "Draft 2") }
+        // Another client moves "b" to another list, then deletes "work".
+        val home = server.addCalendar("home", "Home")
+        server.store("$home/b.ics", server.ics("$work/b.ics")!!)
+        server.calendars.remove(work)
+        server.writes.clear()
+        val r = sync()
+        assertTrue(r.isComplete)
+        assertEquals(0, r.removed)
+        val b = store.snapshot.value.task("b")!!
+        assertEquals("home", b.projectId)
+        assertEquals("Draft 2", b.content)
+        assertEquals(listOf("PUT $home/b.ics"), server.writes)
+    }
+
     @Test fun unreadableObjectIsKeptAndNotWritten() = runTest {
         put(inbox, "a", "Milk")
         sync()

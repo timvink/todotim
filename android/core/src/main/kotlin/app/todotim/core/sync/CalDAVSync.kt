@@ -124,27 +124,9 @@ class CalDAVSync(
         val pending = base.pendingDeletes.toMutableMap()
         fun calendarOf(path: String) = path.substringBeforeLast('/', "")
 
-        // Calendars gone from the server (or no longer a project): their tasks go too, except those with edits not
-        // yet uploaded, which stay as new tasks in the inbox (uploaded there by the push).
+        // Tasks of calendars gone from the server (or no longer a project); handled after the changed objects, which
+        // may hold some of them at a new path (moved by another client before it deleted the list).
         val goneShadows = base.shadows.filter { calendarOf(it.value.path) !in calendars }
-        if (goneShadows.isNotEmpty()) {
-            for ((id, s) in goneShadows) {
-                shadows.remove(id)
-                val local = tasks[id] ?: continue
-                if (!TaskFields.edited(local, s.task)) {
-                    tasks.remove(id)
-                    removed++
-                }
-            }
-            val localOnly = tasks.keys.filterTo(HashSet()) { it !in shadows }
-            for (id in localOnly) {
-                val t = tasks.getValue(id)
-                when {
-                    id in goneShadows -> tasks[id] = TodoStore.keepLocalOnly(t, localOnly)
-                    t.parentId in goneShadows && t.parentId !in tasks -> tasks[id] = t.copy(parentId = null) // went with its list
-                }
-            }
-        }
         pending.entries.removeAll { calendarOf(it.value.path) !in calendars }
 
         // Changed objects, by path; a UID seen twice in this pull keeps its first path.
@@ -206,6 +188,28 @@ class CalDAVSync(
             }
             pending.entries.removeAll { it.value.path in removals }
         }
+        // Gone calendars: their tasks go too, except those with edits not yet uploaded, which stay as new tasks in
+        // the inbox (uploaded there by the push).
+        val gone = goneShadows.filter { (id, s) -> shadows[id]?.path == s.path }
+        if (gone.isNotEmpty()) {
+            for ((id, s) in gone) {
+                shadows.remove(id)
+                val local = tasks[id] ?: continue
+                if (!TaskFields.edited(local, s.task)) {
+                    tasks.remove(id)
+                    removed++
+                }
+            }
+            val localOnly = tasks.keys.filterTo(HashSet()) { it !in shadows }
+            for (id in localOnly) {
+                val t = tasks.getValue(id)
+                when {
+                    id in gone -> tasks[id] = TodoStore.keepLocalOnly(t, localOnly)
+                    t.parentId in gone && t.parentId !in tasks -> tasks[id] = t.copy(parentId = null) // went with its list
+                }
+            }
+        }
+
         val total = shadows.size + pending.size
         if (total > SyncLimits.MAX_TASKS) throw SyncError.LimitExceeded("more than ${SyncLimits.MAX_TASKS} tasks")
 
