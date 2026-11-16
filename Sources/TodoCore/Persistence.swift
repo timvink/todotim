@@ -168,8 +168,9 @@ public final class PersistenceWriter: @unchecked Sendable {
     }
 
     /// Blocks until every snapshot passed to `save` so far is on disk.
-    /// Returns whether the database on disk is current: false when the last write failed (the
-    /// snapshot is then lost; the next `save` tries again).
+    /// Returns whether the database on disk is current: false when the write failed. A failed
+    /// snapshot stays pending (unless a newer `save` replaced it), so the next `flush` or `save`
+    /// writes it again.
     @discardableResult
     public func flush() -> Bool {
         queue.sync {
@@ -190,7 +191,10 @@ public final class PersistenceWriter: @unchecked Sendable {
             try LocalPersistence.save(db, to: url)
             lock.withLock { _writeCount += 1; lastWriteFailed = false }
         } catch {
-            lock.withLock { lastWriteFailed = true }
+            lock.withLock {
+                lastWriteFailed = true
+                if pending == nil { pending = db }
+            }
             if let onError { onError(error) } else { NSLog("TodoTim: failed to save database: \(error)") }
         }
     }

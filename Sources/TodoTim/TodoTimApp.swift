@@ -123,10 +123,12 @@ final class AppServices {
         Perf.mark("servicesDone")
     }
 
-    /// Commits pending edits and writes the database synchronously (on quit).
-    func flush() {
+    /// Commits pending edits and writes the database synchronously (on quit). Returns false when
+    /// the write failed; the snapshot then stays pending for the next call.
+    @discardableResult
+    func flush() -> Bool {
         model.flushDetailEdits()
-        writer?.flush()
+        return writer?.flush() ?? true
     }
 }
 
@@ -164,8 +166,30 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         CFRunLoopAddObserver(CFRunLoopGetMain(), observer, .commonModes)
     }
 
+    /// A failed final save asks the user instead of silently dropping the latest edits.
+    func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
+        MainActor.assumeIsolated {
+            let services = AppServices.shared
+            while !services.flush() {
+                let alert = NSAlert()
+                alert.alertStyle = .critical
+                alert.messageText = "Your latest changes could not be saved"
+                alert.informativeText = "TodoTim could not write \(services.dbURL.path). Check that the disk has free space and is writable, then try again. If you quit now, the latest changes are lost."
+                alert.addButton(withTitle: "Try Again")
+                alert.addButton(withTitle: "Don’t Quit")
+                alert.addButton(withTitle: "Quit Anyway")
+                switch alert.runModal() {
+                case .alertFirstButtonReturn: continue
+                case .alertSecondButtonReturn: return .terminateCancel
+                default: return .terminateNow
+                }
+            }
+            return .terminateNow
+        }
+    }
+
     func applicationWillTerminate(_ notification: Notification) {
-        MainActor.assumeIsolated { AppServices.shared.flush() }
+        MainActor.assumeIsolated { _ = AppServices.shared.flush() }
     }
 
     func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool { true }
