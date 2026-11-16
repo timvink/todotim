@@ -81,9 +81,10 @@ Categories=Office;ProjectManagement;
 Keywords=todo;tasks;todoist;
 EOF
 
-# The shell reloads an installed plugin's code by itself; a new one needs a rescan, which runs in
-# the background, so enabling is retried until the shell knows the plugin. Without a bar widget,
-# enabling adds it to shell.json's plugins list, not to the bar.
+# A new plugin needs a rescan, which runs in the background, so enabling is retried until the shell
+# knows the plugin. Without a bar widget, enabling adds it to shell.json's plugins list, not to the
+# bar. An update needs a shell restart: the plugin is keepLoaded, and the shell keeps such a
+# plugin's running service and panel (with the old code and engine) when its files change.
 omarchy-shell -q shell rescanPlugins
 if (( ! updating )); then
   enabled=0
@@ -100,6 +101,9 @@ fi
 version="$(sed -n 's/.*"version": *"\([^"]*\)".*/\1/p' "$dest/manifest.json" | head -n1)"
 if (( updating )); then
   echo "Updated TodoTim to $version."
+  if ! command -v omarchy-restart-shell > /dev/null || ! omarchy-restart-shell > /dev/null 2>&1; then
+    echo "Restart the Omarchy shell to load it: omarchy-restart-shell (not while the screen is locked)."
+  fi
 else
   cat <<EOF
 Installed TodoTim $version.
