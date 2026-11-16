@@ -32,7 +32,8 @@ Omarchy shell (Quickshell, QML)                 todotim-engine (Swift, TodoCore)
 `manifest.json` declares three kinds:
 
 - `service` (`Service.qml`): starts `todotim-engine` (the bundled `bin/todotim-engine`, else one on
-  `PATH`, else `$TODOTIM_ENGINE`), restarts it with backoff when it exits, and mirrors its events into
+  `PATH`, else `$TODOTIM_ENGINE`), restarts it with backoff when it exits (not when it is missing, exit 127:
+  after installing one, run `omarchy-restart-shell`), and mirrors its events into
   properties and a `ListModel` (`app/ModelSync.js` keeps delegates whose row key survives).
 - `panel` (`Panel.qml`): a `FloatingWindow` titled "TodoTim" with `app/AppView.qml`. `keepLoaded`
   keeps it (and the selection) between summons. `omarchy-shell shell toggle timvink.todotim` shows or
@@ -70,8 +71,9 @@ and get exactly one reply, `{"re": 7, "ok": true, "result": …}` or `{"re": 7, 
 - `{"event": "sync", "sync": {status, message, pending, lastSync, warning, credentialError, …}}`.
 - `{"event": "fatal", "error": "…"}` when the engine cannot start (another engine holds the data folder).
 
-The engine sends `sidebar` and `rows` only when they changed, and always before the reply to the
-request that changed them, so an id in a reply (a new task to select) is already in the rows.
+The engine sends `sidebar`, `rows` and `sync` only when they changed, and always before the reply to the
+request that changed them (also for the late replies of `syncNow` and `testConnection`), so an id in a reply
+(a new task to select) is already in the rows.
 
 Commands: `hello`, `setView` (`view`: `{kind: "project", id}` / `{kind: "label", name}` /
 `{kind: "search", query}`), `setShowCompleted`, `setSectionCollapsed`, `parseQuickAdd` (token
@@ -105,7 +107,7 @@ The move dialog (`m`, `v`) uses two of them:
 
 One engine runs per data folder (`engine.lock`); a second one waits five seconds for the first to exit
 (a restarting shell), then reports `fatal`. The engine writes the database and exits when stdin
-closes or on SIGTERM/SIGINT/SIGHUP.
+closes or on SIGTERM/SIGINT/SIGHUP; if the database still can't be saved after three tries, it exits 1.
 
 ## Files and secrets
 

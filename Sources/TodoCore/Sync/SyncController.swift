@@ -206,7 +206,12 @@ public final class SyncController {
 
     private func sync() async {
         guard settings.enabled else { status = .disabled; return }
-        if syncTask != nil { syncRequestedWhileSyncing = true; return }
+        if let running = syncTask {
+            // The running task syncs again before it ends, so waiting for it covers this request.
+            syncRequestedWhileSyncing = true
+            await running.value
+            return
+        }
         let task = Task { [weak self] in guard let self else { return }; await self.runSyncs() }
         syncTask = task
         await task.value
