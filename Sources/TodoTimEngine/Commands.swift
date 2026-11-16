@@ -6,7 +6,6 @@ extension Engine {
     func perform(_ cmd: String, _ r: JSON, id: JSON) throws -> JSON? {
         switch cmd {
         case "hello":
-            pushSync()
             return [
                 "version": .string(Engine.version), "dataDir": .string(paths.dataDir.path),
                 "palette": RowBuilder.palette, "startupError": .string(startupError),
@@ -16,7 +15,7 @@ extension Engine {
         // MARK: View
         case "setView":
             guard let v = ViewSpec(r["view"]) else { throw EngineError("Unknown view") }
-            view = v
+            setView(v)
             return .null
         case "setShowCompleted":
             let pid = try string(r, "projectId")
@@ -313,7 +312,8 @@ extension Engine {
             store.performBatch { for t in tasks { store.toggleComplete(t.id) } }
             return ["toast": .null]
         }
-        let covered = Set(open.flatMap { store.descendantIDs(of: $0.id) })
+        // A repeating parent only moves to its next date, so its sub-tasks are completed on their own.
+        let covered = Set(open.filter { !isRepeating($0) }.flatMap { store.descendantIDs(of: $0.id) })
         let roots = open.filter { !covered.contains($0.id) }
         var restores: [() -> Void] = []
         var count = 0

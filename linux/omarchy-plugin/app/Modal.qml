@@ -10,6 +10,9 @@ FocusScope {
   default property alias content: column.data
   property alias card: card
   property alias column: column
+  // Bumped by AppView when the dialog opens and closes: a reply that comes later checks it, so it
+  // never lands in a dialog closed (and maybe opened again) since its request.
+  property int generation: 0
   signal dismissed()
 
   anchors.fill: parent

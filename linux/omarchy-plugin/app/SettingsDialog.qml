@@ -24,15 +24,18 @@ Modal {
 
   readonly property var sync: app.service ? app.service.sync : ({})
 
+  // Replies check `generation`, so a late one never lands in the form opened again since.
   function open() {
     status = ""
+    busy = false
     password.text = ""
     var a = app.service ? app.service.appearance : null
     savedFontSize = a && a.fontSize > 0 ? a.fontSize : 0
     pendingFontSize = savedFontSize
     fontManaged = a && a.managed ? a.managed : ""
+    var gen = generation
     app.req("getSyncSettings", {}, function(ok, r) {
-      if (!ok) return
+      if (!ok || gen !== root.generation) return
       server.text = r.serverURL || ""
       username.text = r.username || ""
       root.enabledSync = r.enabled === true
@@ -51,7 +54,9 @@ Modal {
     busy = true
     status = "Connecting…"
     statusColor = theme.dim
+    var gen = generation
     app.req("testConnection", values(), function(ok, r) {
+      if (gen !== root.generation) return
       root.busy = false
       if (!ok) { root.status = r; root.statusColor = root.theme.red; return }
       if (r.error) { root.status = r.error; root.statusColor = root.theme.red }
@@ -60,16 +65,19 @@ Modal {
   }
 
   function save() {
+    var gen = generation
     var saveSync = function() {
       root.app.req("configureSync", root.values(), function(ok, r) {
+        if (gen !== root.generation) return
         if (!ok) { root.status = r; root.statusColor = root.theme.red; return }
         root.app.closeOverlay("settings")
       })
     }
     if (fontManaged !== "" || pendingFontSize === savedFontSize) { saveSync(); return }
     app.req("setAppearance", { fontSize: pendingFontSize > 0 ? pendingFontSize : null }, function(ok, r) {
+      if (ok && root.app.service) root.app.service.appearance = r
+      if (gen !== root.generation) return
       if (!ok) { root.status = r; root.statusColor = root.theme.red; return }
-      if (root.app.service) root.app.service.appearance = r
       root.savedFontSize = root.pendingFontSize
       saveSync()
     })

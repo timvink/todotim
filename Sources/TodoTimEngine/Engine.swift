@@ -57,6 +57,9 @@ public final class Engine {
     var startupError: String?
 
     var view: ViewSpec = .project(TodoStore.inboxID)
+    /// The label a label view shows, so the view follows its rename (here or by another client);
+    /// nil when no label had the view's name.
+    var viewLabelID: EntityID?
     var showCompleted: Set<EntityID> = []
     var collapsedSections: Set<EntityID> = []
     /// The text size chosen in the app's Settings (ui.json); nil is the app's default.
@@ -148,9 +151,12 @@ public final class Engine {
         observeSync()
     }
 
-    /// Writes pending changes to disk (on quit).
-    public func flush() {
-        writer?.flush()
+    /// Writes pending changes to disk (on quit). Returns false when the write failed (the changes
+    /// stay pending, so another flush tries again); true without a writer (an unreadable database
+    /// is never overwritten).
+    @discardableResult
+    public func flush() -> Bool {
+        writer?.flush() ?? true
     }
 
     /// Re-renders date labels ("Today", "Tomorrow") after midnight; call about once a minute.
@@ -189,10 +195,8 @@ public final class Engine {
         }
         do {
             let result = try perform(cmd, request, id: id)
-            pushChanges()
-            if let result { reply(id, result: result) }
+            if let result { reply(id, result: result) } else { pushAll() }
         } catch {
-            pushChanges()
             reply(id, error: (error as? LocalizedError)?.errorDescription ?? "\(error)")
         }
     }
@@ -201,15 +205,50 @@ public final class Engine {
         output(message.serialized())
     }
 
+    /// Replies send what changed first (sidebar, rows, sync status), so the events a request caused
+    /// come before its reply, also for async commands (`syncNow`, `testConnection`).
     func reply(_ id: JSON, result: JSON) {
+        pushAll()
         send(["re": id, "ok": true, "result": result])
     }
 
     func reply(_ id: JSON, error: String) {
+        pushAll()
         send(["re": id, "ok": false, "error": .string(error)])
     }
 
     // MARK: - Pushing state
+
+    func pushAll() {
+        pushChanges()
+        pushSync()
+    }
+
+    func setView(_ spec: ViewSpec) {
+        view = spec
+        if case .label(let name) = spec { viewLabelID = store.labels.first { $0.name == name }?.id } else { viewLabelID = nil }
+    }
+
+    /// Keeps the view on something that exists: a deleted project falls back to the Inbox; a label
+    /// view follows its label's rename and falls back to the Inbox when the label is deleted.
+    private func repairView() {
+        switch view {
+        case .project(let pid):
+            if store.project(pid) == nil { setView(.project(TodoStore.inboxID)) }
+        case .label(let name):
+            guard let id = viewLabelID else { return }
+            let labels = store.labels
+            if let label = labels.first(where: { $0.id == id }) {
+                if label.name != name { view = .label(label.name) }
+            } else if let label = labels.first(where: { $0.name == name }) {
+                viewLabelID = label.id
+            } else {
+                setView(.project(TodoStore.inboxID))
+            }
+        case .search:
+            break
+        }
+    }
 
     /// Pushes after the current main-queue turn (for changes that do not come from a request).
     func schedulePush() {
@@ -231,7 +270,7 @@ public final class Engine {
             lastSidebar = sidebar
             output("{\"event\":\"sidebar\",\"sidebar\":" + sidebar + "}")
         }
-        if case .project(let pid) = view, store.project(pid) == nil { view = .project(TodoStore.inboxID) }
+        repairView()
         var builder = RowBuilder(store: store, now: now(), calendar: calendar, showCompleted: showsCompleted,
                                  collapsedSections: collapsedSections)
         let rows = JSON.array(builder.build(view)).serialized()

@@ -88,10 +88,7 @@ public enum EngineMain {
         for sig in [SIGTERM, SIGINT, SIGHUP] {
             signal(sig, SIG_IGN)
             let source = DispatchSource.makeSignalSource(signal: sig, queue: .main)
-            source.setEventHandler {
-                MainActor.assumeIsolated { engine.flush() }
-                exit(0)
-            }
+            source.setEventHandler { MainActor.assumeIsolated { quit(engine) } }
             source.resume()
             keepAlive.append(source)
         }
@@ -100,14 +97,22 @@ public enum EngineMain {
             readLines(from: STDIN_FILENO) { line in
                 DispatchQueue.main.async { MainActor.assumeIsolated { engine.handle(line) } }
             }
-            DispatchQueue.main.async {
-                MainActor.assumeIsolated { engine.flush() }
-                exit(0)
-            }
+            DispatchQueue.main.async { MainActor.assumeIsolated { quit(engine) } }
         }
         reader.start()
         keepAlive.append(reader)
         dispatchMain()
+    }
+
+    /// Saves the database and exits; a failed write is tried again a few times (a full disk may
+    /// have room a moment later), then the engine exits with 1 and says why on stderr.
+    @MainActor
+    static func quit(_ engine: Engine) {
+        for attempt in 0..<3 {
+            if engine.flush() { exit(0) }
+            if attempt < 2 { usleep(200_000) }
+        }
+        fail("could not save the database to \(engine.paths.db.path); recent changes are lost", code: 1)
     }
 
     /// Calls `body` with each line read from `fd` (without "\n" or "\r\n"), until end of file or a

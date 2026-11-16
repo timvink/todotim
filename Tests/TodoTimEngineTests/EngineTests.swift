@@ -78,7 +78,7 @@ final class EngineTests: XCTestCase {
         XCTAssertEqual(reply["ok"], true)
         XCTAssertEqual(reply["result"]?["version"]?.string, Engine.version)
         XCTAssertEqual(reply["result"]?["palette"]?.array?.count, ProjectColor.entries.count)
-        XCTAssertEqual(events.compactMap { $0["event"]?.string }, ["sync", "sidebar", "rows"])
+        XCTAssertEqual(events.compactMap { $0["event"]?.string }, ["sidebar", "rows", "sync"])
         XCTAssertEqual(lastSidebar["inbox"]?["id"], "inbox")
     }
 
@@ -195,6 +195,23 @@ final class EngineTests: XCTestCase {
         XCTAssertEqual(taskRows().map { $0["content"]!.string! }, ["Bread", "Butter", "Salted", "Jam"])
         XCTAssertEqual(try send("undo").reply["error"], "Nothing to undo")
         XCTAssertEqual(try send("completeTasks", ["ids": []]).reply["error"], "Missing ids")
+    }
+
+    func testCompletingARepeatingParentWithItsSubtaskCompletesTheSubtask() async throws {
+        let parent = try result("quickAdd", ["text": "Water plants today"])["taskId"]!
+        let child = try result("quickAdd", ["text": "Balcony", "parentId": parent])["taskId"]!
+        engine.store.updateTask(parent.string!) { $0.recurrence = "FREQ=WEEKLY" }
+        try result("setView", ["view": ["kind": "project", "id": "inbox"]])
+        let due = engine.store.task(parent.string!)?.due
+        XCTAssertNotNil(due)
+
+        try result("completeTasks", ["ids": [parent, child]])
+        XCTAssertEqual(engine.store.task(child.string!)?.isCompleted, true)
+        XCTAssertEqual(engine.store.task(parent.string!)?.isCompleted, false, "a repeating task moves on")
+        XCTAssertNotEqual(engine.store.task(parent.string!)?.due, due)
+        try result("undo")
+        XCTAssertEqual(engine.store.task(child.string!)?.isCompleted, false)
+        XCTAssertEqual(engine.store.task(parent.string!)?.due, due)
     }
 
     func testUpdateTaskFields() async throws {
@@ -426,6 +443,64 @@ final class EngineTests: XCTestCase {
         let view = lines.reversed().compactMap { try? JSON.parse($0) }.first { $0["event"]?.string == "rows" }?["view"]
         XCTAssertEqual(view?["id"], "inbox")
         XCTAssertEqual(try send("deleteProject", ["id": "inbox"]).reply["ok"], false)
+    }
+
+    private var lastView: JSON? {
+        lines.reversed().compactMap { try? JSON.parse($0) }.first { $0["event"]?.string == "rows" }?["view"]
+    }
+
+    func testLabelViewFollowsRenameAndDeletion() async throws {
+        let id = try result("addLabel", ["name": "calls"])["id"]!.string!
+        try result("quickAdd", ["text": "Email Ann @calls"])
+        try result("setView", ["view": ["kind": "label", "name": "calls"]])
+
+        try result("updateLabel", ["id": .string(id), "name": "phone"])
+        XCTAssertEqual(lastView?["name"], "phone")
+        XCTAssertEqual(taskRows().map { $0["content"]!.string! }, ["Email Ann"])
+
+        // Another client (a sync) renames it, then deletes it.
+        engine.store.updateLabel(id) { $0.name = "ring" }
+        engine.pushChanges()
+        XCTAssertEqual(lastView?["kind"], "label")
+        XCTAssertEqual(lastView?["name"], "ring")
+        engine.store.deleteLabel(id)
+        engine.pushChanges()
+        XCTAssertEqual(lastView?["kind"], "project")
+        XCTAssertEqual(lastView?["id"], "inbox")
+    }
+
+    /// Sends a request whose reply may come later; returns every line after it, once the reply is in
+    /// and the main queue has had a few more turns.
+    private func sendAndWait(_ cmd: String, _ args: [String: JSON] = [:]) async throws -> [JSON] {
+        var request = args
+        request["req"] = .int(nextID)
+        request["cmd"] = .string(cmd)
+        nextID += 1
+        let start = lines.count
+        engine.handle(JSON.object(request).serialized())
+        var out: [JSON] = []
+        for _ in 0..<500 {
+            out = try lines[start...].map { try JSON.parse($0) }
+            if out.contains(where: { $0["re"] != nil }) { break }
+            try await Task.sleep(nanoseconds: 10_000_000)
+        }
+        for _ in 0..<5 { try await Task.sleep(nanoseconds: 10_000_000) }
+        return try lines[start...].map { try JSON.parse($0) }
+    }
+
+    func testAsyncRepliesComeAfterTheEventsTheyCaused() async throws {
+        // http:// to another host is refused before any request, so every sync fails at once. syncNow
+        // follows configureSync at once, so the error status change comes from the syncs it waits for.
+        engine.handle(#"{"req": 0, "cmd": "configureSync", "serverURL": "http://dav.example.com/", "username": "tim", "password": "secret", "enabled": true}"#)
+        for (cmd, args) in [("syncNow", [:] as [String: JSON]),
+                            ("testConnection", ["serverURL": "http://dav.example.com/", "username": "tim",
+                                                "password": "secret"])] {
+            let out = try await sendAndWait(cmd, args)
+            let replyIndex = try XCTUnwrap(out.firstIndex { $0["re"] != nil }, cmd)
+            XCTAssertEqual(out.count - 1, replyIndex, "\(cmd): no event after the reply: \(out[replyIndex...])")
+        }
+        let sync = lines.reversed().compactMap { try? JSON.parse($0) }.first { $0["event"]?.string == "sync" }?["sync"]
+        XCTAssertEqual(sync?["status"], "error")
     }
 
     // MARK: - Files
