@@ -168,6 +168,17 @@ final class TodoStoreTests: XCTestCase {
         XCTAssertNil(store.updateLabel(home.id) { $0.name = "back" }, "a deleted label stays deleted")
     }
 
+    func testRecoloringOneOfTwoCaseVariantLabelsKeepsBoth() {
+        // Labels differing only in case (from before names were matched ignoring case, or a sync).
+        var db = Database()
+        for (id, name) in [("l1", "Work"), ("l2", "work")] {
+            db.labels[id] = Label(id: id, name: name, order: 1, updatedAt: Date(timeIntervalSince1970: 0))
+        }
+        store = TodoStore(db: db)
+        store.updateLabel("l2") { $0.color = "red" }
+        XCTAssertEqual(store.labels.map(\.name).sorted(), ["Work", "work"])
+    }
+
     func testMutationsIgnoreDeletedEntities() {
         let p = store.addProject(name: "P")
         let s = store.addSection(projectId: p.id, name: "S")

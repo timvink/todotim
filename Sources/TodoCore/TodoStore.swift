@@ -542,7 +542,8 @@ public final class TodoStore {
             mutate(&l)
             guard l != old else { return old }
             l.updatedAt = Self.timestamp()
-            let target = liveLabels().first { $0.id != id && $0.name.caseInsensitiveCompare(l.name) == .orderedSame }
+            let target = l.name == old.name ? nil
+                : liveLabels().first { $0.id != id && $0.name.caseInsensitiveCompare(l.name) == .orderedSame }
             if target != nil {
                 l = old
                 l.deleted = true
