@@ -1,11 +1,13 @@
 package app.todotim.android.data
 
 import android.content.Context
+import android.util.Log
 import app.todotim.core.EntityID
 import app.todotim.core.TodoTask
 import app.todotim.core.store.Persistence
 import app.todotim.core.store.TodoStore
 import app.todotim.core.sync.SyncController
+import kotlinx.coroutines.CoroutineExceptionHandler
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Deferred
 import kotlinx.coroutines.Dispatchers
@@ -33,9 +35,25 @@ sealed interface LoadState {
  * the background worker.
  */
 class AppGraph(context: Context) {
-    val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
+    /** A failure nothing else handles is logged, not fatal: the data stays in memory and is saved again. */
+    val scope = CoroutineScope(
+        SupervisorJob() + Dispatchers.Default +
+            CoroutineExceptionHandler { _, e -> Log.e("TodoTim", "Background work failed", e) },
+    )
     val settings = SyncSettingsStore(context)
     private val persistence = Persistence(File(context.filesDir, "todotim"))
+
+    /** Why saving the database fails, while it does (disk full, …); null once saved. */
+    val saveError: StateFlow<String?> = persistence.saveError
+
+    private val noticeState = MutableStateFlow<String?>(null)
+
+    /** A one-time message for the user (the database file was unreadable and moved aside); null when none. */
+    val notice: StateFlow<String?> = noticeState.asStateFlow()
+
+    fun dismissNotice() {
+        noticeState.value = null
+    }
 
     private val loadState = MutableStateFlow<LoadState>(LoadState.Loading)
     val state: StateFlow<LoadState> = loadState.asStateFlow()
@@ -43,6 +61,10 @@ class AppGraph(context: Context) {
     private val loaded: Deferred<Loaded> = scope.async(Dispatchers.IO) {
         try {
             val store = TodoStore(persistence.load())
+            persistence.movedAside?.let {
+                noticeState.value = "Your task database could not be read, so TodoTim started empty. The old file " +
+                    "was kept as ${it.path}. Synced tasks come back with the next sync."
+            }
             persistence.attach(store, scope)
             val controller = SyncController(store, persistence)
             val sync = SyncManager(scope, store, controller, credentials = { withContext(Dispatchers.IO) { settings.credentials() } })
@@ -62,7 +84,7 @@ class AppGraph(context: Context) {
     fun flush() {
         scope.launch {
             val ready = (loadState.value as? LoadState.Ready)?.loaded ?: return@launch
-            persistence.flush(ready.store)
+            persistence.flushQuietly(ready.store) // a failure shows in saveError and is retried
         }
     }
 }

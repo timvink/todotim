@@ -32,7 +32,14 @@ class MainActivity : ComponentActivity() {
             TodoTimTheme {
                 val state by graph.state.collectAsState()
                 when (val s = state) {
-                    is LoadState.Ready -> TodoTimApp(vm, s.loaded.store, s.loaded.sync, graph.settings)
+                    is LoadState.Ready -> {
+                        val saveError by graph.saveError.collectAsState()
+                        val notice by graph.notice.collectAsState()
+                        TodoTimApp(
+                            vm, s.loaded.store, s.loaded.sync, graph.settings,
+                            saveError = saveError, notice = notice, onDismissNotice = graph::dismissNotice,
+                        )
+                    }
                     is LoadState.Failed -> Box(
                         Modifier.fillMaxSize().background(MaterialTheme.colorScheme.surface).padding(32.dp),
                         contentAlignment = Alignment.Center,
