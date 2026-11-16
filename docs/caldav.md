@@ -83,8 +83,9 @@ otherwise inside the home itself (for example when `server_url` is a principal o
   This is best-effort: a failure, including a server without this extension, shows as a sync warning
   and does not stop the sync.
 - **Deleting** a project deletes its calendar (DELETE on the collection; Nextcloud moves it to its trash
-  bin). A calendar that disappears from the server deletes the project in TodoTim. The inbox is created
-  again. A calendar still in Nextcloud's trash bin blocks MKCALENDAR at its path: TodoTim reports it and
+  bin). A calendar that disappears from the server deletes the project in TodoTim, with its tasks, except
+  tasks added or changed in TodoTim since the last sync: those move to the inbox, with a warning. The inbox
+  is created again. A calendar still in Nextcloud's trash bin blocks MKCALENDAR at its path: TodoTim reports it and
   syncs the other lists.
 
 ## Sections
