@@ -259,6 +259,8 @@ public final class SyncController {
             return
         }
         var password = await loadPassword(for: account) ?? ""
+        // A settings change while waiting (`restartLoop`) has set the status; leave it.
+        guard self.settings == settings, !Task.isCancelled else { return }
         var passwordIsNew = false
         if password.isEmpty, let command = passwordCommand, !passwordCommandAttempted {
             passwordCommandAttempted = true
@@ -275,6 +277,7 @@ public final class SyncController {
             } catch {
                 passwordCommandError = await Self.passwordCommandMessage(command, error)
             }
+            guard self.settings == settings, !Task.isCancelled else { return }
         }
         guard !password.isEmpty else {
             // Later automatic syncs do not run the command again (Sync Now does): keep its reason.

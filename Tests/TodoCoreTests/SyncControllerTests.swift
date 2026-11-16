@@ -253,6 +253,20 @@ final class SyncControllerTests: XCTestCase {
         XCTAssertEqual(c.status, .disabled)
     }
 
+    /// Disabling sync while the password is read from the Keychain (which cancellation does not
+    /// stop) leaves the status disabled.
+    func testDisablingDuringThePasswordLookupEndsDisabled() async throws {
+        let creds = SlowCredentials()
+        let c = makeController(TodoStore(), FakeCalDAVServer(), credentials: creds)
+        c.configure(settings, password: nil)
+        try await waitUntil { creds.reads > 0 }
+        var disabled = settings
+        disabled.enabled = false
+        c.configure(disabled, password: nil)
+        try await Task.sleep(for: .milliseconds(400))
+        XCTAssertEqual(c.status, .disabled)
+    }
+
     /// The sidebar's "Sync pending": from a local edit until a sync has sent it.
     func testChangesArePendingUntilASyncSendsThem() async throws {
         let remote = FakeCalDAVServer()
@@ -495,6 +509,21 @@ private final class CancelBox { var cancelled: Bool? }
 
 @MainActor
 private final class UsernameLog { var names: [String] = [] }
+
+/// Returns "pw" after 200 ms.
+private final class SlowCredentials: CredentialStore, @unchecked Sendable {
+    private let lock = NSLock()
+    private var count = 0
+    var reads: Int { lock.withLock { count } }
+
+    func password(for account: String) -> String? {
+        lock.withLock { count += 1 }
+        Thread.sleep(forTimeInterval: 0.2)
+        return "pw"
+    }
+
+    func setPassword(_ password: String?, for account: String) {}
+}
 
 /// Returns "pw" and records whether each read ran on the main thread.
 private final class ThreadRecordingCredentials: CredentialStore, @unchecked Sendable {
