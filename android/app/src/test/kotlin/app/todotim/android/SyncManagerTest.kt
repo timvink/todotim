@@ -1,6 +1,5 @@
 package app.todotim.android
 
-import app.todotim.android.data.Credentials
 import app.todotim.android.data.SyncManager
 import app.todotim.core.dav.CalDAVServer
 import app.todotim.core.dav.CalendarChanges
@@ -9,8 +8,10 @@ import app.todotim.core.dav.CalendarProperty
 import app.todotim.core.dav.RemoteCalendar
 import app.todotim.core.dav.SyncError
 import app.todotim.core.store.TodoStore
+import app.todotim.core.sync.Credentials
 import app.todotim.core.sync.SyncController
 import app.todotim.core.sync.SyncSettings
+import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.async
@@ -49,6 +50,38 @@ class SyncManagerTest {
         assertEquals(1, connects)
         assertEquals(SyncError.Unauthorized.message, sync.status.value.error)
         assertFalse(sync.status.value.isSyncing)
+    }
+
+    @Test
+    fun unreadableCredentialsAreAFailedSyncNotACrash() = runTest {
+        val sync = SyncManager(backgroundScope, store, controller, credentials = { throw IllegalStateException("Keystore") })
+        assertFalse(sync.sync(manual = true))
+        assertEquals("Sync failed: Keystore", sync.status.value.error)
+        assertFalse(sync.status.value.isSyncing)
+    }
+
+    @Test
+    fun aWaitingSyncUsesTheAccountSavedMeanwhile() = runTest {
+        val server = AcceptingServer()
+        val release = CompletableDeferred<Unit>()
+        val users = mutableListOf<String>()
+        val controller = SyncController(store) { s, _, _ ->
+            users.add(s.username)
+            if (users.size == 1) release.await()
+            server
+        }
+        var current = account
+        val sync = SyncManager(backgroundScope, store, controller, credentials = { current })
+        val first = async { sync.sync() } // e.g. the background worker, with the old account
+        runCurrent()
+        val second = async { sync.sync(manual = true) } // Settings saved another account and asked for a sync
+        runCurrent()
+        current = Credentials(SyncSettings("https://dav.example.com/", "anna"), "secret")
+        release.complete(Unit)
+        first.await()
+        second.await()
+        assertEquals(listOf("tim", "anna"), users)
+        assertEquals("anna", store.database.value.account!!.username)
     }
 
     @Test

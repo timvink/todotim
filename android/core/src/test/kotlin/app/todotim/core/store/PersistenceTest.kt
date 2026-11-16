@@ -77,6 +77,48 @@ class PersistenceTest {
         job.cancel()
     }
 
+    /** Makes every write fail (the temp file's name is taken by a non-empty directory) until [unblock]. */
+    private fun block(dir: File): File = File(dir, "db.json.tmp").apply { mkdirs(); File(this, "x").writeText("x") }
+
+    private fun unblock(blocker: File) {
+        blocker.deleteRecursively()
+    }
+
+    @Test fun aFailedSaveIsReportedKeptAndRetried() {
+        val dir = tmp.newFolder()
+        val dispatcher = StandardTestDispatcher()
+        val scope = TestScope(dispatcher)
+        val store = TodoStore()
+        val persistence = Persistence(dir, debounceMillis = 500, dispatcher = dispatcher)
+        val blocker = block(dir)
+        val job = persistence.attach(store, scope, retryMillis = 1_000)
+        store.addTask("A")
+        scope.advanceTimeBy(600)
+        scope.runCurrent()
+        assertTrue(job.isActive) // the failure did not end the saving
+        assertNotNull(persistence.saveError.value)
+        assertFalse(File(dir, "db.json").exists())
+        unblock(blocker)
+        scope.advanceTimeBy(1_100)
+        scope.runCurrent()
+        assertEquals(null, persistence.saveError.value)
+        assertEquals(store.database.value, Persistence(dir).load())
+        job.cancel()
+    }
+
+    @Test fun flushQuietlyReportsInsteadOfThrowing() = runTest {
+        val dir = tmp.newFolder()
+        val store = TodoStore()
+        store.addTask("A")
+        val persistence = Persistence(dir, dispatcher = Dispatchers.Unconfined)
+        val blocker = block(dir)
+        assertFalse(persistence.flushQuietly(store))
+        assertNotNull(persistence.saveError.value)
+        unblock(blocker)
+        assertTrue(persistence.flushQuietly(store))
+        assertEquals(null, persistence.saveError.value)
+    }
+
     @Test fun aStaleSaveNeverOverwritesANewerWrite() = runTest {
         val dir = tmp.newFolder()
         val store = TodoStore()

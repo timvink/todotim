@@ -255,6 +255,70 @@ class CalDAVSyncTest {
         assertNull(store.snapshot.value.project("work"))
     }
 
+    @Test fun deletedCalendarKeepsTasksWithLocalEditsInTheInbox() = runTest {
+        put(work, "a", "Report", "X-TODOTIM-SECTION;X-NAME=Doing;X-ORDER=1:s1")
+        put(work, "b", "Draft", "RELATED-TO;RELTYPE=PARENT:a")
+        put(work, "c", "Notes")
+        sync()
+        now += HOUR
+        store.updateTask("b") { copy(content = "Draft 2") }
+        val added = store.addTask("Slides", projectId = "work", parentId = "c").id
+        server.calendars.remove(work)
+        val r = sync()
+        assertTrue(r.isComplete)
+        assertEquals(2, r.removed)
+        val db = store.database.value
+        assertNull(db.tasks["a"])
+        assertNull(db.tasks["c"])
+        for (id in listOf("b", added)) {
+            val t = db.tasks.getValue(id)
+            assertEquals(INBOX_ID, t.projectId)
+            assertNull(t.sectionId)
+            assertNull(t.parentId)
+        }
+        assertEquals("Draft 2", db.tasks.getValue("b").content)
+        assertEquals("SUMMARY:Draft 2", line(server.ics("$inbox/b.ics")!!, "SUMMARY"))
+        assertNotNull(server.ics("$inbox/$added.ics"))
+        assertEquals(0, store.snapshot.value.unsyncedCount)
+    }
+
+    @Test fun anEditDuringThePullOfADeletedListIsKept() = runTest {
+        put(work, "a", "Report")
+        sync()
+        server.calendars.remove(work)
+        val editing = object : app.todotim.core.dav.CalDAVServer by server {
+            override suspend fun calendars() = server.calendars().also {
+                now += MINUTE
+                store.updateTask("a") { copy(content = "Report 2") }
+            }
+        }
+        CalDAVSync.sync(store, editing, now, utc)
+        val a = store.database.value.tasks.getValue("a")
+        assertEquals("Report 2", a.content)
+        assertEquals(INBOX_ID, a.projectId)
+        sync()
+        assertEquals("SUMMARY:Report 2", line(server.ics("$inbox/a.ics")!!, "SUMMARY"))
+    }
+
+    @Test fun aTaskMovedAwayBeforeItsListWasDeletedFollowsTheMove() = runTest {
+        put(work, "b", "Draft")
+        sync()
+        now += HOUR
+        store.updateTask("b") { copy(content = "Draft 2") }
+        // Another client moves "b" to another list, then deletes "work".
+        val home = server.addCalendar("home", "Home")
+        server.store("$home/b.ics", server.ics("$work/b.ics")!!)
+        server.calendars.remove(work)
+        server.writes.clear()
+        val r = sync()
+        assertTrue(r.isComplete)
+        assertEquals(0, r.removed)
+        val b = store.snapshot.value.task("b")!!
+        assertEquals("home", b.projectId)
+        assertEquals("Draft 2", b.content)
+        assertEquals(listOf("PUT $home/b.ics"), server.writes)
+    }
+
     @Test fun unreadableObjectIsKeptAndNotWritten() = runTest {
         put(inbox, "a", "Milk")
         sync()
@@ -452,6 +516,77 @@ class CalDAVSyncTest {
         assertEquals(Account("https://dav.example.com/", "anna"), store.database.value.account)
         assertNull(store.snapshot.value.task("a"))
         assertNotNull(other.ics("${other.home}/todotim-inbox/$unsynced.ics"))
+    }
+
+    @Test fun anotherAccountKeepsEditsNotYetUploaded() = runTest {
+        put(work, "a", "Report", "X-TODOTIM-SECTION;X-NAME=Doing;X-ORDER=1:s1")
+        put(work, "b", "Draft", "RELATED-TO;RELTYPE=PARENT:a")
+        put(inbox, "c", "Milk")
+        val controller = SyncController(store, zone = utc) { _, _, _ -> server }
+        controller.syncNow(SyncSettings("https://dav.example.com/", "tim"), "pw")
+        now += HOUR
+        store.updateTask("b") { copy(content = "Draft 2") }
+        val other = FakeCalDAVServer()
+        other.addCalendar("todotim-inbox", "Inbox")
+        SyncController(store, zone = utc) { _, _, _ -> other }.syncNow(SyncSettings("https://dav.example.com/", "anna"), "pw")
+        val snap = store.snapshot.value
+        assertNull(snap.task("a"))
+        assertNull(snap.task("c"))
+        val b = snap.task("b")!!
+        assertEquals("Draft 2", b.content)
+        assertEquals(INBOX_ID, b.projectId)
+        assertNull(b.sectionId)
+        assertNull(store.database.value.tasks.getValue("b").parentId) // its parent stayed with the old account
+        assertNotNull(other.ics("${other.home}/todotim-inbox/b.ics"))
+    }
+
+    @Test fun aFailedConnectToAnotherAccountChangesNothing() = runTest {
+        put(inbox, "a", "Milk")
+        put(inbox, "b", "Bread")
+        val controller = SyncController(store, zone = utc) { _, _, _ -> server }
+        controller.syncNow(SyncSettings("https://dav.example.com/", "tim"), "pw")
+        now += HOUR
+        store.updateTask("a") { copy(content = "Oat milk") }
+        store.delete("b")
+        val added = store.addTask("Local").id
+        val before = store.database.value
+        // A typo in the username: the login fails, or discovery guesses a home that does not exist.
+        val guessedHome = object : app.todotim.core.dav.CalDAVServer by FakeCalDAVServer("calendars/tmi") {
+            override suspend fun calendars() = throw SyncError.NotFound("calendars/tmi")
+        }
+        val typos = listOf(
+            SyncController(store, zone = utc) { _, _, _ -> throw SyncError.Unauthorized },
+            SyncController(store, zone = utc) { _, _, _ -> guessedHome },
+        )
+        for (typo in typos) {
+            try {
+                typo.syncNow(SyncSettings("https://dav.example.com/", "tmi"), "pw")
+                throw AssertionError("the sync should fail")
+            } catch (e: SyncError) {
+                // expected
+            }
+            assertEquals(before, store.database.value)
+        }
+        // Back to the right account: the edit, the delete and the new task go up.
+        controller.syncNow(SyncSettings("https://dav.example.com/", "tim"), "pw")
+        assertEquals("SUMMARY:Oat milk", line(server.ics("$inbox/a.ics")!!, "SUMMARY"))
+        assertNull(server.ics("$inbox/b.ics"))
+        assertNotNull(server.ics("$inbox/$added.ics"))
+    }
+
+    @Test fun aFailedSaveDoesNotHideTheSyncResult() = runTest {
+        put(inbox, "a", "Milk")
+        val dir = kotlin.io.path.createTempDirectory().toFile()
+        try {
+            java.io.File(dir, "db.json.tmp").apply { mkdirs(); java.io.File(this, "x").writeText("x") }
+            val persistence = app.todotim.core.store.Persistence(dir, dispatcher = kotlinx.coroutines.Dispatchers.Unconfined)
+            val controller = SyncController(store, persistence, zone = utc) { _, _, _ -> server }
+            val r = controller.syncNow(SyncSettings("https://dav.example.com/", "tim"), "pw")
+            assertTrue(r.isComplete)
+            assertNotNull(persistence.saveError.value)
+        } finally {
+            dir.deleteRecursively()
+        }
     }
 
     @Test fun spellingsOfOneServerAreOneAccount() = runTest {

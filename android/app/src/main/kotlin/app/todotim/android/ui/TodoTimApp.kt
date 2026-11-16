@@ -11,6 +11,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Menu
 import androidx.compose.material.icons.filled.Search
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.FloatingActionButton
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
@@ -23,6 +24,7 @@ import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.SnackbarResult
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
@@ -30,6 +32,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
@@ -50,14 +53,24 @@ import java.time.LocalDate
 
 /** Root: bottom navigation (Inbox / Search / Browse), FAB, the current screen and the sheets. */
 @Composable
-fun TodoTimApp(vm: AppViewModel, store: TodoStore, sync: SyncManager, settingsStore: SyncSettingsStore) {
+fun TodoTimApp(
+    vm: AppViewModel,
+    store: TodoStore,
+    sync: SyncManager,
+    settingsStore: SyncSettingsStore,
+    /** Why saving fails, while it does. */
+    saveError: String? = null,
+    /** A one-time message (the database was moved aside), until [onDismissNotice]. */
+    notice: String? = null,
+    onDismissNotice: () -> Unit = {},
+) {
     val snapshot by store.snapshot.collectAsState()
     val syncStatus by sync.status.collectAsState()
     val settings by settingsStore.settings.collectAsState()
     val today = LocalDate.now()
     val scope = rememberCoroutineScope()
     val snackbar = remember { SnackbarHostState() }
-    var rescheduleId by remember { mutableStateOf<EntityID?>(null) }
+    var rescheduleId by rememberSaveable { mutableStateOf<EntityID?>(null) }
     val labelColors = remember(snapshot) { snapshot.labels.associate { it.name to paletteColor(it.color) } }
 
     BackHandler(enabled = vm.canGoBack) { vm.back() }
@@ -68,6 +81,19 @@ fun TodoTimApp(vm: AppViewModel, store: TodoStore, sync: SyncManager, settingsSt
             snackbar.currentSnackbarData?.dismiss()
             snackbar.showSnackbar(message, duration = SnackbarDuration.Long)
         }
+    }
+
+    // A failing save stays on screen until a save succeeds (the effect restarts and dismisses it).
+    LaunchedEffect(saveError) {
+        if (saveError != null) snackbar.showSnackbar(saveError, withDismissAction = true, duration = SnackbarDuration.Indefinite)
+    }
+
+    notice?.let { message ->
+        AlertDialog(
+            onDismissRequest = onDismissNotice,
+            confirmButton = { TextButton(onClick = onDismissNotice) { Text("OK") } },
+            text = { Text(message) },
+        )
     }
 
     fun toggle(task: TodoTask) {

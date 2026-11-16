@@ -186,16 +186,18 @@ class TodoStore(
     // region Account and sync
 
     /**
-     * Prepares the store for another server URL or username: everything synced is dropped (it belongs to the other
-     * account); tasks never uploaded are kept and go to the new account, in the inbox when their project is gone.
+     * Prepares the store for another server URL or username: what is synced is dropped (it belongs to the other
+     * account), and so are pending deletes (paths there). Tasks never uploaded and synced tasks with edits not yet
+     * uploaded are kept as new tasks of the new account ([keepLocalOnly]), so no local change is lost.
      */
     fun resetAccount(account: Account) = mutate { tx ->
-        val keep = tx.db.tasks.filterKeys { it !in tx.db.shadows }
+        val keep = tx.db.tasks.values.filter { t -> tx.shadows[t.id]?.let { TaskFields.edited(t, it.task) } ?: true }
         tx.db = Database(account = account)
         tx.tasks.clear()
-        for (t in keep.values) tx.tasks[t.id] = if (t.projectId == INBOX_ID) t else t.copy(projectId = INBOX_ID, sectionId = null)
         tx.shadows.clear()
         tx.pendingDeletes.clear()
+        val kept = keep.mapTo(HashSet()) { it.id }
+        for (t in keep) tx.tasks[t.id] = keepLocalOnly(t, kept)
     }
 
     /**
@@ -242,8 +244,13 @@ class TodoStore(
                     }
                 }
                 else -> {
-                    val merged = result.tasks[id] ?: continue // removed on the server: dropped
-                    tx.tasks[id] = TaskFields.rebase(now, before, merged)
+                    val merged = result.tasks[id]
+                    if (merged != null) {
+                        tx.tasks[id] = TaskFields.rebase(now, before, merged)
+                    } else if (before.projectId !in result.projects) {
+                        // Its list was deleted on the server: kept with the edit, as the pull keeps edited tasks.
+                        tx.tasks[id] = keepLocalOnly(now, tx.tasks.keys.filterTo(HashSet()) { it !in tx.shadows })
+                    } // else its object was removed on the server: dropped
                 }
             }
         }
@@ -365,6 +372,16 @@ class TodoStore(
     }
 
     companion object {
+        /**
+         * [t] kept as a task never uploaded after its list or account went away: in the inbox, without a section,
+         * and without its parent unless the parent is kept too ([kept]).
+         */
+        internal fun keepLocalOnly(t: TodoTask, kept: Set<EntityID>): TodoTask {
+            val parentId = t.parentId?.takeIf { it in kept }
+            if (t.projectId == INBOX_ID && t.sectionId == null && parentId == t.parentId) return t
+            return t.copy(projectId = INBOX_ID, sectionId = null, parentId = parentId)
+        }
+
         /**
          * [t] with its text within [SyncLimits] (title, description, label count and names), clipped as the server
          * copy is on read, so a written task reads back unchanged.

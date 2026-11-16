@@ -1,10 +1,16 @@
 package app.todotim.core.store
 
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.FlowPreview
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.flow.debounce
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
@@ -27,7 +33,7 @@ import java.time.format.DateTimeFormatter
  *
  * Saves are atomic (a temp file, synced, then renamed over the old one) and coalesced: [attach] saves
  * [debounceMillis] after the last change, on [dispatcher]. [flush] saves at once (after a sync, or when the app goes
- * to the background). A file that cannot be decoded is moved aside as `db.json.corrupt-<UTC time>`, never
+ * to the background). A failed write leaves the old file in place and is reported in [saveError]. A file that cannot be decoded is moved aside as `db.json.corrupt-<UTC time>`, never
  * overwritten, and the store starts empty.
  */
 class Persistence(
@@ -40,6 +46,12 @@ class Persistence(
     /** Where the last [load] moved a corrupt file, if it did. */
     var movedAside: File? = null
         private set
+
+    private val saveFailure = MutableStateFlow<String?>(null)
+
+    /** Why the last save failed, for the user; null once a save succeeds. The unsaved database stays in the
+     *  store, and the next save writes it. */
+    val saveError: StateFlow<String?> = saveFailure.asStateFlow()
 
     private val writeLock = Mutex()
     @Volatile private var lastSaved: Database? = null
@@ -74,19 +86,35 @@ class Persistence(
         return db
     }
 
-    /** Saves [store]'s database [debounceMillis] after each burst of changes, in [scope], until the scope ends. */
+    /**
+     * Saves [store]'s database [debounceMillis] after each burst of changes, in [scope], until the scope ends.
+     * A failed save (disk full, …) is reported in [saveError] and tried again every [retryMillis] until it
+     * succeeds or the next change saves.
+     */
     @OptIn(FlowPreview::class)
-    fun attach(store: TodoStore, scope: CoroutineScope): Job {
+    fun attach(store: TodoStore, scope: CoroutineScope, retryMillis: Long = 10_000): Job {
         source = store
         return scope.launch(dispatcher) {
-            store.database.debounce(debounceMillis).collect { save(it) }
+            store.database.debounce(debounceMillis).collectLatest {
+                while (!flushQuietly(store)) delay(retryMillis)
+            }
         }
     }
 
-    /** Saves [store]'s current database now, unless it is already saved. */
+    /** Saves [store]'s current database now, unless it is already saved. Throws (an [IOException], …) when it cannot. */
     suspend fun flush(store: TodoStore) {
         source = store
         save(store.database.value)
+    }
+
+    /** [flush], reporting a failure in [saveError] instead of throwing. Returns whether the database is saved. */
+    suspend fun flushQuietly(store: TodoStore): Boolean = try {
+        flush(store)
+        true
+    } catch (e: CancellationException) {
+        throw e
+    } catch (e: Exception) {
+        false
     }
 
     /**
@@ -98,17 +126,29 @@ class Persistence(
         writeLock.withLock {
             val latest = source?.database?.value ?: db
             if (latest == lastSaved) return@withLock
-            write(latest)
+            try {
+                write(latest)
+            } catch (e: Exception) { // IOException (disk full, …), or SecurityException
+                saveFailure.value = "Could not save your tasks: ${e.message ?: e::class.java.simpleName}. " +
+                    "Your changes are kept while the app runs and saved as soon as possible."
+                throw e
+            }
             lastSaved = latest
+            saveFailure.value = null
         }
     }
 
     private fun write(db: Database) {
         directory.mkdirs()
         val tmp = File(directory, "$FILE_NAME.tmp")
-        FileOutputStream(tmp).use { out ->
-            out.write(json.encodeToString(Database.serializer(), db).toByteArray(Charsets.UTF_8))
-            out.fd.sync()
+        try {
+            FileOutputStream(tmp).use { out ->
+                out.write(json.encodeToString(Database.serializer(), db).toByteArray(Charsets.UTF_8))
+                out.fd.sync()
+            }
+        } catch (e: IOException) {
+            tmp.delete() // a partial file only takes space (disk full)
+            throw e
         }
         try {
             Files.move(tmp.toPath(), file.toPath(), StandardCopyOption.REPLACE_EXISTING, StandardCopyOption.ATOMIC_MOVE)

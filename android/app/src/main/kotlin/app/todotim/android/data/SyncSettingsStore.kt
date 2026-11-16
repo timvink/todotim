@@ -6,6 +6,7 @@ import android.security.keystore.KeyProperties
 import android.util.Base64
 import app.todotim.core.dav.SyncError
 import app.todotim.core.dav.WebDAVClient
+import app.todotim.core.sync.Credentials
 import app.todotim.core.sync.SyncController
 import app.todotim.core.sync.SyncSettings
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -30,9 +31,6 @@ data class ServerSettings(
 ) {
     val isConfigured: Boolean get() = serverUrl.isNotBlank() && username.isNotBlank()
 }
-
-/** What a sync needs. An empty [password] makes the sync fail with [SyncError.MissingPassword]. */
-data class Credentials(val settings: SyncSettings, val password: String)
 
 /**
  * Checks what Settings is about to save; returns the message to show, or null when it is fine. The URL rules are
@@ -82,8 +80,12 @@ fun planSettingsChange(stored: ServerSettings, serverUrl: String, username: Stri
  * transfer are off for the app, and a restored ciphertext would be unreadable without the key anyway.
  */
 class SyncSettingsStore(context: Context) {
+    /** URL, username and sealed password as one value, so [credentials] never pairs a password with another account. */
+    private data class Stored(val settings: ServerSettings, val sealedPassword: String?)
+
     private val prefs = context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
-    private val state = MutableStateFlow(read())
+    @Volatile private var stored = read()
+    private val state = MutableStateFlow(stored.settings)
     val settings: StateFlow<ServerSettings> = state.asStateFlow()
 
     /**
@@ -92,8 +94,8 @@ class SyncSettingsStore(context: Context) {
      * Throws [IllegalArgumentException] with a message for the user when the values are refused or the password
      * cannot be encrypted.
      */
-    fun save(serverUrl: String, username: String, password: String?) {
-        val change = planSettingsChange(state.value, serverUrl, username, password)
+    fun save(serverUrl: String, username: String, password: String?) = synchronized(this) {
+        val change = planSettingsChange(stored.settings, serverUrl, username, password)
         val sealed = change.password?.takeIf { it.isNotEmpty() }?.let { plain ->
             try {
                 PasswordCipher.encrypt(plain)
@@ -110,22 +112,28 @@ class SyncSettingsStore(context: Context) {
             change.password != null -> edit.remove(KEY_PASSWORD)
         }
         edit.apply()
-        state.value = read()
+        val sealedPassword = if (change.password == null) stored.sealedPassword else sealed
+        stored = Stored(ServerSettings(change.serverUrl, change.username, sealedPassword != null), sealedPassword)
+        state.value = stored.settings
     }
 
     /** The account to sync with, or null when no server is set up. Decrypts the password (call off the main thread). */
     fun credentials(): Credentials? {
-        val s = state.value
-        if (!s.isConfigured) return null
-        val password = prefs.getString(KEY_PASSWORD, null)?.let(PasswordCipher::decrypt).orEmpty()
-        return Credentials(SyncSettings(s.serverUrl, s.username), password)
+        val s = stored
+        if (!s.settings.isConfigured) return null
+        val password = s.sealedPassword?.let(PasswordCipher::decrypt).orEmpty()
+        return Credentials(SyncSettings(s.settings.serverUrl, s.settings.username), password)
     }
 
-    private fun read() = ServerSettings(
-        serverUrl = prefs.getString(KEY_URL, null).orEmpty(),
-        username = prefs.getString(KEY_USER, null).orEmpty(),
-        hasPassword = prefs.contains(KEY_PASSWORD),
-    )
+    private fun read(): Stored {
+        val sealed = prefs.getString(KEY_PASSWORD, null)
+        val settings = ServerSettings(
+            serverUrl = prefs.getString(KEY_URL, null).orEmpty(),
+            username = prefs.getString(KEY_USER, null).orEmpty(),
+            hasPassword = sealed != null,
+        )
+        return Stored(settings, sealed)
+    }
 
     private companion object {
         const val PREFS = "sync"
@@ -167,16 +175,8 @@ private object PasswordCipher {
         val cipher = Cipher.getInstance(TRANSFORMATION)
         cipher.init(Cipher.DECRYPT_MODE, key(), GCMParameterSpec(128, iv))
         String(cipher.doFinal(sealed), Charsets.UTF_8)
-    } catch (e: GeneralSecurityException) {
-        null
-    } catch (e: IllegalArgumentException) {
-        null
-    } catch (e: IndexOutOfBoundsException) {
-        null
-    } catch (e: ProviderException) {
-        null
-    } catch (e: IOException) {
-        null
+    } catch (e: Exception) {
+        if (isKeystoreFailure(e) || e is IllegalArgumentException || e is IndexOutOfBoundsException) null else throw e
     }
 
     private fun key(): SecretKey {
