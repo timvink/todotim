@@ -186,6 +186,23 @@ final class WebDAVClientTests: XCTestCase {
         XCTAssertEqual(StubURLProtocol.requests.count, 1 + WebDAVClient.lockedRetries)
     }
 
+    /// A cancelled request is a cancellation, not a network error (the sync then stays idle).
+    func testCancelledRequestThrowsCancellationError() async throws {
+        let config = URLSessionConfiguration.ephemeral
+        config.protocolClasses = [HangingURLProtocol.self]
+        let client = try WebDAVClient(serverURL: "https://cloud.example.com/remote.php/dav/", username: "tim",
+                                      password: "app-pass", session: URLSession(configuration: config))
+        let request = Task { try await client.send("PROPFIND", "calendars/tim", collection: true) }
+        try await Task.sleep(for: .milliseconds(100))
+        request.cancel()
+        do {
+            _ = try await request.value
+            XCTFail("expected a cancellation")
+        } catch {
+            XCTAssertTrue(error is CancellationError, "\(error)")
+        }
+    }
+
     func testResponseBodyIsCapped() async throws {
         let client = try makeClient()
         client.maxResponseBytes = 100_000
@@ -616,6 +633,14 @@ final class StubURLProtocol: URLProtocol {
         client?.urlProtocolDidFinishLoading(self)
     }
 
+    override func stopLoading() {}
+}
+
+/// Never answers: the request ends only when it is cancelled.
+final class HangingURLProtocol: URLProtocol {
+    override class func canInit(with request: URLRequest) -> Bool { true }
+    override class func canonicalRequest(for request: URLRequest) -> URLRequest { request }
+    override func startLoading() {}
     override func stopLoading() {}
 }
 

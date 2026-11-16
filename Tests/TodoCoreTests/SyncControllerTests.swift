@@ -194,6 +194,61 @@ final class SyncControllerTests: XCTestCase {
         try await waitUntil { await remote.ics("calendars/tim/todotim-inbox/\(localID).ics") != nil }
     }
 
+    /// An edit while a debounced sync runs schedules another sync; it does not cancel the running one.
+    func testEditDuringSyncDoesNotCancelIt() async throws {
+        let remote = FakeCalDAVServer()
+        let store = TodoStore()
+        let c = makeController(store, remote)
+        c.configure(settings, password: "pw")
+        try await waitUntil { c.lastSync != nil }
+        await remote.resetCounts()
+
+        let seen = CancelBox()
+        await remote.setBeforeList { @MainActor in
+            store.addTask(content: "typed during sync", projectId: TodoStore.inboxID)
+            c.scheduleSync()
+            seen.cancelled = Task.isCancelled
+        }
+        store.addTask(content: "first", projectId: TodoStore.inboxID)
+        c.scheduleSync()
+        try await waitUntil { await remote.count("PROPFIND") >= 2 && !c.hasPendingChanges }
+        XCTAssertEqual(seen.cancelled, false, "the running sync was not cancelled")
+        XCTAssertEqual(c.status, .idle(lastSync: c.lastSync))
+        XCTAssertEqual(store.db.tasks.count, 2)
+    }
+
+    /// A settings change cancels the running sync without an error, and a sync with the new
+    /// settings follows at once (not after the sync interval).
+    func testSettingsChangeCancelsTheSyncAndSyncsWithTheNewSettings() async throws {
+        let remote = FakeCalDAVServer()
+        let used = UsernameLog()
+        let c = SyncController(store: TodoStore(), defaults: defaults, credentials: InMemoryCredentialStore(), config: nil,
+                               configPath: "/nonexistent", stateURL: nil) { @MainActor s, _, cached in
+            used.names.append(s.username)
+            if s.username == "tim" { try await Task.sleep(for: .seconds(30)) }
+            return await remote.connect(cached: cached)
+        }
+        c.syncInterval = .seconds(3600)
+        c.configure(settings, password: "pw")
+        try await waitUntil { used.names == ["tim"] }
+        XCTAssertEqual(c.status, .syncing)
+        var other = settings
+        other.username = "tim2"
+        c.configure(other, password: "pw")
+        try await waitUntil { c.lastSync != nil }
+        XCTAssertEqual(used.names, ["tim", "tim2"])
+        XCTAssertEqual(c.status, .idle(lastSync: c.lastSync))
+
+        // Disabling while a sync runs ends disabled, not idle.
+        c.configure(settings, password: "pw")
+        try await waitUntil { used.names.count == 3 }
+        var disabled = settings
+        disabled.enabled = false
+        c.configure(disabled, password: nil)
+        try await Task.sleep(for: .milliseconds(100))
+        XCTAssertEqual(c.status, .disabled)
+    }
+
     /// The sidebar's "Sync pending": from a local edit until a sync has sent it.
     func testChangesArePendingUntilASyncSendsThem() async throws {
         let remote = FakeCalDAVServer()
@@ -399,6 +454,12 @@ final class SyncControllerDiscoveryTests: XCTestCase {
 
 @MainActor
 private final class TodoBox { var id: EntityID? }
+
+@MainActor
+private final class CancelBox { var cancelled: Bool? }
+
+@MainActor
+private final class UsernameLog { var names: [String] = [] }
 
 /// Returns "pw" and records whether each read ran on the main thread.
 private final class ThreadRecordingCredentials: CredentialStore, @unchecked Sendable {

@@ -90,7 +90,9 @@ public final class SyncController {
     @ObservationIgnored private var lastSynced: Database?
     @ObservationIgnored private var debounceTask: Task<Void, Never>?
     @ObservationIgnored private var periodicTask: Task<Void, Never>?
-    @ObservationIgnored private var isSyncing = false
+    /// The running sync. Only a settings change cancels it (`restartLoop`); the debounce and
+    /// periodic tasks only wait for it, so replacing them never aborts a sync.
+    @ObservationIgnored private var syncTask: Task<Void, Never>?
     @ObservationIgnored private var syncRequestedWhileSyncing = false
     @ObservationIgnored private var passwordCommand: String?
     @ObservationIgnored private var shareWith: [String] = []
@@ -204,13 +206,24 @@ public final class SyncController {
 
     private func sync() async {
         guard settings.enabled else { status = .disabled; return }
-        if isSyncing { syncRequestedWhileSyncing = true; return }
-        isSyncing = true
-        defer { isSyncing = false }
+        if syncTask != nil { syncRequestedWhileSyncing = true; return }
+        let task = Task { [weak self] in guard let self else { return }; await self.runSyncs() }
+        syncTask = task
+        await task.value
+    }
+
+    /// Syncs until no sync was asked for meanwhile. When a settings change cancelled it, the one
+    /// asked for meanwhile follows in a new task, with the new settings.
+    private func runSyncs() async {
         repeat {
             syncRequestedWhileSyncing = false
             await performSync()
-        } while syncRequestedWhileSyncing && settings.enabled
+        } while syncRequestedWhileSyncing && settings.enabled && !Task.isCancelled
+        syncTask = nil
+        if syncRequestedWhileSyncing {
+            syncRequestedWhileSyncing = false
+            Task { [weak self] in await self?.sync() }
+        }
     }
 
     // MARK: - Private
@@ -219,6 +232,7 @@ public final class SyncController {
         periodicTask?.cancel()
         periodicTask = nil
         debounceTask?.cancel()
+        syncTask?.cancel()
         guard settings.enabled else { status = .disabled; return }
         status = .idle(lastSync: lastSync)
         guard started else { return }
@@ -254,6 +268,7 @@ public final class SyncController {
                 passwordCommandError = nil
             } catch is CancellationError {
                 passwordCommandAttempted = false
+                if self.settings == settings { status = .idle(lastSync: lastSync) }
                 return
             } catch {
                 passwordCommandError = await Self.passwordCommandMessage(command, error)
@@ -303,10 +318,10 @@ public final class SyncController {
             if !result.isIdle { warning = result.warnings.isEmpty ? nil : result.warnings.joined(separator: "\n") }
             lastSync = Date()
             status = .idle(lastSync: lastSync)
-        } catch is CancellationError {
-            status = .idle(lastSync: lastSync)
         } catch {
-            status = .error(Self.message(for: error))
+            // A settings change cancelled this sync (`restartLoop`); the next one follows with them.
+            guard self.settings == settings else { return }
+            status = error is CancellationError || Task.isCancelled ? .idle(lastSync: lastSync) : .error(Self.message(for: error))
         }
     }
 

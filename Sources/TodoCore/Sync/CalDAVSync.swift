@@ -469,6 +469,8 @@ private struct Pass {
                     do {
                         try await server.share(path, with: user)
                         writes += 1
+                    } catch let e as CancellationError {
+                        throw e
                     } catch {
                         warnings.append("Could not share “\(p.name)” with \(user): \(SyncController.message(for: error))")
                     }

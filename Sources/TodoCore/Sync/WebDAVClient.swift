@@ -285,6 +285,10 @@ public final class WebDAVClient: @unchecked Sendable {
             #endif
         } catch let e as SyncError {
             throw e
+        } catch let e as CancellationError {
+            throw e
+        } catch let e as URLError where e.code == .cancelled && Task.isCancelled {
+            throw CancellationError()
         } catch let e as URLError {
             throw SyncError.network(Self.message(for: e))
         } catch {
