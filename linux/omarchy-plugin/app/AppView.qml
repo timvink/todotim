@@ -76,6 +76,7 @@ FocusScope {
       case "project": return projectDialog
       case "settings": return settings
       case "shortcuts": return shortcuts
+      case "projects": return projectPicker
     }
     return null
   }
@@ -474,7 +475,7 @@ FocusScope {
     }
   }
 
-  // The key after `g`, from the list or (with `detailTask`) the task view, which has only `g x`.
+  // The key after `g`, from the list or (with `detailTask`) the task view, which has only `g x` and `g p`.
   // Every key ends the chord and none falls through: `g x` never completes a task, `g Esc` only
   // cancels. Returns false when the key is not consumed: a lone modifier (the chord keeps waiting)
   // or a Ctrl/Alt shortcut (it ends the chord and works as usual).
@@ -487,6 +488,8 @@ FocusScope {
     if (t === "x") {
       if (detailTask) openTaskLink(detailTask.content, detailTask.description)
       else if (selectedId) openSelectedLink()
+    } else if (t === "p") {
+      openOverlay("projects")
     } else if (!detailTask) {
       if (t === "g") jumpEdge(false)
       else if (t === "i") goProject("inbox")
@@ -681,6 +684,43 @@ FocusScope {
     openOverlay("priority")
   }
 
+  // g p: every project, the Inbox first; picking one closes the task view and goes there.
+  function projectItems() {
+    var s = service ? service.sidebar : null
+    var items = [{ key: "inbox", text: s && s.inbox ? s.inbox.name : "Inbox", icon: Icons.inbox, color: theme.dim,
+                   hint: s && s.inbox && s.inbox.count > 0 ? String(s.inbox.count) : "" }]
+    var projects = s ? s.projects : []
+    for (var i = 0; i < projects.length; i++)
+      items.push({ key: projects[i].id, text: projects[i].name, dot: true, color: theme.projectColor(projects[i].color),
+                   hint: projects[i].count > 0 ? String(projects[i].count) : "" })
+    return items
+  }
+
+  function pickProject(id) {
+    closeOverlay("projects")
+    if (isOpen("detail")) detail.close()
+    goProject(id)
+  }
+
+  // ---- Copy
+
+  // Ctrl+A: every task of the list.
+  function selectAll() {
+    var ids = []
+    for (var i = 0; i < rows.length; i++) if (rows[i].type === "task") ids.push(rows[i].id)
+    if (ids.length === 0) return
+    setSelection(ids[ids.length - 1], ids[0], ids)
+  }
+
+  // y, Ctrl+C: the titles of `ids`, one per line in list order.
+  function copyTitles(ids) {
+    var titles = ids.slice().sort(function(a, b) { return indexOfId(a) - indexOfId(b) })
+                    .map(taskTitle).filter(function(t) { return t !== "" })
+    if (titles.length === 0) return
+    Quickshell.clipboardText = titles.join("\n")
+    toast.show(titles.length === 1 ? "Copied \u201c" + titles[0] + "\u201d" : "Copied " + titles.length + " tasks", false)
+  }
+
   // ---- Project and label menu
 
   function openViewMenu() {
@@ -775,7 +815,9 @@ FocusScope {
     var ctrl = event.modifiers & Qt.ControlModifier
     if (chord !== "" && finishChord(event, null)) { event.accepted = true; return }
     if (ctrl) {
-      if (event.key === Qt.Key_BracketRight) indent()
+      if (event.key === Qt.Key_A) selectAll()
+      else if (event.key === Qt.Key_C && !(event.modifiers & Qt.ShiftModifier)) copyTitles(selectedIds())
+      else if (event.key === Qt.Key_BracketRight) indent()
       else if (event.key === Qt.Key_BracketLeft) outdent()
       else if (event.key === Qt.Key_Up || event.key === Qt.Key_K) shift(-1)
       else if (event.key === Qt.Key_Down || event.key === Qt.Key_J) shift(1)
@@ -821,6 +863,7 @@ FocusScope {
           case "t": openDatePicker(selectedId); break
           case "@": openLabelPicker(selectedId); break
           case "m": case "v": openMoveDialog(selectedIds()); break
+          case "y": copyTitles(selectedIds()); break
           case "a": addTaskOrSubtask(); break
           case "A": addInSection(true); break
           case "q": openQuickAdd(defaultContext()); break
@@ -1076,6 +1119,17 @@ FocusScope {
   }
 
   MovePicker { id: movePicker; theme: app.theme; app: app }
+
+  ListPicker {
+    id: projectPicker
+    name: "projects"
+    theme: app.theme
+    app: app
+    title: "Go to project"
+    placeholder: "Type a project name"
+    items: app.projectItems()
+    onPicked: function(item) { app.pickProject(item.key) }
+  }
 
   ListPicker {
     id: priorityPicker

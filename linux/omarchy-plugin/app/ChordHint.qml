@@ -6,14 +6,15 @@ Rectangle {
   id: root
   property var theme
   property var app
-  // In the task view only `g x` exists.
+  // In the task view only `g x` and `g p` exist.
   property bool inDetail: false
 
   readonly property var items: {
     var x = { key: "x", text: "Open link", enabled: app.chordHasLink }
-    if (inDetail) return [x]
+    var p = { key: "p", text: "Go to project", enabled: true }
+    if (inDetail) return [x, p]
     return [{ key: "g", text: "First task in section", enabled: true }, { key: "i", text: "Inbox", enabled: true },
-            { key: "s", text: "Search", enabled: true }, x]
+            p, { key: "s", text: "Search", enabled: true }, x]
   }
 
   visible: app.chordHint

@@ -87,6 +87,9 @@ Modal {
     else if (t === "m" || t === "v") app.openMoveDialog([taskId])
     else if (t === "d") notes.forceActiveFocus()
     else if (t === "a") addSubtask()
+    else if (t === "q" && !ctrl) { save(); app.openQuickAdd(app.defaultContext()) }
+    else if (t === "?") app.openOverlay("shortcuts")
+    else if (t === "y" || (ctrl && event.key === Qt.Key_C && !(event.modifiers & Qt.ShiftModifier))) app.copyTitles([taskId])
     else if (t === "u" && !ctrl) app.undoFromToast()
     else if (t === "g" && !ctrl) app.beginChord()
     else if (event.key === Qt.Key_Delete || (ctrl && event.key === Qt.Key_Backspace)) app.confirmDelete(taskId)
@@ -370,7 +373,7 @@ Modal {
       anchors.verticalCenter: parent.verticalCenter
       width: parent.width - deleteButton.width - doneButton.width - root.theme.space(24)
       elide: Text.ElideRight
-      text: "Enter edit · a sub-task · e complete · j/k next/previous · Esc close"
+      text: "Enter edit · a sub-task · e complete · j/k next · ? keys · Esc close"
       font.family: root.theme.font
       font.pixelSize: root.theme.small
       color: root.theme.faint
