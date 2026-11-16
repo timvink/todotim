@@ -234,6 +234,12 @@ private struct SelectionScroller: View {
                     }
                 }
             }
+            // The selected row presents the `t` / `@` popover: it must be built, so on screen.
+            .onChange(of: model.popover) { _, popover in
+                guard popover != nil, model.detailTaskID == nil, let id = model.selectedTaskID,
+                      !visible.ids.contains(id) else { return }
+                proxy.scrollTo(id)
+            }
             // The inline editor (`a`, "Add task", a new subtask) opens without a selection, and
             // each added task pushes it one row down: keep it on screen as it opens and moves.
             .onChange(of: items.firstIndex { $0.id == Self.editorID }) { _, index in
@@ -399,7 +405,8 @@ struct SectionHeaderView: View {
                         .focused($nameFocused)
                         .onSubmit(commitRename)
                         .onExitCommand { model.renamingSectionID = nil }
-                        .onAppear { name = section.name; nameFocused = true }
+                        .onAppear { name = model.sectionRenameDraft ?? section.name; nameFocused = true }
+                        .onChange(of: name) { model.sectionRenameDraft = name }
                     Button("Save", action: commitRename).buttonStyle(AccentButtonStyle()).padding(.leading, 8)
                     Button("Cancel") { model.renamingSectionID = nil }.buttonStyle(SoftButtonStyle()).padding(.leading, 6)
                 } else {
@@ -503,7 +510,8 @@ struct AddSectionGap: View {
             }
             .padding(.leading, Theme.gutter)
             .padding(.vertical, 12)
-            .onAppear { name = ""; focused = true }
+            .onAppear { name = model.sectionEditorDraft; focused = true }
+            .onChange(of: name) { model.sectionEditorDraft = name }
         } else {
             Button {
                 model.sectionEditor = SectionEditorTarget(projectId: projectId, index: index)

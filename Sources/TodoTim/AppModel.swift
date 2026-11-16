@@ -50,6 +50,7 @@ final class AppModel {
             selectedTaskID = nil
             editor = nil
             sectionEditor = nil
+            renamingSectionID = nil
             popover = nil
         }
     }
@@ -130,8 +131,16 @@ final class AppModel {
     /// Draft of the inline "Add task" editor. Kept here, not in view state, because the editor
     /// row lives in a lazy list and may be destroyed while scrolled out of view.
     @ObservationIgnored let editorDraft = InlineEditorDraft()
-    var sectionEditor: SectionEditorTarget?
-    var renamingSectionID: EntityID?
+    var sectionEditor: SectionEditorTarget? {
+        didSet { if sectionEditor != oldValue { sectionEditorDraft = "" } }
+    }
+    var renamingSectionID: EntityID? {
+        didSet { if renamingSectionID != oldValue { sectionRenameDraft = nil } }
+    }
+    /// Text typed in the section editor and the section rename field. Kept here because their
+    /// rows live in a lazy list and lose view state while scrolled out of view.
+    @ObservationIgnored var sectionEditorDraft = ""
+    @ObservationIgnored var sectionRenameDraft: String?
     var popover: TaskPopover?
     var toast: ToastInfo?
     /// Shown once at launch when the local database or the config file could not be loaded.
@@ -453,9 +462,42 @@ final class AppModel {
         sectionEditor = SectionEditorTarget(projectId: pid, index: nil)
     }
 
+    /// `t` / `@` in the list: the selected task's row presents the popover (the list scrolls it
+    /// into view first, see `SelectionScroller`).
     func showPopover(_ kind: TaskPopover) {
-        guard let id = selectedTaskID, store.task(id) != nil else { return }
+        guard let id = selectedTaskID, store.task(id) != nil, cachedDisplay().position[id] != nil else { return }
         popover = kind
+    }
+
+    /// Whether a view presents `popover`: the open task's sheet, else the selected task's row,
+    /// which must be in the list.
+    var popoverHasPresenter: Bool {
+        if let id = detailTaskID { return store.task(id) != nil }
+        guard let id = selectedTaskID, store.task(id) != nil else { return false }
+        return cachedDisplay().position[id] != nil
+    }
+
+    /// Drops UI state that points at something deleted or gone from the list (a sync, an edit
+    /// elsewhere): the list's project, the selection, the open task, the editors, and a popover
+    /// whose row left the list. Called whenever the store's structure or names change.
+    func dropStaleState() {
+        if case .project(let pid) = sidebar, store.project(pid) == nil { goToInbox() }
+        if let id = detailTaskID, store.task(id) == nil { detailTaskID = nil }
+        if let id = confirmDeleteTaskID, store.task(id) == nil { confirmDeleteTaskID = nil }
+        if let id = selectedTaskID, store.task(id) == nil {
+            selectedTaskID = nil
+        } else if multiSelection.contains(where: { store.task($0) == nil }) {
+            setSelection(cursor: selectedTaskID, anchor: selectionAnchor, multi: multiSelection.filter { store.task($0) != nil })
+        }
+        if let e = editor, !areaExists(projectId: e.projectId, sectionId: e.sectionId)
+            || e.parentId.map({ store.task($0) == nil }) == true {
+            editor = nil
+        }
+        if let e = sectionEditor, store.project(e.projectId) == nil { sectionEditor = nil }
+        if let sid = renamingSectionID, !(currentProjectID.map { store.sections(in: $0).contains { $0.id == sid } } ?? false) {
+            renamingSectionID = nil
+        }
+        if popover != nil, !popoverHasPresenter { popover = nil }
     }
 
     // MARK: - Task actions
@@ -546,8 +588,10 @@ final class AppModel {
     /// Completes open tasks as one undo step, with one toast. The selection moves past tasks that
     /// leave the list; undo brings the tasks back and selects again what was selected.
     private func completeTasks(_ ids: [EntityID]) {
-        // A sub-task whose parent is in the list is completed with the parent.
-        let covered = Set(ids.flatMap { store.descendantIDs(of: $0) })
+        // A sub-task whose parent is in the list is completed with the parent, unless the parent
+        // repeats: that only moves to its next date.
+        let covered = Set(ids.filter { store.task($0).map { !isRepeating($0) } ?? false }
+            .flatMap { store.descendantIDs(of: $0) })
         let roots = ids.filter { !covered.contains($0) && store.task($0)?.isCompleted == false }
         guard !roots.isEmpty else { return }
         let before = (sidebar: sidebar, cursor: selectedTaskID, anchor: selectionAnchor, multi: multiSelection)
@@ -567,13 +611,13 @@ final class AppModel {
                 self.setSelection(cursor: before.cursor, anchor: before.anchor, multi: before.multi)
             }
         }
-        registerUndo(roots.count == 1 ? "Complete Task" : "Complete Tasks", restore)
         let count = completions.reduce(0) { $0 + $1.count }
-        if completions.count == 1, let next = completions[0].nextDue {
-            showToast("Next due \(next)", undo: restore)
+        let message = if completions.count == 1, let next = completions[0].nextDue {
+            "Next due \(next)"
         } else {
-            showToast(count == 1 ? "1 task completed" : "\(count) tasks completed", undo: restore)
+            count == 1 ? "1 task completed" : "\(count) tasks completed"
         }
+        offerUndo(roots.count == 1 ? "Complete Task" : "Complete Tasks", message: message, restore)
     }
 
     func requestDelete(_ id: EntityID? = nil) {
@@ -582,18 +626,13 @@ final class AppModel {
     }
 
     func deleteTask(_ id: EntityID) {
+        guard store.task(id) != nil else { return }
         let affected = [id] + store.descendantIDs(of: id)
         if selectedTaskID == id { selectedTaskID = neighbor(of: id) }
         if detailTaskID == id { detailTaskID = nil }
         store.deleteTask(id)
-        let restore: () -> Void = { [weak self] in
-            guard let self else { return }
-            self.store.performBatch {
-                for tid in affected { self.store.updateTask(tid) { $0.deleted = false } }
-            }
-        }
-        registerUndo("Delete Task", restore)
-        showToast("1 task deleted", undo: restore)
+        let restore: () -> Void = { [weak self] in self?.store.restoreTasks(affected) }
+        offerUndo("Delete Task", message: "1 task deleted", restore)
     }
 
     // Structural moves animate, so the row glides to its new place.
@@ -710,8 +749,7 @@ final class AppModel {
                 self.setSelection(cursor: before.cursor, anchor: before.anchor, multi: before.multi)
             }
         }
-        registerUndo(moved.count == 1 ? "Move Task" : "Move Tasks", restore)
-        showToast(Self.moveMessage(count: moved.count, target: target), undo: restore)
+        offerUndo(moved.count == 1 ? "Move Task" : "Move Tasks", message: Self.moveMessage(count: moved.count, target: target), restore)
     }
 
     /// "Moved to Work / Meetings", "Made a sub-task of “Write report”", "3 tasks moved to Home".
@@ -746,21 +784,24 @@ final class AppModel {
             switch target {
             case .before(let anchor), .after(let anchor):
                 guard let a = store.task(anchor), !drag.excluded.contains(anchor) else { return false }
-                let sibs = a.parentId.map { store.subtaskIDs(of: $0) }
-                    ?? store.taskIDs(projectId: a.projectId, sectionId: a.sectionId)
-                let others = sibs.filter { $0 != id }
-                var index = others.firstIndex(of: anchor)
-                if case .after = target { index = index.map { $0 + 1 } }
-                store.moveTask(id, projectId: a.projectId, sectionId: a.sectionId, parentId: a.parentId, at: index)
+                // Counted among all siblings, so a drop next to a shown completed task lands there.
+                let sibs = a.parentId.map { store.subtaskIDs(of: $0, includeCompleted: true) }
+                    ?? store.taskIDs(projectId: a.projectId, sectionId: a.sectionId, includeCompleted: true)
+                guard var index = sibs.filter({ $0 != id }).firstIndex(of: anchor) else { return false }
+                if case .after = target { index += 1 }
+                store.moveTask(id, projectId: a.projectId, sectionId: a.sectionId, parentId: a.parentId, at: index,
+                               countingCompleted: true)
             case .firstChild(let parent):
                 guard let p = store.task(parent), !drag.excluded.contains(parent) else { return false }
                 store.moveTask(id, projectId: p.projectId, sectionId: p.sectionId, parentId: parent, at: 0)
                 // Show where the task went.
                 if p.collapsed { store.updateTask(parent) { $0.collapsed = false } }
-            case .sectionStart(let pid, let sid):
-                store.moveTask(id, projectId: pid, sectionId: sid, parentId: nil, at: 0)
-            case .sectionEnd(let pid, let sid):
-                store.moveTask(id, projectId: pid, sectionId: sid, parentId: nil)
+            case .sectionStart(let pid, let sid), .sectionEnd(let pid, let sid):
+                // A sync may have deleted the section during the drag.
+                guard areaExists(projectId: pid, sectionId: sid) else { return false }
+                var start = false
+                if case .sectionStart = target { start = true }
+                store.moveTask(id, projectId: pid, sectionId: sid, parentId: nil, at: start ? 0 : nil)
             }
             return true
         }
@@ -770,6 +811,7 @@ final class AppModel {
     func drop(_ ids: [String], projectId: EntityID, sectionId: EntityID?) -> Bool {
         var moved = false
         defer { drag.end() }
+        guard areaExists(projectId: projectId, sectionId: sectionId) else { return false }
         for id in ids where store.task(id) != nil {
             store.moveTask(id, projectId: projectId, sectionId: sectionId, parentId: nil)
             moved = true
@@ -778,6 +820,11 @@ final class AppModel {
             showToast("Task moved to \(name)", undo: nil)
         }
         return moved
+    }
+
+    /// Whether the project, and the section when there is one, is live.
+    private func areaExists(projectId: EntityID, sectionId: EntityID?) -> Bool {
+        store.project(projectId) != nil && (sectionId.map { sid in store.sections(in: projectId).contains { $0.id == sid } } ?? true)
     }
 
     private func neighbor(of id: EntityID) -> EntityID? { neighbor(skipping: [id]) }
@@ -796,15 +843,27 @@ final class AppModel {
 
     // MARK: - Undo / toast
 
-    private func registerUndo(_ name: String, _ restore: @escaping () -> Void) {
-        guard let um = mainWindow?.undoManager ?? undoManager else { return }
-        um.registerUndo(withTarget: self) { model in
-            MainActor.assumeIsolated {
-                restore()
-                model.toast = nil
-            }
+    /// Registers `restore` as the undo step `name` (⌘Z) and shows `message` in a toast with Undo.
+    /// The restore runs at most once: whichever of the two comes first takes it, and the other
+    /// does nothing.
+    private func offerUndo(_ name: String, message: String, _ restore: @escaping () -> Void) {
+        var done = false
+        let once = {
+            guard !done else { return }
+            done = true
+            restore()
         }
-        um.setActionName(name)
+        if let um = mainWindow?.undoManager ?? undoManager {
+            um.registerUndo(withTarget: self) { model in
+                MainActor.assumeIsolated {
+                    guard !done else { return }
+                    once()
+                    model.toast = nil
+                }
+            }
+            um.setActionName(name)
+        }
+        showToast(message, undo: once)
     }
 
     /// The toast's Undo (its button, or `u` while it shows). Returns false when there is none.

@@ -85,6 +85,8 @@ final class KeyRouter {
         if !event.modifierFlags.intersection([.command, .control, .option]).isEmpty { return false }
         let isEscape = event.keyCode == Key.escape
 
+        // A popover whose task row left the list is never shown: drop it, or it takes every key.
+        if model.popover != nil, !model.popoverHasPresenter { model.popover = nil }
         // A picker popover (t / @ / v) is open but the main window got the key: the popover is
         // not key. Hand the key to the popover's field, never to the list (`e` completes).
         if model.popover != nil {
@@ -169,7 +171,7 @@ final class KeyRouter {
         case "A": model.addTaskInCurrentSection(atTop: true)
         case "e", "x": model.completeSelection()
         case "1", "2", "3", "4":
-            guard let id = model.selectedTaskID else { return false }
+            guard let id = model.selectedTaskID, model.store.task(id) != nil else { return false }
             model.setPriority(Priority(rawValue: Int(chars)!)!, for: id)
         case "t": model.showPopover(.date)
         case "@": model.showPopover(.labels)
