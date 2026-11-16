@@ -31,9 +31,11 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -75,7 +77,12 @@ fun TaskDetailSheet(
     onOpenTask: (EntityID) -> Unit,
     onDismiss: () -> Unit,
 ) {
-    val task = snapshot.task(taskId) ?: return
+    val task = snapshot.task(taskId)
+    if (task == null) {
+        // Deleted (here, by a sync or by undo): close, so the sheet does not come back with the task.
+        LaunchedEffect(taskId) { onDismiss() }
+        return
+    }
     ModalBottomSheet(onDismissRequest = onDismiss, sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)) {
         Column(Modifier.verticalScroll(rememberScrollState()).padding(bottom = 24.dp)) {
             LocationRow(task, snapshot, store, onOpenTask)
@@ -277,8 +284,8 @@ private fun Subtasks(
     onOpenTask: (EntityID) -> Unit,
 ) {
     val children = snapshot.subtasks(task.id, includeCompleted = true)
-    var adding by remember(task.id) { mutableStateOf(false) }
-    var newTitle by remember(task.id) { mutableStateOf("") }
+    var adding by rememberSaveable(task.id) { mutableStateOf(false) }
+    var newTitle by rememberSaveable(task.id) { mutableStateOf("") }
     Text(
         if (children.isEmpty()) "Sub-tasks" else "Sub-tasks ${children.count { it.isCompleted }}/${children.size}",
         fontWeight = FontWeight.Bold, fontSize = 15.sp,
