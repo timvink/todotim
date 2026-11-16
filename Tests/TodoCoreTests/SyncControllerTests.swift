@@ -411,6 +411,37 @@ final class SyncControllerDiscoveryTests: XCTestCase {
         try await waitUntil { (try? self.savedState())?.home == new.calendarHome }
     }
 
+    /// The home answers 404 for a while, and discovery during the outage falls back to a home that
+    /// fails too: the state of the real home is kept, so when it is back, a task deleted there in
+    /// the meantime is deleted here (a merge without the base would upload it again).
+    func testFailedRediscoveryKeepsTheState() async throws {
+        let real = FakeCalDAVServer(layout: .radicale()), fallback = FakeCalDAVServer()
+        await fallback.setHomeGone(true)
+        let store = TodoStore()
+        let kept = store.addTask(content: "kept", projectId: TodoStore.inboxID)
+        let deleted = store.addTask(content: "deleted elsewhere", projectId: TodoStore.inboxID)
+        let c = makeController(store) { _, _, cached in
+            if cached == nil { return await real.homeGone ? await fallback.connect(cached: nil) : await real.connect(cached: nil) }
+            return cached == real.calendarHome ? real : fallback
+        }
+        c.configure(settings, password: "pw")
+        try await waitUntil { c.lastSync != nil }
+
+        await real.setHomeGone(true)
+        await c.syncNow()
+        guard case .error = c.status else { return XCTFail("status \(c.status)") }
+
+        await real.remove("tim/todotim-inbox/\(deleted.id).ics")
+        await real.setHomeGone(false)
+        await c.syncNow()
+        XCTAssertEqual(c.status, .idle(lastSync: c.lastSync))
+        XCTAssertEqual(store.task(kept.id)?.deleted, false)
+        XCTAssertEqual(store.db.tasks[deleted.id]?.deleted ?? true, true)
+        let uploaded = await real.ics("tim/todotim-inbox/\(deleted.id).ics")
+        XCTAssertNil(uploaded, "not uploaded again")
+        try await waitUntil { (try? self.savedState())?.home == real.calendarHome }
+    }
+
     func testAnotherServerOrUserIsDiscoveredAgain() async throws {
         let remote = FakeCalDAVServer()
         let c = makeController(TodoStore()) { _, _, cached in await remote.connect(cached: cached) }

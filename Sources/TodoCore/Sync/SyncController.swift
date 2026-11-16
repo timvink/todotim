@@ -340,19 +340,24 @@ public final class SyncController {
 
     /// `state` for syncing with the calendar home `home`, which it remembers (in memory at once,
     /// so a failed sync does not discover again). When the state's paths belong to another home,
-    /// a fresh state: a merge from scratch matches lists and tasks by id and deletes nothing.
+    /// a fresh state: a merge from scratch matches lists and tasks by id and deletes nothing. That
+    /// one replaces the current state only when a sync with it succeeds: a home that discovery
+    /// found during an outage (or its fallback, `calendars/<username>/`) may be wrong, and the
+    /// state of the real home must survive until it answers again.
     private func adopt(_ home: CalendarHome, in state: CalDAVState, settings: SyncSettings) -> CalDAVState {
         var adopted = state
+        adopted.home = home
         let previousHome = state.home?.url
             ?? (try? CalDAVClient.davRoot(settings.serverURL)).flatMap { CalDAVDiscovery.legacyHome(root: $0, username: settings.username) }
         let isEmpty = state.calendars.isEmpty && state.resources.isEmpty && state.synced.isEmpty
         if !isEmpty && previousHome != home.url {
             NSLog("TodoTim: the calendar home moved; syncing from scratch")
-            adopted = CalDAVState(account: state.account)
             lastSynced = nil
+            adopted = CalDAVState(account: state.account)
+            adopted.home = home
+        } else if self.state?.account == adopted.account {
+            self.state = adopted
         }
-        adopted.home = home
-        if self.state?.account == adopted.account { self.state = adopted }
         return adopted
     }
 
