@@ -282,6 +282,24 @@ class CalDAVSyncTest {
         assertEquals(0, store.snapshot.value.unsyncedCount)
     }
 
+    @Test fun anEditDuringThePullOfADeletedListIsKept() = runTest {
+        put(work, "a", "Report")
+        sync()
+        server.calendars.remove(work)
+        val editing = object : app.todotim.core.dav.CalDAVServer by server {
+            override suspend fun calendars() = server.calendars().also {
+                now += MINUTE
+                store.updateTask("a") { copy(content = "Report 2") }
+            }
+        }
+        CalDAVSync.sync(store, editing, now, utc)
+        val a = store.database.value.tasks.getValue("a")
+        assertEquals("Report 2", a.content)
+        assertEquals(INBOX_ID, a.projectId)
+        sync()
+        assertEquals("SUMMARY:Report 2", line(server.ics("$inbox/a.ics")!!, "SUMMARY"))
+    }
+
     @Test fun aTaskMovedAwayBeforeItsListWasDeletedFollowsTheMove() = runTest {
         put(work, "b", "Draft")
         sync()

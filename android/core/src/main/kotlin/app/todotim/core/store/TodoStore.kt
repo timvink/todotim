@@ -244,8 +244,13 @@ class TodoStore(
                     }
                 }
                 else -> {
-                    val merged = result.tasks[id] ?: continue // removed on the server: dropped
-                    tx.tasks[id] = TaskFields.rebase(now, before, merged)
+                    val merged = result.tasks[id]
+                    if (merged != null) {
+                        tx.tasks[id] = TaskFields.rebase(now, before, merged)
+                    } else if (before.projectId !in result.projects) {
+                        // Its list was deleted on the server: kept with the edit, as the pull keeps edited tasks.
+                        tx.tasks[id] = keepLocalOnly(now, tx.tasks.keys.filterTo(HashSet()) { it !in tx.shadows })
+                    } // else its object was removed on the server: dropped
                 }
             }
         }
