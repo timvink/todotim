@@ -346,7 +346,8 @@ private struct Pass {
             case let (nil, b?):
                 // Deleted on the server; with its list, only if it did not change here.
                 if var l {
-                    if !l.deleted && !(removedLists[l.projectId] != nil && l != b) { l.deleted = true; l.updatedAt = now }
+                    let withList = base.tasks[id].map { removedLists[$0.todo.task.projectId] != nil } ?? false
+                    if !l.deleted && !(withList && l != b) { l.deleted = true; l.updatedAt = now }
                     db.tasks[id] = l
                 }
             case (nil, nil):

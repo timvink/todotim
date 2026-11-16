@@ -183,6 +183,8 @@ final class CalDAVSyncTests: XCTestCase {
         let sec = a.store.addSection(projectId: p.id, name: "Part")
         let untouched = a.store.addTask(content: "untouched", projectId: p.id)
         let edited = a.store.addTask(content: "edited", projectId: p.id, sectionId: sec.id)
+        let other = a.store.addProject(name: "Other")
+        let movedOut = a.store.addTask(content: "moved out", projectId: p.id)
         try await a.sync(server)
         try await b.sync(server)
 
@@ -190,7 +192,14 @@ final class CalDAVSyncTests: XCTestCase {
         try await b.sync(server)
         a.store.updateTask(edited.id) { $0.content = "edited here" }
         let added = a.store.addTask(content: "added here", projectId: p.id)
+        a.store.moveTask(movedOut.id, projectId: other.id, sectionId: nil, parentId: nil)
         let r = try await a.sync(server)
+
+        // A task moved out of the list here stays where it was moved.
+        XCTAssertEqual(a.store.task(movedOut.id)?.deleted, false)
+        XCTAssertEqual(a.store.task(movedOut.id)?.projectId, other.id)
+        let movedStored = await server.ics("\(home)/\(other.id)/\(movedOut.id).ics")
+        XCTAssertNotNil(movedStored)
 
         XCTAssertEqual(a.store.db.projects[p.id]?.deleted ?? true, true)
         XCTAssertNil(a.store.task(untouched.id).flatMap { $0.deleted ? nil : $0 })
