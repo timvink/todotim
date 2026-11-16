@@ -37,6 +37,7 @@ struct ContentView: View {
         // Task view, Quick Add, the move dialog and the shortcuts list are panels inside the window, like Todoist.
         .overlay { ModalLayer().ignoresSafeArea() }
         .overlay(alignment: .bottomTrailing) { ChordHintView().padding(20).allowsHitTesting(false) }
+        .background(StaleStateObserver())
         .sheet(isPresented: $model.showAddProject) {
             ProjectFormView(project: nil).environment(model).environment(store)
         }
@@ -105,6 +106,19 @@ struct ContentView: View {
 
     private var emptyState: some View {
         Text("Select a project").font(Fonts.body).foregroundStyle(Theme.tertiaryText)
+    }
+}
+
+/// Calls `AppModel.dropStaleState` when the store changes. Its own view, so that only this empty
+/// body depends on every change.
+private struct StaleStateObserver: View {
+    @Environment(AppModel.self) private var model
+    @Environment(TodoStore.self) private var store
+
+    var body: some View {
+        Color.clear
+            .onChange(of: store.structureVersion) { model.dropStaleState() }
+            .onChange(of: store.nameVersion) { model.dropStaleState() }
     }
 }
 

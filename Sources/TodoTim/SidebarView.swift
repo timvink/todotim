@@ -120,8 +120,9 @@ struct SidebarView: View {
                 let name = labelName.trimmingCharacters(in: .whitespaces)
                 guard !name.isEmpty else { return }
                 let wasSelected = model.sidebar == .label(l.name)
-                store.updateLabel(l.id) { $0.name = name }
-                if wasSelected { model.sidebar = .label(name) }
+                // A name that matches another label merges into it.
+                let renamed = store.updateLabel(l.id) { $0.name = name }
+                if wasSelected, let renamed { model.sidebar = .label(renamed.name) }
             }
             Button("Cancel", role: .cancel) {}
         }

@@ -150,11 +150,12 @@ extension Engine {
             let name = r["name"]?.string?.trimmingCharacters(in: .whitespaces)
             let color = r["color"]?.string
             let oldName = store.labels.first { $0.id == lid }?.name
-            store.updateLabel(lid) { l in
+            // A name that matches another label merges into it.
+            let kept = store.updateLabel(lid) { l in
                 if let name, !name.isEmpty { l.name = name }
                 if let color { l.color = color }
             }
-            if case .label(let current) = view, current == oldName, let name, !name.isEmpty { view = .label(name) }
+            if case .label(let current) = view, current == oldName, let kept { view = .label(kept.name) }
             return .null
         case "deleteLabel":
             store.deleteLabel(try string(r, "id"))
@@ -350,12 +351,7 @@ extension Engine {
     func deleteTask(_ t: TodoTask) -> JSON {
         let affected = [t.id] + store.descendantIDs(of: t.id)
         store.deleteTask(t.id)
-        let restore: () -> Void = { [weak self] in
-            guard let self else { return }
-            self.store.performBatch {
-                for id in affected { self.store.updateTask(id) { $0.deleted = false } }
-            }
-        }
+        let restore: () -> Void = { [weak self] in self?.store.restoreTasks(affected) }
         return pushUndo(affected.count == 1 ? "1 task deleted" : "\(affected.count) tasks deleted", restore: restore, extra: [:])
     }
 

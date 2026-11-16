@@ -15,6 +15,8 @@ import TodoCore
 ///     shortcuts            open the shortcuts list
 ///     syncerror            open the sync error popover (as clicking "Sync failed" does)
 ///     popover date|labels
+///     completed            show or hide the current project's completed tasks
+///     undo                 ⌘Z (the window's undo manager)
 ///     move [TEXT]          open the move dialog for the action task (TEXT is typed into it when given)
 ///     drag I [panel]       start dragging visible task I (in the task panel's sub-task list)
 ///     target before|after|child I    set the drop target to visible task I
@@ -102,6 +104,11 @@ enum UITestHook {
         case "shortcuts": model.showShortcuts = true
         case "popover":
             model.popover = ["date": .date, "labels": .labels][arg]
+        case "completed":
+            if let pid = model.currentProjectID {
+                if model.showsCompleted(pid) { model.showCompletedProjects.remove(pid) } else { model.showCompletedProjects.insert(pid) }
+            }
+        case "undo": (model.mainWindow?.undoManager ?? model.undoManager)?.undo()
         case "drag":
             if let id = visible(Int(arg) ?? 0) { model.beginDrag(id, rowHeight: 50, inPanel: arg2 == "panel", trackMouse: false) }
         case "target":

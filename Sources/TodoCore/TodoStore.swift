@@ -231,7 +231,7 @@ public final class TodoStore {
 
     public func updateProject(_ id: EntityID, _ mutate: (inout Project) -> Void) {
         perform {
-            guard let old = storage.projects[id] else { return }
+            guard let old = storage.projects[id], !old.deleted else { return }
             var p = old
             mutate(&p)
             guard p != old else { return }
@@ -292,7 +292,7 @@ public final class TodoStore {
 
     public func updateSection(_ id: EntityID, _ mutate: (inout Section) -> Void) {
         perform {
-            guard let old = storage.sections[id] else { return }
+            guard let old = storage.sections[id], !old.deleted else { return }
             var s = old
             mutate(&s)
             guard s != old else { return }
@@ -304,7 +304,7 @@ public final class TodoStore {
     /// Deletes a section and all of its tasks.
     public func deleteSection(_ id: EntityID) {
         perform {
-            guard var s = storage.sections[id] else { return }
+            guard var s = storage.sections[id], !s.deleted else { return }
             let now = Self.timestamp()
             s.deleted = true
             s.updatedAt = now
@@ -319,7 +319,7 @@ public final class TodoStore {
 
     public func moveSection(_ id: EntityID, to index: Int) {
         perform {
-            guard let s = storage.sections[id] else { return }
+            guard let s = storage.sections[id], !s.deleted else { return }
             let others = liveSections(in: s.projectId).filter { $0.id != id }
             let order = insertionOrder(at: index, open: others.map(\.id), all: others.map { ($0.id, $0.order) },
                                        renumber: renumberSection)
@@ -342,29 +342,32 @@ public final class TodoStore {
                 sectionId = parent.sectionId
             }
             let order = taskInsertionOrder(at: index, projectId: projectId, sectionId: sectionId, parentId: parentId, excluding: nil)
+            let labels = ensureLabels(labels)
             let now = Self.timestamp()
             let t = TodoTask(projectId: projectId, sectionId: sectionId, parentId: parentId, content: content,
                              description: description, priority: priority, due: due, labels: labels, order: order,
                              createdAt: now, updatedAt: now)
             writeTask(t)
-            ensureLabels(labels)
             return t
         }
     }
 
-    /// Generic edit. Do not use it to change projectId/sectionId/parentId; use `moveTask`.
-    /// Does nothing (no `updatedAt` bump, no `onLocalChange`) when `mutate` changes nothing.
+    /// Generic edit. Do not use it to change projectId/sectionId/parentId; use `moveTask`, nor
+    /// `deleted`; use `deleteTask` and `restoreTasks`. Does nothing (no `updatedAt` bump, no
+    /// `onLocalChange`) when `mutate` changes nothing or the task is deleted.
     public func updateTask(_ id: EntityID, _ mutate: (inout TodoTask) -> Void) {
         perform {
-            guard let old = storage.tasks[id] else { return }
+            guard let old = liveTask(id) else { return }
             var t = old
             mutate(&t)
+            // Labels the task carries exist; new ones take an existing label's spelling.
+            let labels = ensureLabels(t.labels)
+            if t.labels != old.labels { t.labels = labels }
             guard t != old else { return }
             t.updatedAt = Self.timestamp()
             t.createdAt = Self.millisecondPrecision(t.createdAt)
             t.completedAt = t.completedAt.map(Self.millisecondPrecision)
             writeTask(t)
-            ensureLabels(t.labels)
         }
     }
 
@@ -374,7 +377,7 @@ public final class TodoStore {
     /// (`Recurrence.advance`).
     public func toggleComplete(_ id: EntityID, calendar: Calendar = .current) {
         perform {
-            guard let t = storage.tasks[id] else { return }
+            guard let t = liveTask(id) else { return }
             let now = Self.timestamp()
             if !t.isCompleted, let rule = t.recurrence,
                let next = Recurrence.advance(rule, from: t.due ?? DueDate(Date(), calendar: calendar), calendar: calendar) {
@@ -412,6 +415,7 @@ public final class TodoStore {
     /// Deletes a task and all its subtasks.
     public func deleteTask(_ id: EntityID) {
         perform {
+            guard liveTask(id) != nil else { return }
             let now = Self.timestamp()
             for did in [id] + descendants(of: id) {
                 guard var t = storage.tasks[did] else { continue }
@@ -422,19 +426,44 @@ public final class TodoStore {
         }
     }
 
-    /// Moves a task (with its subtasks) to a new location. `index` is among the open
-    /// siblings at the destination, excluding the task itself; nil = at the end.
-    public func moveTask(_ id: EntityID, projectId: EntityID, sectionId: EntityID?, parentId: EntityID?, at index: Int? = nil) {
+    /// Undeletes tasks (undo of `deleteTask`), in the given order: a parent before its subtasks.
+    /// A task stays deleted when its project, section or parent is deleted.
+    public func restoreTasks(_ ids: [EntityID]) {
         perform {
-            guard storage.tasks[id] != nil else { return }
+            let now = Self.timestamp()
+            for id in ids {
+                guard var t = storage.tasks[id], t.deleted, storage.projects[t.projectId]?.deleted == false,
+                      t.sectionId.map({ storage.sections[$0]?.deleted == false }) ?? true,
+                      t.parentId.map({ liveTask($0) != nil }) ?? true else { continue }
+                t.deleted = false
+                t.updatedAt = now
+                t.labels = ensureLabels(t.labels)
+                writeTask(t)
+            }
+        }
+    }
+
+    /// Moves a task (with its subtasks) to a new location. `index` is among the open
+    /// siblings at the destination (with `countingCompleted`, among all siblings: a drop next to
+    /// a completed task), excluding the task itself; nil = at the end.
+    /// Does nothing when the task or the destination (project, section, parent) is deleted.
+    public func moveTask(_ id: EntityID, projectId: EntityID, sectionId: EntityID?, parentId: EntityID?, at index: Int? = nil,
+                         countingCompleted: Bool = false) {
+        perform {
+            guard liveTask(id) != nil else { return }
             // Never make a task a descendant of itself.
             if let parentId, parentId == id || descendants(of: id).contains(parentId) { return }
             var projectId = projectId, sectionId = sectionId
-            if let parentId, let parent = storage.tasks[parentId] {
+            if let parentId {
+                guard let parent = liveTask(parentId) else { return }
                 projectId = parent.projectId
                 sectionId = parent.sectionId
             }
-            let order = taskInsertionOrder(at: index, projectId: projectId, sectionId: sectionId, parentId: parentId, excluding: id)
+            guard storage.projects[projectId]?.deleted == false,
+                  sectionId.map({ storage.sections[$0].map { !$0.deleted && $0.projectId == projectId } ?? false }) ?? true
+            else { return }
+            let order = taskInsertionOrder(at: index, projectId: projectId, sectionId: sectionId, parentId: parentId,
+                                           excluding: id, countingCompleted: countingCompleted)
             let now = Self.timestamp()
             guard var t = storage.tasks[id] else { return }
             t.projectId = projectId
@@ -502,29 +531,43 @@ public final class TodoStore {
         }
     }
 
-    /// Renaming a label also renames it on all tasks.
-    public func updateLabel(_ id: EntityID, _ mutate: (inout Label) -> Void) {
+    /// Renaming a label also renames it on all tasks. Renaming it to the name of another label
+    /// (ignoring case) merges it into that one: its tasks get the other label and it is deleted.
+    /// Returns the label the tasks now carry (nil when `id` is not a live label).
+    @discardableResult
+    public func updateLabel(_ id: EntityID, _ mutate: (inout Label) -> Void) -> Label? {
         perform {
-            guard let old = storage.labels[id] else { return }
+            guard let old = storage.labels[id], !old.deleted else { return nil }
             var l = old
             mutate(&l)
-            guard l != old else { return }
+            guard l != old else { return old }
             l.updatedAt = Self.timestamp()
+            let target = l.name == old.name ? nil
+                : liveLabels().first { $0.id != id && $0.name.caseInsensitiveCompare(l.name) == .orderedSame }
+            if target != nil {
+                l = old
+                l.deleted = true
+                l.updatedAt = Self.timestamp()
+            }
             writeLabel(l)
-            if l.name != old.name {
+            let newName = target?.name ?? l.name
+            if newName != old.name {
                 for var t in storage.tasks.values where t.labels.contains(old.name) {
-                    t.labels = t.labels.map { $0 == old.name ? l.name : $0 }
+                    var labels: [String] = []
+                    for n in t.labels.map({ $0 == old.name ? newName : $0 }) where !labels.contains(n) { labels.append(n) }
+                    t.labels = labels
                     t.updatedAt = l.updatedAt
                     writeTask(t)
                 }
             }
+            return target ?? l
         }
     }
 
     /// Deletes the label and removes it from all tasks.
     public func deleteLabel(_ id: EntityID) {
         perform {
-            guard var l = storage.labels[id] else { return }
+            guard var l = storage.labels[id], !l.deleted else { return }
             let now = Self.timestamp()
             l.deleted = true
             l.updatedAt = now
@@ -743,11 +786,19 @@ public final class TodoStore {
         return result
     }
 
-    private func ensureLabels(_ names: [String]) {
-        guard !names.isEmpty else { return }
-        for n in names where !liveLabels().contains(where: { $0.name == n }) {
-            writeLabel(Label(name: n, order: nextOrder(liveLabels().map(\.order)), updatedAt: Self.timestamp()))
+    /// A task's label names as the labels are spelled (matched ignoring case, like `addLabel`),
+    /// without duplicates. Labels that do not exist yet are created.
+    private func ensureLabels(_ names: [String]) -> [String] {
+        guard !names.isEmpty else { return names }
+        var result: [String] = []
+        for n in names {
+            let name = liveLabels().first { $0.name.caseInsensitiveCompare(n) == .orderedSame }?.name ?? {
+                writeLabel(Label(name: n, order: nextOrder(liveLabels().map(\.order)), updatedAt: Self.timestamp()))
+                return n
+            }()
+            if !result.contains(name) { result.append(name) }
         }
+        return result
     }
 
     /// The inbox has a fixed id so that two devices starting fresh do not create two inboxes.
@@ -808,10 +859,10 @@ public final class TodoStore {
     }
 
     private func taskInsertionOrder(at index: Int?, projectId: EntityID, sectionId: EntityID?, parentId: EntityID?,
-                                    excluding id: EntityID?) -> Double {
+                                    excluding id: EntityID?, countingCompleted: Bool = false) -> Double {
         let all = siblingIDs(projectId: projectId, sectionId: sectionId, parentId: parentId, includeCompleted: true)
             .filter { $0 != id }
-        let open = all.filter { storage.tasks[$0]?.isCompleted == false }
+        let open = countingCompleted ? all : all.filter { storage.tasks[$0]?.isCompleted == false }
         return insertionOrder(at: index ?? open.count, open: open, all: all.map { ($0, storage.tasks[$0]?.order ?? 0) }) { tid, order, now in
             guard var t = storage.tasks[tid] else { return }
             t.order = order

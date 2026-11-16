@@ -82,6 +82,7 @@ final class PersistenceTests: XCTestCase {
         let blocker = dir.appendingPathComponent("file")
         FileManager.default.createFile(atPath: blocker.path, contents: Data())
         let failed = expectation(description: "error")
+        failed.assertForOverFulfill = false  // the failed snapshot is retried, and fails again
         let writer = PersistenceWriter(url: blocker.appendingPathComponent("db.json"), delay: 0) { _ in failed.fulfill() }
         writer.save(sampleDB())
         XCTAssertFalse(writer.flush(), "flush reports that the database is not on disk")
@@ -89,6 +90,20 @@ final class PersistenceTests: XCTestCase {
         let good = PersistenceWriter(url: dir.appendingPathComponent("ok.json"), delay: 0)
         good.save(sampleDB())
         XCTAssertTrue(good.flush())
+    }
+
+    func testFailedSnapshotIsRetried() throws {
+        let parent = dir.appendingPathComponent("sub")
+        FileManager.default.createFile(atPath: parent.path, contents: Data())  // blocks the directory
+        let url = parent.appendingPathComponent("db.json")
+        let writer = PersistenceWriter(url: url, delay: 0) { _ in }
+        writer.save(sampleDB())
+        XCTAssertFalse(writer.flush())
+        XCTAssertFalse(writer.flush(), "still failing, still pending")
+        try FileManager.default.removeItem(at: parent)  // the disk recovers
+        XCTAssertTrue(writer.flush())
+        XCTAssertEqual(try LocalPersistence.loadChecked(from: url), sampleDB())
+        XCTAssertEqual(writer.writeCount, 1)
     }
 
     // MARK: - Date codec
