@@ -208,9 +208,27 @@ public enum PasswordCommand {
     static let killGrace: TimeInterval = 2
 
     public static func run(_ command: String, timeout: TimeInterval = 60) async throws -> String {
+        try await run(command, timeout: timeout, requireOutput: true)
+    }
+
+    /// Whether `command` exits 0, by the same rules (output ignored). For checks such as `rbw unlocked`.
+    public static func succeeds(_ command: String, timeout: TimeInterval = 10) async -> Bool {
+        (try? await run(command, timeout: timeout, requireOutput: false)) != nil
+    }
+
+    /// The executable `command` starts with (its first word, without a directory): to recognize a
+    /// password manager for a better error message.
+    public static func program(of command: String) -> String {
+        let first = command.split(whereSeparator: \.isWhitespace).first.map(String.init) ?? ""
+        return first.split(separator: "/").last.map(String.init) ?? first
+    }
+
+    static func run(_ command: String, timeout: TimeInterval, requireOutput: Bool) async throws -> String {
         let cancelled = CancelFlag()
         return try await withTaskCancellationHandler {
-            try await Task.detached { try runBlocking(command, timeout: timeout, cancelled: cancelled) }.value
+            try await Task.detached {
+                try runBlocking(command, timeout: timeout, requireOutput: requireOutput, cancelled: cancelled)
+            }.value
         } onCancel: {
             cancelled.set()
         }
@@ -224,7 +242,8 @@ public enum PasswordCommand {
     }
 
     #if os(macOS)
-    static func runBlocking(_ command: String, timeout: TimeInterval, cancelled: CancelFlag) throws -> String {
+    static func runBlocking(_ command: String, timeout: TimeInterval, requireOutput: Bool,
+                            cancelled: CancelFlag) throws -> String {
         let shell = ProcessInfo.processInfo.environment["SHELL"].flatMap { $0.isEmpty ? nil : $0 } ?? "/bin/zsh"
         var outPipe: [Int32] = [-1, -1], errPipe: [Int32] = [-1, -1]
         guard pipe(&outPipe) == 0 else { throw Failure(message: "password_command could not start") }
@@ -339,13 +358,14 @@ public enum PasswordCommand {
         guard code == 0 else { throw Failure(message: "password_command failed (exit \(code))") }
         let password = String(data: stdout, encoding: .utf8)?
             .components(separatedBy: .newlines).first?.trimmingCharacters(in: .whitespaces) ?? ""
-        guard !password.isEmpty else { throw Failure(message: "password_command printed nothing") }
+        guard !password.isEmpty || !requireOutput else { throw Failure(message: "password_command printed nothing") }
         return password
     }
     #else
     /// Linux: the same rules through `Subprocess` (the user's shell as a login shell, its own
     /// process group, stderr discarded, the first line of stdout).
-    static func runBlocking(_ command: String, timeout: TimeInterval, cancelled: CancelFlag) throws -> String {
+    static func runBlocking(_ command: String, timeout: TimeInterval, requireOutput: Bool,
+                            cancelled: CancelFlag) throws -> String {
         let shell = ProcessInfo.processInfo.environment["SHELL"].flatMap { $0.isEmpty ? nil : $0 } ?? "/bin/sh"
         let result: Subprocess.Result
         do {
@@ -362,7 +382,7 @@ public enum PasswordCommand {
         guard code == 0 else { throw Failure(message: "password_command failed (exit \(code))") }
         let password = String(data: result.stdout, encoding: .utf8)?
             .components(separatedBy: .newlines).first?.trimmingCharacters(in: .whitespaces) ?? ""
-        guard !password.isEmpty else { throw Failure(message: "password_command printed nothing") }
+        guard !password.isEmpty || !requireOutput else { throw Failure(message: "password_command printed nothing") }
         return password
     }
     #endif

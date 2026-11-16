@@ -98,6 +98,8 @@ final class AppModel {
     /// Whether menu task actions have a target (open sheet or selection). Cheap; does not read the store.
     var hasActionTask: Bool { detailTaskID != nil || hasSelection }
     var showQuickAdd = false
+    /// The popover with the reason a sync failed (click "Sync failed" in the sidebar).
+    var showSyncError = false
     var showShortcuts = false
     var showAddProject = false
     var showImportTodoist = false

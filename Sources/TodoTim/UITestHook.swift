@@ -13,6 +13,7 @@ import TodoCore
 ///     close                close every modal
 ///     quickadd TEXT        open Quick Add (TEXT is typed into it when given)
 ///     shortcuts            open the shortcuts list
+///     syncerror            open the sync error popover (as clicking "Sync failed" does)
 ///     popover date|labels
 ///     move [TEXT]          open the move dialog for the action task (TEXT is typed into it when given)
 ///     drag I [panel]       start dragging visible task I (in the task panel's sub-task list)
@@ -177,6 +178,8 @@ enum UITestHook {
                   let rep = view.bitmapImageRepForCachingDisplay(in: view.bounds) else { break }
             view.cacheDisplay(in: view.bounds, to: rep)
             try? rep.representation(using: .png, properties: [:])?.write(to: URL(fileURLWithPath: arg))
+        case "syncerror":
+            model.showSyncError = true
         case "sidebar":
             model.columnVisibility = arg == "hide" ? .detailOnly : .all
         case "hittest":

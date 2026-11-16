@@ -97,6 +97,8 @@ public final class SyncController {
     /// The password command runs at most once per launch (or per `configure` or `syncNow`), so a
     /// locked vault does not prompt again every sync interval.
     @ObservationIgnored private var passwordCommandAttempted = false
+    /// Why the last `password_command` run gave no password, for every sync until it runs again.
+    @ObservationIgnored private var passwordCommandError: String?
     /// Password kept in memory only: from `password_command` (which replaces the Keychain, whose
     /// access prompt returns with every update of an ad-hoc signed app), or one whose Keychain save
     /// failed. For the account it belongs to.
@@ -145,6 +147,7 @@ public final class SyncController {
     public func configure(_ settings: SyncSettings, password: String?) {
         let settings = managedConfigPath == nil ? settings : self.settings
         passwordCommandAttempted = false
+        passwordCommandError = nil
         if let password, let account = settings.credentialAccount { storePassword(password, for: account) }
         self.settings = settings
         if managedConfigPath == nil, let data = try? JSONEncoder().encode(settings) {
@@ -248,13 +251,17 @@ public final class SyncController {
             do {
                 password = try await PasswordCommand.run(command)
                 storePassword(password, for: account)
-            } catch {
-                status = .error(Self.message(for: error))
+                passwordCommandError = nil
+            } catch is CancellationError {
+                passwordCommandAttempted = false
                 return
+            } catch {
+                passwordCommandError = await Self.passwordCommandMessage(command, error)
             }
         }
         guard !password.isEmpty else {
-            status = .error(Self.message(for: SyncError.missingPassword))
+            // Later automatic syncs do not run the command again (Sync Now does): keep its reason.
+            status = .error(passwordCommandError ?? Self.message(for: SyncError.missingPassword))
             return
         }
         status = .syncing
@@ -421,6 +428,20 @@ public final class SyncController {
     private func apply(_ db: Database) {
         guard store.replaceDatabase(db) else { return }
         onDatabaseReplaced?()
+    }
+
+    /// A failed `password_command`, saying what to do. A locked rbw vault (rbw's agent locks after a
+    /// timeout or a restart, and the command cannot ask for the master password) is named as such.
+    nonisolated static func passwordCommandMessage(_ command: String, _ error: Error,
+                                                   rbwUnlocked: (() async -> Bool)? = nil) async -> String {
+        if PasswordCommand.program(of: command) == "rbw" {
+            let unlocked = await (rbwUnlocked ?? { await PasswordCommand.succeeds("rbw unlocked") })()
+            if !unlocked {
+                return "The rbw vault is locked, so password_command could not read the password. "
+                    + "Unlock it with rbw unlock in a terminal, then sync again."
+            }
+        }
+        return message(for: error) + ". Run the password_command from ~/.todotim.toml in a terminal to see why."
     }
 
     nonisolated static func message(for error: Error) -> String {

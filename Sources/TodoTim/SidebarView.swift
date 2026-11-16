@@ -470,19 +470,29 @@ struct SyncStatusView: View {
     private enum Phase: Equatable { case off, failed, syncing, pending, synced, notSynced }
 
     var body: some View {
+        @Bindable var model = model
         let phase = self.phase
         HStack(spacing: Sidebar.spacing) {
-            icon(phase)
-                .font(Fonts.icon)
-                .frame(width: Sidebar.iconWidth)
-                .transition(.opacity)
-                .id(phase)
-            Text(text(phase))
-                .font(Fonts.body)
-                .foregroundStyle(phase == .failed ? Theme.danger : Theme.secondaryText)
-                .lineLimit(1)
-                .truncationMode(.tail)
-                .contentTransition(.opacity)
+            Button { if phase == .failed { model.showSyncError = true } } label: {
+                HStack(spacing: Sidebar.spacing) {
+                    icon(phase)
+                        .font(Fonts.icon)
+                        .frame(width: Sidebar.iconWidth)
+                        .transition(.opacity)
+                        .id(phase)
+                    Text(text(phase))
+                        .font(Fonts.body)
+                        .foregroundStyle(phase == .failed ? Theme.danger : Theme.secondaryText)
+                        .lineLimit(1)
+                        .truncationMode(.tail)
+                        .contentTransition(.opacity)
+                }
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .pointerStyle(phase == .failed ? .link : nil)
+            .popover(isPresented: $model.showSyncError, arrowEdge: .top) { errorDetails }
+            .onChange(of: phase) { _, new in if new != .failed { model.showSyncError = false } }
             Spacer(minLength: 4)
             FooterButton(icon: "arrow.triangle.2.circlepath", help: "Sync now (⌘R)") { model.syncNow() }
                 .disabled(phase == .off)
@@ -495,6 +505,23 @@ struct SyncStatusView: View {
         .background(Theme.sidebar)
         .help(helpText(phase))
         .animation(Theme.reduceMotion ? nil : .easeOut(duration: 0.2), value: phase)
+    }
+
+    /// Why the sync failed and what to do, with Sync Now and Settings.
+    private var errorDetails: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            Text("Sync failed").font(Fonts.bodySemibold)
+            if case .error(let message) = sync.status {
+                Text(message).font(Fonts.body).textSelection(.enabled).fixedSize(horizontal: false, vertical: true)
+            }
+            HStack {
+                Button("Settings…") { model.showSyncError = false; openSettings() }
+                Spacer()
+                Button("Sync Now") { model.showSyncError = false; model.syncNow() }.keyboardShortcut(.defaultAction)
+            }
+        }
+        .padding(16)
+        .frame(width: 320)
     }
 
     private var phase: Phase {

@@ -195,7 +195,8 @@ The Mac app 0.10.0 and earlier, and the Omarchy app 0.2.0 and earlier, refuse a 
 stops them from reading it, sync settings included), so update both before you add it.
 
 `password_command` runs in your login shell, so tools from Homebrew (or your Linux `PATH`) are found. Leave it out to enter the
-password in Settings instead. TodoTim versions before CalDAV sync used `folder` and a
+password in Settings instead. When it fails, click **Sync failed** in the sidebar (in Omarchy it opens Settings) to see why; a locked
+rbw vault is named as such (unlock it with `rbw unlock`, then sync again). TodoTim versions before CalDAV sync used `folder` and a
 `.../remote.php/dav/files/USERNAME/` URL. TodoTim ignores `folder` now, and accepts that URL as the DAV root.
 
 ## Security

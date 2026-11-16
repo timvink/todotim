@@ -107,7 +107,33 @@ final class AppConfigTests: XCTestCase {
             XCTAssertTrue(error.localizedDescription.contains("timed out"))
         }
     }
+
+    func testPasswordCommandSucceeds() async {
+        let ok = await PasswordCommand.succeeds("true")
+        let failed = await PasswordCommand.succeeds("exit 1")
+        XCTAssertTrue(ok)
+        XCTAssertFalse(failed)
+    }
     #endif
+
+    func testPasswordCommandProgram() {
+        XCTAssertEqual(PasswordCommand.program(of: "rbw get 'Nextcloud app password'"), "rbw")
+        XCTAssertEqual(PasswordCommand.program(of: "  /opt/homebrew/bin/rbw get x"), "rbw")
+        XCTAssertEqual(PasswordCommand.program(of: "op read op://x"), "op")
+        XCTAssertEqual(PasswordCommand.program(of: ""), "")
+    }
+
+    func testPasswordCommandMessageNamesALockedRbwVault() async {
+        let failure = PasswordCommand.Failure(message: "password_command failed (exit 1)")
+        let locked = await SyncController.passwordCommandMessage("rbw get x", failure, rbwUnlocked: { false })
+        XCTAssertTrue(locked.contains("rbw vault is locked"), locked)
+        XCTAssertTrue(locked.contains("rbw unlock"), locked)
+        let unlocked = await SyncController.passwordCommandMessage("rbw get x", failure, rbwUnlocked: { true })
+        XCTAssertTrue(unlocked.hasPrefix("password_command failed (exit 1)."), unlocked)
+        XCTAssertTrue(unlocked.contains("in a terminal"), unlocked)
+        let other = await SyncController.passwordCommandMessage("pass show x", failure, rbwUnlocked: { XCTFail(); return false })
+        XCTAssertFalse(other.contains("rbw"), other)
+    }
 }
 
 #if os(macOS) || os(Linux)  // password_command runs the user's login shell
