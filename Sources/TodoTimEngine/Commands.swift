@@ -350,12 +350,7 @@ extension Engine {
     func deleteTask(_ t: TodoTask) -> JSON {
         let affected = [t.id] + store.descendantIDs(of: t.id)
         store.deleteTask(t.id)
-        let restore: () -> Void = { [weak self] in
-            guard let self else { return }
-            self.store.performBatch {
-                for id in affected { self.store.updateTask(id) { $0.deleted = false } }
-            }
-        }
+        let restore: () -> Void = { [weak self] in self?.store.restoreTasks(affected) }
         return pushUndo(affected.count == 1 ? "1 task deleted" : "\(affected.count) tasks deleted", restore: restore, extra: [:])
     }
 

@@ -143,6 +143,95 @@ final class TodoStoreTests: XCTestCase {
         XCTAssertEqual(store.task(t.id)?.labels, [])
     }
 
+    func testLabelsMatchIgnoringCase() {
+        store.addLabel(name: "Work")
+        let t = store.addTask(content: "x", projectId: inbox, labels: ["work", "WORK", "new"])
+        XCTAssertEqual(store.task(t.id)?.labels, ["Work", "new"], "takes the existing spelling, once")
+        store.updateTask(t.id) { $0.labels.append("NEW") }
+        XCTAssertEqual(store.task(t.id)?.labels, ["Work", "new"])
+        XCTAssertEqual(store.labels.map(\.name), ["Work", "new"])
+    }
+
+    func testRenamingLabelOntoAnotherMergesThem() {
+        let home = store.addLabel(name: "Home")
+        let work = store.addLabel(name: "Work")
+        let a = store.addTask(content: "a", projectId: inbox, labels: ["Home"])
+        let b = store.addTask(content: "b", projectId: inbox, labels: ["Home", "Work"])
+        let merged = store.updateLabel(home.id) { $0.name = "work" }
+        XCTAssertEqual(merged?.id, work.id)
+        XCTAssertEqual(store.labels.map(\.name), ["Work"])
+        XCTAssertEqual(store.task(a.id)?.labels, ["Work"])
+        XCTAssertEqual(store.task(b.id)?.labels, ["Work"])
+        // Deleting the remaining label leaves no duplicate behind.
+        store.deleteLabel(work.id)
+        XCTAssertEqual(store.task(b.id)?.labels, [])
+        XCTAssertNil(store.updateLabel(home.id) { $0.name = "back" }, "a deleted label stays deleted")
+    }
+
+    func testMutationsIgnoreDeletedEntities() {
+        let p = store.addProject(name: "P")
+        let s = store.addSection(projectId: p.id, name: "S")
+        let t = store.addTask(content: "t", projectId: inbox)
+        let other = store.addTask(content: "other", projectId: inbox)
+        store.deleteTask(t.id)
+        let before = store.db.tasks[t.id]
+        var changes = 0
+        store.onLocalChange = { changes += 1 }
+        store.updateTask(t.id) { $0.content = "edited" }
+        store.toggleComplete(t.id)
+        store.moveTask(t.id, projectId: p.id, sectionId: nil, parentId: nil)
+        store.deleteTask(t.id)
+        XCTAssertEqual(store.db.tasks[t.id], before)
+        XCTAssertEqual(changes, 0)
+
+        store.deleteSection(s.id)
+        let deletedSection = store.db.sections[s.id]
+        store.updateSection(s.id) { $0.name = "renamed" }
+        XCTAssertEqual(store.db.sections[s.id], deletedSection)
+        // No move into a deleted section, project or parent.
+        store.moveTask(other.id, projectId: p.id, sectionId: s.id, parentId: nil)
+        store.moveTask(other.id, projectId: p.id, sectionId: nil, parentId: t.id)
+        store.deleteProject(p.id)
+        store.moveTask(other.id, projectId: p.id, sectionId: nil, parentId: nil)
+        XCTAssertEqual(store.task(other.id)?.projectId, inbox)
+        XCTAssertNil(store.task(other.id)?.parentId)
+        XCTAssertNil(store.task(other.id)?.sectionId)
+    }
+
+    func testRestoreTasksSkipsDeletedPlaces() {
+        let p = store.addProject(name: "P")
+        let parent = store.addTask(content: "parent", projectId: inbox)
+        let child = store.addTask(content: "child", projectId: inbox, parentId: parent.id)
+        let inP = store.addTask(content: "in P", projectId: p.id)
+        store.deleteTask(parent.id)
+        store.restoreTasks([parent.id, child.id])
+        XCTAssertEqual(contents(store.subtasks(of: parent.id)), ["child"])
+        // A task whose project was deleted since stays deleted, and so does a sub-task of a
+        // deleted parent.
+        store.deleteTask(inP.id)
+        store.deleteProject(p.id)
+        store.deleteTask(parent.id)
+        store.restoreTasks([inP.id, child.id])
+        XCTAssertNil(store.task(inP.id))
+        XCTAssertNil(store.task(child.id))
+    }
+
+    func testMoveCountingCompletedSiblings() {
+        store.addTask(content: "a", projectId: inbox)
+        let done = store.addTask(content: "done", projectId: inbox)
+        store.addTask(content: "b", projectId: inbox)
+        let moved = store.addTask(content: "moved", projectId: inbox)
+        store.toggleComplete(done.id)
+        // Dropped right after the completed task (index 2 among a, done, b).
+        store.moveTask(moved.id, projectId: inbox, sectionId: nil, parentId: nil, at: 2, countingCompleted: true)
+        XCTAssertEqual(contents(store.tasks(projectId: inbox, sectionId: nil, includeCompleted: true)),
+                       ["a", "done", "moved", "b"])
+        // Right before it.
+        store.moveTask(moved.id, projectId: inbox, sectionId: nil, parentId: nil, at: 1, countingCompleted: true)
+        XCTAssertEqual(contents(store.tasks(projectId: inbox, sectionId: nil, includeCompleted: true)),
+                       ["a", "moved", "done", "b"])
+    }
+
     func testReplaceDatabaseKeepsInboxAndSkipsOnLocalChange() {
         var changes = 0
         store.onLocalChange = { changes += 1 }
