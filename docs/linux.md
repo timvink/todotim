@@ -136,7 +136,8 @@ On an Omarchy machine, symlink the plugin and point it at a local engine:
     mkdir -p linux/omarchy-plugin/bin && cp build/linux/x86_64/todotim-engine linux/omarchy-plugin/bin/
     omarchy-shell shell rescanPlugins && omarchy plugin enable timvink.todotim
 
-The shell reloads the plugin when its files change (`linux/omarchy-plugin/bin/` is gitignored).
+The shell notices when the plugin's files change, but the open panel and the running engine keep the old
+code; `omarchy-restart-shell` loads the new files (`linux/omarchy-plugin/bin/` is gitignored).
 
 ## Releases
 
