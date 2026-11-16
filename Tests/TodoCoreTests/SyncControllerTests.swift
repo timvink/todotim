@@ -225,7 +225,11 @@ final class SyncControllerTests: XCTestCase {
         let c = SyncController(store: TodoStore(), defaults: defaults, credentials: InMemoryCredentialStore(), config: nil,
                                configPath: "/nonexistent", stateURL: nil) { @MainActor s, _, cached in
             used.names.append(s.username)
-            if s.username == "tim" { try await Task.sleep(for: .seconds(30)) }
+            // "tim" waits until cancelled. Then, like a request, every connection fails when cancelled,
+            // after a moment in which the new settings' sync is asked for.
+            if s.username == "tim" { try? await Task.sleep(for: .seconds(30)) }
+            await Task.detached { try? await Task.sleep(for: .milliseconds(50)) }.value
+            try Task.checkCancellation()
             return await remote.connect(cached: cached)
         }
         c.syncInterval = .seconds(3600)
