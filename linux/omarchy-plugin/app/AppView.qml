@@ -526,7 +526,14 @@ FocusScope {
 
   function openQuickAdd(ctx) { openOverlay("quickAdd", ctx || defaultContext()) }
 
-  // a / A: Quick Add in the selected task's section.
+  // a: Quick Add for a sub-task of the selected task, else at the bottom of the section.
+  function addTaskOrSubtask() {
+    var r = rowOf(selectedId)
+    if (r && r.type === "task") openQuickAdd({ parentId: r.id, projectId: r.projectId })
+    else addInSection(false)
+  }
+
+  // A: Quick Add at the top or bottom of the selected task's section.
   function addInSection(atTop) {
     if (view.kind !== "project") return openQuickAdd({})
     var r = rowOf(selectedId)
@@ -538,7 +545,8 @@ FocusScope {
     var here = view.kind === "project" && view.id === result.projectId
     toast.show(here ? "Task added" : "Task added to " + result.projectName, false)
     if (here) {
-      pendingSelect = result.taskId
+      // A sub-task keeps its parent selected, so `a` again adds the next sub-task.
+      pendingSelect = result.parentId || result.taskId
       reconcileSelection()
     }
   }
@@ -813,7 +821,7 @@ FocusScope {
           case "t": openDatePicker(selectedId); break
           case "@": openLabelPicker(selectedId); break
           case "m": case "v": openMoveDialog(selectedIds()); break
-          case "a": addInSection(false); break
+          case "a": addTaskOrSubtask(); break
           case "A": addInSection(true); break
           case "q": openQuickAdd(defaultContext()); break
           case "s": addSection(); break

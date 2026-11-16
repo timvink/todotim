@@ -43,7 +43,8 @@ extension Engine {
                                   due: q.parsed.due, labels: q.parsed.labels)
             if let pid = q.parentId, store.task(pid)?.collapsed == true { store.updateTask(pid) { $0.collapsed = false } }
             if let sid = q.section?.id, collapsedSections.remove(sid) != nil { saveUIState() }
-            return ["taskId": .string(t.id), "projectId": .string(q.project.id), "projectName": .string(q.project.name)]
+            return ["taskId": .string(t.id), "parentId": .string(t.parentId), "projectId": .string(q.project.id),
+                    "projectName": .string(q.project.name)]
         case "getTask":
             return try taskDetail(try task(r))
         case "updateTask":

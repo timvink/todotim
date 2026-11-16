@@ -149,7 +149,7 @@ final class KeyRouter {
         case "}": model.jumpSection(1)
         case "{": model.jumpSection(-1)
         case "q": model.showQuickAdd = true
-        case "a": model.addTaskInCurrentSection(atTop: false)
+        case "a": model.addTaskOrSubtask()
         case "A": model.addTaskInCurrentSection(atTop: true)
         case "e", "x": model.completeSelection()
         case "1", "2", "3", "4":

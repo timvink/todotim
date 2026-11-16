@@ -32,7 +32,7 @@ struct AppCommands: Commands {
         }
 
         CommandMenu("Task") {
-            Button("Add Task at Bottom") { model.addTaskInCurrentSection(atTop: false) }
+            Button(model.hasSelection ? "Add Sub-task" : "Add Task at Bottom") { model.addTaskOrSubtask() }
                 .keyboardShortcut("a", modifiers: [])
             Button("Add Task at Top") { model.addTaskInCurrentSection(atTop: true) }
                 .keyboardShortcut("a", modifiers: .shift)
@@ -179,7 +179,7 @@ enum ShortcutCatalog {
             Item(keys: "Esc  (in search)", action: "Back to the list"),
         ]),
         ("Add", [
-            Item(keys: "A", action: "Add task at bottom of section"),
+            Item(keys: "A", action: "Add sub-task to the selected task, else task at bottom of section"),
             Item(keys: "⇧A", action: "Add task at top of section"),
             Item(keys: "S", action: "Add section"),
             Item(keys: "↩ (in editor)", action: "Add task, keep editor open"),

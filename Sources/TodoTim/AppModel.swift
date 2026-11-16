@@ -426,6 +426,11 @@ final class AppModel {
     // MARK: - Editing entry points
 
     /// Todoist `a` / `A`: open the inline editor in the section of the selected task.
+    /// `a`: a sub-task of the selected task; without a selection, a task at the bottom of the section.
+    func addTaskOrSubtask() {
+        if let id = selectedTaskID, store.task(id) != nil { addSubtask(to: id) } else { addTaskInCurrentSection(atTop: false) }
+    }
+
     func addTaskInCurrentSection(atTop: Bool) {
         guard let pid = currentProjectID else { showQuickAdd = true; return }
         var sectionId: EntityID?

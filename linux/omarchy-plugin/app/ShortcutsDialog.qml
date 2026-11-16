@@ -13,7 +13,7 @@ Modal {
       ["h / l, \u2190 / \u2192", "Hide / show sub-tasks"], ["g i", "Go to Inbox"], ["g s", "Search"], ["g (wait)", "Show what can follow g"], ["Ctrl+1 … 9", "Inbox, projects 1–8"],
       ["/", "Search"], ["Esc", "Step back; hides TodoTim at the top"] ] },
     { title: "Add", keys: [
-      ["q", "Quick Add"], ["Ctrl+Shift+N", "Add project"], ["a / A", "Add task at the bottom / top of the section"], ["s", "Add section"],
+      ["q", "Quick Add"], ["Ctrl+Shift+N", "Add project"], ["a", "Add a sub-task to the selected task, else a task at the bottom"], ["A", "Add task at the top of the section"], ["s", "Add section"],
       ["Enter", "Open task; in it, edit the title (d: notes, a: add sub-task)"] ] },
     { title: "Edit", keys: [
       ["x / e", "Complete or reopen the selected tasks"], ["g x", "Open the task's first link in the browser"], ["1 – 4", "Set priority"], ["t", "Set date"], ["@", "Labels"],

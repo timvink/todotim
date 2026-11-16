@@ -138,12 +138,14 @@ final class EngineTests: XCTestCase {
         let sub = try result("quickAdd", ["text": "Buy tulips", "projectId": .string(home), "parentId": parent["taskId"]!])
         let subTask = try result("getTask", ["id": sub["taskId"]!])
         XCTAssertEqual(subTask["parentId"], parent["taskId"])
+        XCTAssertEqual(sub["parentId"], parent["taskId"])
         XCTAssertEqual(subTask["sectionId"]?.string, garden)
         // Naming a project drops the context.
         let moved = try result("quickAdd", ["text": "Call mum #inbox", "projectId": .string(home), "parentId": parent["taskId"]!])
         let movedTask = try result("getTask", ["id": moved["taskId"]!])
         XCTAssertEqual(movedTask["projectId"], "inbox")
         XCTAssertEqual(movedTask["parentId"], .null)
+        XCTAssertEqual(moved["parentId"], .null)
         // Unknown names are reported.
         let preview = try result("parseQuickAdd", ["text": "x #Nowhere /Nothing"])
         XCTAssertEqual(preview["unknownProject"], "Nowhere")
