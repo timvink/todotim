@@ -541,5 +541,62 @@ final class SyncControllerConfigTests: XCTestCase {
         XCTAssertEqual(c.settings, managed)
         XCTAssertNil(defaults.data(forKey: SyncController.settingsKey))
     }
+
+    /// A password changed in the vault is picked up: the refused one is forgotten and the command
+    /// runs again, once per refusal (a wrong password does not run it on every sync).
+    func testRotatedPasswordFromPasswordCommandIsPickedUp() async throws {
+        let defaults = UserDefaults(suiteName: suite)!
+        defaults.removePersistentDomain(forName: suite)
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let dir = FileManager.default.temporaryDirectory.appendingPathComponent("todotim-pwcmd-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let pw = dir.appendingPathComponent("pw"), log = dir.appendingPathComponent("runs")
+        func setPassword(_ p: String) throws { try Data(p.utf8).write(to: pw) }
+        func runs() -> Int { ((try? String(contentsOf: log, encoding: .utf8)) ?? "").split(separator: "\n").count }
+        try setPassword("one")
+        let config = AppConfig(sync: SyncSettings(serverURL: "https://cloud.example.com/remote.php/dav/", username: "tim", enabled: true),
+                               passwordCommand: "echo run >> '\(log.path)'; cat '\(pw.path)'")
+        let server = AcceptedPassword()
+        server.password = "one"
+        let remote = FakeCalDAVServer()
+        let c = SyncController(store: TodoStore(), defaults: defaults, credentials: InMemoryCredentialStore(), config: config,
+                               configPath: "/tmp/test.toml", stateURL: nil) { @MainActor _, password, _ in
+            guard password == server.password else { throw SyncError.unauthorized }
+            return remote
+        }
+        c.syncInterval = .seconds(3600)
+        c.debounceInterval = .milliseconds(1)
+        await c.syncNow()
+        guard case .idle = c.status else { return XCTFail("status \(c.status)") }
+        XCTAssertEqual(runs(), 1)
+
+        // Rotated: the next sync is refused once, runs the command again and succeeds.
+        try setPassword("two")
+        server.password = "two"
+        await c.syncNow()
+        guard case .idle = c.status else { return XCTFail("status \(c.status)") }
+        XCTAssertEqual(c.storedPassword(), "two")
+        XCTAssertEqual(runs(), 2)
+
+        // A password the server keeps refusing: the command runs once, not on every sync.
+        try setPassword("three")
+        server.password = "four"
+        await c.syncNow()
+        XCTAssertEqual(c.status, .error(SyncError.unauthorized.errorDescription!))
+        XCTAssertEqual(runs(), 3)
+        c.scheduleSync()
+        try await Task.sleep(for: .milliseconds(200))
+        XCTAssertEqual(c.status, .error(SyncError.unauthorized.errorDescription!))
+        XCTAssertEqual(runs(), 3)
+        // Sync Now asks the command again.
+        try setPassword("four")
+        await c.syncNow()
+        guard case .idle = c.status else { return XCTFail("status \(c.status)") }
+        XCTAssertEqual(runs(), 4)
+    }
     #endif
 }
+
+@MainActor
+private final class AcceptedPassword { var password = "" }

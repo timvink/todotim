@@ -259,6 +259,7 @@ public final class SyncController {
             return
         }
         var password = await loadPassword(for: account) ?? ""
+        var passwordIsNew = false
         if password.isEmpty, let command = passwordCommand, !passwordCommandAttempted {
             passwordCommandAttempted = true
             status = .syncing
@@ -266,6 +267,7 @@ public final class SyncController {
                 password = try await PasswordCommand.run(command)
                 storePassword(password, for: account)
                 passwordCommandError = nil
+                passwordIsNew = true
             } catch is CancellationError {
                 passwordCommandAttempted = false
                 if self.settings == settings { status = .idle(lastSync: lastSync) }
@@ -318,6 +320,19 @@ public final class SyncController {
             if !result.isIdle { warning = result.warnings.isEmpty ? nil : result.warnings.joined(separator: "\n") }
             lastSync = Date()
             status = .idle(lastSync: lastSync)
+        } catch SyncError.unauthorized where passwordCommand != nil && self.settings == settings {
+            // The password from password_command was refused; it may have been changed. One from an
+            // earlier run is forgotten and the command runs again at once. One it gave just now is
+            // forgotten too, but the command runs again only on Sync Now; until then the error stays.
+            sessionPassword = nil
+            let message = Self.message(for: SyncError.unauthorized)
+            if passwordIsNew {
+                passwordCommandError = message
+            } else {
+                passwordCommandAttempted = false
+                syncRequestedWhileSyncing = true
+            }
+            status = .error(message)
         } catch {
             // A settings change cancelled this sync (`restartLoop`); the next one follows with them.
             guard self.settings == settings else { return }
