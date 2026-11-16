@@ -1,5 +1,6 @@
 package app.todotim.core.store
 
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -100,7 +101,7 @@ class Persistence(
         }
     }
 
-    /** Saves [store]'s current database now, unless it is already saved. Throws [IOException] when it cannot. */
+    /** Saves [store]'s current database now, unless it is already saved. Throws (an [IOException], …) when it cannot. */
     suspend fun flush(store: TodoStore) {
         source = store
         save(store.database.value)
@@ -110,7 +111,9 @@ class Persistence(
     suspend fun flushQuietly(store: TodoStore): Boolean = try {
         flush(store)
         true
-    } catch (e: IOException) {
+    } catch (e: CancellationException) {
+        throw e
+    } catch (e: Exception) {
         false
     }
 
@@ -125,7 +128,7 @@ class Persistence(
             if (latest == lastSaved) return@withLock
             try {
                 write(latest)
-            } catch (e: IOException) {
+            } catch (e: Exception) { // IOException (disk full, …), or SecurityException
                 saveFailure.value = "Could not save your tasks: ${e.message ?: e::class.java.simpleName}. " +
                     "Your changes are kept while the app runs and saved as soon as possible."
                 throw e
