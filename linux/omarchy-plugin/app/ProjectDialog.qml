@@ -30,16 +30,20 @@ Modal {
   function save() {
     var text = name.text.trim()
     if (text === "") { error = "Enter a name"; return }
+    var gen = generation
     if (projectId) {
       app.req("updateProject", { id: projectId, name: text, color: colorKey }, function(ok, r) {
+        if (gen !== root.generation) return
         if (!ok) { root.error = r; return }
         root.app.closeOverlay("project")
       })
     } else {
       app.req("addProject", { name: text, color: colorKey }, function(ok, r) {
+        if (gen !== root.generation) return
         if (!ok) { root.error = r; return }
         root.app.closeOverlay("project")
-        root.app.goProject(r.id)
+        // Opened over another dialog (Ctrl+Shift+N in Quick Add), it goes back there instead.
+        if (root.app.overlays.length === 0) root.app.goProject(r.id)
       })
     }
   }

@@ -26,16 +26,19 @@ FocusScope {
   // order, both included. Empty while one task (or none) is selected. Like the Mac's `multiSelection`.
   property var multiIds: []
   property string selectionAnchor: ""
-  // Bumped when the move dialog opens and when it sends a move: a late reply checks it.
-  property int moveGeneration: 0
   property bool extendingSelection: false
   // Any other way of selecting a task ends a J/K selection.
   onSelectedIdChanged: if (!extendingSelection) clearMultiSelection()
+  // A task to select once the rows of `pendingView` (a `currentSpec()` as JSON) show it. It expires
+  // when those rows come without it and when the user selects something else.
   property string pendingSelect: ""
+  property string pendingView: ""
   property string neighborId: ""
   property var overlays: []
   property string pickerTaskId: ""
   property var pickerLabels: []
+  property bool pickerLabelsLoaded: false
+  property int labelSeq: 0
   property var menuActions: []
   property var beforeSearch: null
   property bool leavingSearch: false
@@ -55,8 +58,7 @@ FocusScope {
 
   function activate(payload) {
     endChord()
-    if (overlays.length > 0) overlayItem(overlays[overlays.length - 1]).forceActiveFocus()
-    else focusList()
+    focusList()
     if (payload && payload.action === "quickAdd") openQuickAdd(defaultContext())
   }
 
@@ -83,34 +85,41 @@ FocusScope {
 
   function isOpen(name) { return overlays.indexOf(name) >= 0 }
 
+  // Opens a dialog on top of the others. One that is open already comes to the top as it is
+  // (Ctrl+N in Quick Add keeps what was typed).
   function openOverlay(name, arg) {
     endChord()
+    var reopening = isOpen(name)
     var next = overlays.filter(function(n) { return n !== name })
     next.push(name)
     overlays = next
+    for (var i = 0; i < next.length; i++) overlayItem(next[i]).z = 51 + i
     var item = overlayItem(name)
-    item.z = 50 + next.length
     item.visible = true
+    if (reopening) { item.forceActiveFocus(); return }
+    item.generation++
     item.open(arg)
   }
 
+  // Closing a dialog that is not open does nothing (a late reply of one closed already).
   function closeOverlay(name) {
+    if (!isOpen(name)) return
     var item = overlayItem(name)
-    if (item) item.visible = false
+    item.visible = false
+    item.generation++
     overlays = overlays.filter(function(n) { return n !== name })
-    if (overlays.length > 0) overlayItem(overlays[overlays.length - 1]).forceActiveFocus()
-    else focusList()
+    focusList()
   }
 
-  function focusList() { list.forceActiveFocus() }
+  // Focuses the list, or the top dialog while one is open: keys never reach the list under a dialog.
+  function focusList() {
+    if (overlays.length > 0) overlayItem(overlays[overlays.length - 1]).forceActiveFocus()
+    else list.forceActiveFocus()
+  }
 
   // ---- Navigation
 
-  function currentSpec() {
-    if (view.kind === "label") return { kind: "label", name: view.name }
-    if (view.kind === "search") return { kind: "search", query: view.query }
-    return { kind: "project", id: view.id }
-  }
+  function currentSpec() { return service ? service.specOf(view) : { kind: "project", id: "inbox" } }
 
   function goTo(spec) {
     endChord()
@@ -150,8 +159,9 @@ FocusScope {
 
   function leaveSearch() {
     var back = beforeSearch
-    goTo(back ? back.spec : { kind: "project", id: "inbox" })
-    if (back && back.selected) pendingSelect = back.selected
+    var spec = back ? back.spec : { kind: "project", id: "inbox" }
+    goTo(spec)
+    if (back && back.selected) selectWhenShown(back.selected, spec)
     focusList()
   }
 
@@ -179,6 +189,7 @@ FocusScope {
 
   // Sets the selection without `onSelectedIdChanged` ending the multi-selection.
   function setSelection(cursor, anchor, ids) {
+    pendingSelect = ""
     extendingSelection = true
     selectedId = cursor
     extendingSelection = false
@@ -205,15 +216,17 @@ FocusScope {
     return { view: JSON.stringify(currentSpec()), cursor: selectedId, anchor: selectionAnchor, ids: multiIds }
   }
 
+  // The undo's rows came before its reply: a cursor that is not in them is not coming.
   function restoreSelection(s) {
     if (!s || !s.view || s.view !== JSON.stringify(currentSpec())) return
-    if (s.cursor && indexOfId(s.cursor) < 0) { pendingSelect = s.cursor; return }
+    if (s.cursor && indexOfId(s.cursor) < 0) return
     setSelection(s.cursor || "", s.anchor || "", s.ids || [])
     Qt.callLater(ensureVisible)
   }
 
   function select(id) {
     clearMultiSelection()
+    pendingSelect = ""
     selectedId = id
     focusList()
     Qt.callLater(ensureVisible)
@@ -233,6 +246,7 @@ FocusScope {
   // j/k: without a selection, the first (last) task on screen.
   function move(delta) {
     clearMultiSelection()
+    pendingSelect = ""
     var i = indexOfId(selectedId)
     var j
     if (i < 0) {
@@ -321,6 +335,11 @@ FocusScope {
     return false
   }
 
+  function selectWhenShown(id, spec) {
+    pendingSelect = id
+    pendingView = JSON.stringify(spec)
+  }
+
   function reconcileSelection() {
     if (pendingSelect && indexOfId(pendingSelect) >= 0) {
       selectedId = pendingSelect
@@ -328,6 +347,16 @@ FocusScope {
       neighborId = ""
       Qt.callLater(ensureVisible)
       return
+    }
+    if (pendingSelect && JSON.stringify(currentSpec()) === pendingView) pendingSelect = ""
+    // A J/K selection keeps only the tasks still shown.
+    if (multiIds.length > 0) {
+      var kept = multiIds.filter(function(id) { return app.indexOfId(id) >= 0 })
+      if (kept.length < 2) clearMultiSelection()
+      else if (kept.length < multiIds.length) {
+        multiIds = kept
+        if (kept.indexOf(selectionAnchor) < 0) selectionAnchor = kept[0] === selectedId ? kept[kept.length - 1] : kept[0]
+      }
     }
     if (selectedId && indexOfId(selectedId) < 0) {
       selectedId = neighborId && indexOfId(neighborId) >= 0 ? neighborId : ""
@@ -339,6 +368,8 @@ FocusScope {
   Connections {
     target: app.service
     function onRowsUpdated() { app.reconcileSelection() }
+    // A new engine has no undo steps: the toast's Undo would only say "Nothing to undo".
+    function onConnectedChanged() { if (!app.service.connected && toast.canUndo) toast.hide() }
   }
 
   // ---- Task actions
@@ -430,6 +461,7 @@ FocusScope {
   function shift(delta) { if (selectedId) req("shiftTask", { id: selectedId, delta: delta }, function() { Qt.callLater(app.ensureVisible) }) }
 
   function openTask(id) {
+    pendingSelect = ""
     selectedId = id
     openOverlay("detail", id)
   }
@@ -439,6 +471,7 @@ FocusScope {
     if (i < 0) return
     for (var j = i + delta; j >= 0 && j < rows.length; j += delta) {
       if (rows[j].type === "task") {
+        pendingSelect = ""
         selectedId = rows[j].id
         detail.open(rows[j].id)
         Qt.callLater(ensureVisible)
@@ -543,13 +576,15 @@ FocusScope {
     openQuickAdd({ projectId: view.id, sectionId: r && r.projectId === view.id ? r.sectionId : null, atTop: atTop })
   }
 
-  function taskAdded(result) {
-    closeOverlay("quickAdd")
+  // `current`: the Quick Add that sent it is still open (not closed, or closed and opened again).
+  function taskAdded(result, current) {
     var here = view.kind === "project" && view.id === result.projectId
     toast.show(here ? "Task added" : "Task added to " + result.projectName, false)
+    if (!current) return
+    closeOverlay("quickAdd")
     if (here) {
       // A sub-task keeps its parent selected, so `a` again adds the next sub-task.
-      pendingSelect = result.parentId || result.taskId
+      selectWhenShown(result.parentId || result.taskId, currentSpec())
       reconcileSelection()
     }
   }
@@ -606,21 +641,27 @@ FocusScope {
   }
 
   function setDue(phrase) {
-    var id = pickerTaskId
+    var id = pickerTaskId, gen = datePicker.generation
     req("updateTask", { id: id, dueText: phrase }, function(ok, r) {
+      if (gen !== datePicker.generation) return
       if (!ok) { datePicker.note = r; datePicker.noteColor = theme.red; return }
       app.closeOverlay("date")
     })
   }
 
+  // The task's labels load first: until then a pick would send the labels without the others.
   function openLabelPicker(id) {
-    if (!id) return
+    if (!id || isOpen("labels")) return
     pickerTaskId = id
     pickerLabels = []
-    req("getTask", { id: id }, function(ok, r) {
-      if (ok) app.pickerLabels = r.labels.map(function(l) { return l.name })
-    })
+    pickerLabelsLoaded = false
     openOverlay("labels")
+    var gen = labelPicker.generation
+    req("getTask", { id: id }, function(ok, r) {
+      if (gen !== labelPicker.generation || !ok) return
+      app.pickerLabels = r.labels.map(function(l) { return l.name })
+      app.pickerLabelsLoaded = true
+    })
   }
 
   function labelItems(filter, chosen) {
@@ -641,15 +682,18 @@ FocusScope {
     return items
   }
 
+  // Only the reply to the latest toggle sets the checks, so quick toggles never drop each other.
   function toggleLabel(name) {
+    if (!pickerLabelsLoaded) return
     var next = pickerLabels.slice()
     var i = next.indexOf(name)
     if (i >= 0) next.splice(i, 1)
     else next.push(name)
     pickerLabels = next
+    var seq = ++labelSeq, gen = labelPicker.generation
     req("updateTask", { id: pickerTaskId, labels: next }, function(ok, r) {
-      if (ok) app.pickerLabels = r.labels.map(function(l) { return l.name })
-      else toast.show(r, false)
+      if (!ok) toast.show(r, false)
+      else if (seq === app.labelSeq && gen === labelPicker.generation) app.pickerLabels = r.labels.map(function(l) { return l.name })
     })
   }
 
@@ -659,7 +703,6 @@ FocusScope {
   // m, v: the move dialog for `ids` (in list order).
   function openMoveDialog(ids) {
     if (!ids || ids.length === 0) return
-    moveGeneration++
     openOverlay("move", { ids: ids, subject: ids.length === 1 ? "\u201c" + taskTitle(ids[0]) + "\u201d" : ids.length + " tasks" })
   }
 
@@ -668,10 +711,10 @@ FocusScope {
   function moveTasksTo(ids, target, done) {
     if (ids.indexOf(selectedId) >= 0) neighborId = neighborOfAll(ids)
     var where = { kind: target.kind, projectId: target.projectId, sectionId: target.sectionId, parentId: target.parentId }
-    var generation = ++moveGeneration
+    var generation = movePicker.generation
     req("moveTasks", { ids: ids, target: where, selection: selectionState() }, function(ok, r) {
       // A reply for a dialog that was closed (and maybe opened again) only shows its result.
-      var same = generation === app.moveGeneration
+      var same = generation === movePicker.generation
       if (!ok) { app.neighborId = ""; if (same) done(false, r); else app.showResult(ok, r); return }
       if (same) { done(true, ""); app.closeOverlay("move") }
       app.showResult(ok, r)
@@ -792,11 +835,15 @@ FocusScope {
 
   // ---- Keys
 
-  // Keys that work everywhere (they reach here when the focused field does not use them).
+  // Keys that work everywhere (they reach here when the focused field does not use them). The ones
+  // that act on the list (go to a project, search, show completed) do nothing while a dialog is open.
   Keys.onPressed: function(event) {
     var ctrl = event.modifiers & Qt.ControlModifier
     var shiftKey = event.modifiers & Qt.ShiftModifier
     if (!ctrl) return
+    var listKey = event.key === Qt.Key_F || (shiftKey && event.key === Qt.Key_C)
+      || (event.key >= Qt.Key_1 && event.key <= Qt.Key_9)
+    if (listKey && overlays.length > 0) { event.accepted = true; return }
     if (event.key === Qt.Key_Z) undo()
     else if (event.key === Qt.Key_R) syncNow()
     else if (shiftKey && event.key === Qt.Key_N) newProject()
@@ -839,7 +886,7 @@ FocusScope {
       case Qt.Key_Escape:
         if (multiIds.length > 0) clearMultiSelection()
         else if (view.kind === "search") leaveSearch()
-        else if (selectedId) selectedId = ""
+        else if (selectedId) { selectedId = ""; pendingSelect = "" }
         else closeRequested()
         break
       case Qt.Key_PageDown: list.contentY = Math.min(list.contentY + list.height * 0.8, Math.max(0, list.contentHeight - list.height)); break

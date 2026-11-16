@@ -36,8 +36,11 @@ Item {
   // Text size: {fontSize (px, or null for the default), managed (the config file that sets it, or
   // null)}, from `hello` and `setAppearance`.
   property var appearance: ({ fontSize: null, managed: null })
-  // The view the UI asked for, sent again when the engine restarts.
+  // The view to show, sent again when the engine restarts: what the UI asked for, then what the
+  // engine shows (a label view follows its label's rename; a deleted project or label goes to the Inbox).
   property var requestedView: ({ kind: "project", id: "inbox" })
+  // setView requests without a reply yet: until then a rows event may still be for an older view.
+  property int viewRequests: 0
 
   signal rowsUpdated()
   signal engineMessage(string message)
@@ -61,7 +64,19 @@ Item {
 
   function setView(view) {
     requestedView = view
-    request("setView", { view: view })
+    sendView()
+  }
+
+  function sendView() {
+    viewRequests++
+    request("setView", { view: requestedView }, function() { root.viewRequests-- })
+  }
+
+  // The `setView` spec of a view from a rows event.
+  function specOf(view) {
+    if (view.kind === "label") return { kind: "label", name: view.name }
+    if (view.kind === "search") return { kind: "search", query: view.query }
+    return { kind: "project", id: view.id }
   }
 
   function handleLine(line) {
@@ -76,6 +91,8 @@ Item {
         case "sidebar": root.sidebar = message.sidebar; break
         case "rows":
           root.view = message.view
+          // Before `hello`'s reply the rows are a new engine's default view, not the one to restore.
+          if (root.connected && root.viewRequests === 0) root.requestedView = root.specOf(message.view)
           root.rowList = message.rows
           ModelSync.sync(root.rows, message.rows)
           root.rowsUpdated()
@@ -95,16 +112,17 @@ Item {
     }
   }
 
+  // A startup error stays up until an engine answers, so a restart loop does not hide it.
   function hello() {
-    fatalError = ""
     request("hello", {}, function(ok, result) {
       if (!ok) return
       root.connected = true
+      root.fatalError = ""
       root.engineVersion = result.version || ""
       root.palette = result.palette || []
       root.startupError = result.startupError || ""
       if (result.appearance) root.appearance = result.appearance
-      root.request("setView", { view: root.requestedView })
+      root.sendView()
     })
   }
 
@@ -128,7 +146,11 @@ Item {
       var cbs = root.callbacks
       root.callbacks = ({})
       for (var id in cbs) cbs[id](false, "TodoTim engine stopped")
-      if (exitCode === 127) root.fatalError = "todotim-engine was not found. Run install.sh from the TodoTim release."
+      // A missing engine does not appear by retrying (install.sh restarts the shell).
+      if (exitCode === 127) {
+        root.fatalError = "todotim-engine was not found. Run install.sh from the TodoTim release."
+        return
+      }
       if (!root.stopping) restartTimer.restart()
     }
   }

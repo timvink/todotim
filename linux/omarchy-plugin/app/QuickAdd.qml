@@ -19,6 +19,7 @@ Modal {
   function open(ctx) {
     context = ctx || {}
     error = ""
+    busy = false
     preview = null
     description.text = ""
     input.text = context.text || ""
@@ -46,10 +47,16 @@ Modal {
     var a = args()
     a.description = description.text
     a.atTop = context.atTop === true
+    var gen = generation
     app.req("quickAdd", a, function(ok, result) {
-      root.busy = false
-      if (!ok) { root.error = result; return }
-      root.app.taskAdded(result)
+      var current = gen === root.generation
+      if (current) root.busy = false
+      if (!ok) {
+        if (current) root.error = result
+        else root.app.showResult(false, result)
+        return
+      }
+      root.app.taskAdded(result, current)
     })
   }
 
