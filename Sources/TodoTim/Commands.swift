@@ -42,6 +42,8 @@ struct AppCommands: Commands {
             Divider()
             Button("Open Task  ↩") { model.openSelected() }
                 .disabled(!model.hasSelection)
+            Button("Open Link  g x") { model.openLink() }
+                .disabled(!model.hasActionTask)
             Button("Complete Task") {
                 if let id = model.detailTaskID { model.toggleComplete(id) } else { model.completeSelection() }
             }
@@ -161,6 +163,7 @@ enum ShortcutCatalog {
         ("Navigate", [
             Item(keys: "G  then  I", action: "Go to Inbox"),
             Item(keys: "G  then  S", action: "Go to Search"),
+            Item(keys: "G  (wait)", action: "Show what can follow G"),
             Item(keys: "⌘1", action: "Go to Inbox"),
             Item(keys: "⌘2 … ⌘9", action: "Go to project 1 … 8"),
             Item(keys: "↓  or  J", action: "Select next task"),
@@ -183,6 +186,7 @@ enum ShortcutCatalog {
         ]),
         ("Selected task", [
             Item(keys: "↩", action: "Open task"),
+            Item(keys: "G  then  X", action: "Open the first link in the browser"),
             Item(keys: "X  or  E  or  ⌘↩", action: "Complete the selected tasks"),
             Item(keys: "1  2  3  4", action: "Set priority"),
             Item(keys: "T", action: "Set date"),
@@ -197,6 +201,7 @@ enum ShortcutCatalog {
             Item(keys: "T  /  @  /  M", action: "Date / labels / move"),
             Item(keys: "↩  /  D", action: "Edit title / description"),
             Item(keys: "A", action: "Add sub-task"),
+            Item(keys: "G  then  X", action: "Open the first link"),
             Item(keys: "⌦", action: "Delete task"),
             Item(keys: "Esc  or  click outside", action: "Close"),
         ]),

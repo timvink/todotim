@@ -235,6 +235,8 @@ TodoTim moves like vim:
 | `/` | Search. `Esc` leaves the search field, and a second `Esc` returns to the list you came from |
 | `g` then `i` | Go to Inbox |
 | `g` then `s` | Search |
+| `g` then `x` | Open the selected or open task's first link in the browser |
+| `g`, then wait | Show the keys that can follow `g` |
 | `PageUp` / `PageDown` | Scroll the list |
 | `Esc` | Close the editor or popover, then clear the selection |
 

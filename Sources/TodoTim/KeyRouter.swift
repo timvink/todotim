@@ -3,7 +3,7 @@ import SwiftUI
 import TodoCore
 
 /// Handles Todoist's single-key shortcuts (q, a, e, 1–4, …) and the vim motions (j/k, h/l or ←/→, Home/End,
-/// gg/G, g i, Esc).
+/// gg/G, g i, g x, Esc).
 ///
 /// SwiftUI's `.onKeyPress` only fires for the focused view, and list rows are not
 /// focusable, so a local NSEvent monitor is used instead. Keys pass through untouched
@@ -15,18 +15,25 @@ import TodoCore
 final class KeyRouter {
     private let model: AppModel
     private var monitor: Any?
-    /// Time of the first key of a `g` chord.
-    private var pendingG: Date?
+    private var resignObserver: Any?
 
     init(model: AppModel) { self.model = model }
 
     func install() {
         guard monitor == nil else { return }
-        monitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] event in
+        monitor = NSEvent.addLocalMonitorForEvents(matching: [.keyDown, .leftMouseDown, .rightMouseDown]) { [weak self] event in
             // Local monitors run on the main thread.
             nonisolated(unsafe) let event = event
-            let consumed = MainActor.assumeIsolated { self?.handle(event) ?? false }
+            let consumed = MainActor.assumeIsolated {
+                guard event.type == .keyDown else { self?.model.endChord(); return false }
+                return self?.handle(event) ?? false
+            }
             return consumed ? nil : event
+        }
+        // A pending `g` must not act on a key typed after switching away and back.
+        resignObserver = NotificationCenter.default.addObserver(forName: NSWindow.didResignKeyNotification, object: nil,
+                                                                queue: .main) { [weak self] _ in
+            MainActor.assumeIsolated { self?.model.endChord() }
         }
     }
 
@@ -47,6 +54,10 @@ final class KeyRouter {
         guard let window = event.window, let main = model.mainWindow, window === main,
               main.attachedSheet == nil else { return false }
         let chars = event.charactersIgnoringModifiers ?? ""
+        if model.chordPending {
+            if event.modifierFlags.intersection([.command, .control, .option]).isEmpty { return finishChord(chars) }
+            model.endChord()
+        }
         // The move dialog is topmost (it can open over the task view), and its keys come before
         // ⌘J/⌘K, which would otherwise move the task behind it.
         if let move = model.moveDialog { return handleMoveDialog(event, chars: chars, move) }
@@ -99,23 +110,12 @@ final class KeyRouter {
             case (_, "@"): model.popover = .labels
             case (_, "m"), (_, "v"): model.showMoveDialog()
             case (_, "u"): return model.undoFromToast()
+            case (_, "g"): model.beginChord()
             default: return Self.menuKeys.contains(chars)
             }
             return true
         }
         if model.isEditingText { return false }
-
-        if let g = pendingG {
-            pendingG = nil
-            if Date().timeIntervalSince(g) < 1.5 {
-                switch chars {
-                case "i": model.goToInbox(); return true
-                case "s", "/": model.focusSearch(); return true
-                case "g": model.moveSelectionToSectionEdge(last: false); return true
-                default: break
-                }
-            }
-        }
 
         let shift = event.modifierFlags.contains(.shift)
         switch event.keyCode {
@@ -163,9 +163,24 @@ final class KeyRouter {
         case "s": model.addSectionAtEnd()
         case "/": model.focusSearch()
         case "?": model.showShortcuts = true
-        case "g": pendingG = Date()
+        case "g": model.beginChord()
         case "u": return model.undoFromToast()
         default: return false
+        }
+        return true
+    }
+
+    /// The key after `g`. Every key ends the chord, and one that is not a chord is swallowed, so
+    /// `g` `x` never completes a task and `g` `Esc` only cancels. The task view has only `g x`.
+    private func finishChord(_ chars: String) -> Bool {
+        model.endChord()
+        let inList = model.detailTaskID == nil
+        switch chars {
+        case "x": model.openLink()
+        case "g" where inList: model.moveSelectionToSectionEdge(last: false)
+        case "i" where inList: model.goToInbox()
+        case "s" where inList, "/" where inList: model.focusSearch()
+        default: break
         }
         return true
     }

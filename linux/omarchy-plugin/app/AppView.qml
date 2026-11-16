@@ -1,6 +1,7 @@
 import QtQuick
 import Quickshell
 import "Icons.js" as Icons
+import "Markdown.js" as Markdown
 
 // The whole app: sidebar, the list of the current view, and the dialogs over it. Holds the UI
 // state (selection, open dialogs) and routes keys; every data change is a request to the engine
@@ -38,7 +39,11 @@ FocusScope {
   property var menuActions: []
   property var beforeSearch: null
   property bool leavingSearch: false
+  // "g" while a chord waits for its second key; `chordHint` shows the keys that can follow.
   property string chord: ""
+  property bool chordHint: false
+  // Whether `g x` would find a link, worked out when the hint opens.
+  property bool chordHasLink: false
   property bool startupErrorDismissed: false
 
   function req(cmd, args, cb) {
@@ -49,6 +54,7 @@ FocusScope {
   // ---- Lifecycle (from the panel)
 
   function activate(payload) {
+    endChord()
     if (overlays.length > 0) overlayItem(overlays[overlays.length - 1]).forceActiveFocus()
     else focusList()
     if (payload && payload.action === "quickAdd") openQuickAdd(defaultContext())
@@ -77,6 +83,7 @@ FocusScope {
   function isOpen(name) { return overlays.indexOf(name) >= 0 }
 
   function openOverlay(name, arg) {
+    endChord()
     var next = overlays.filter(function(n) { return n !== name })
     next.push(name)
     overlays = next
@@ -105,6 +112,7 @@ FocusScope {
   }
 
   function goTo(spec) {
+    endChord()
     selectedId = ""
     pendingSelect = ""
     if (spec.kind !== "search" && sidebar.searchField.text !== "") {
@@ -442,6 +450,74 @@ FocusScope {
     if (/^(https?:\/\/|mailto:)/i.test(url)) Qt.openUrlExternally(url)
   }
 
+  // ---- Key chords (g …), like the Mac's KeyRouter
+
+  function beginChord() {
+    chord = "g"
+    chordTimer.restart()
+  }
+
+  function endChord() {
+    chord = ""
+    chordTimer.stop()
+    chordHint = false
+  }
+
+  Timer {
+    id: chordTimer
+    // Long enough that a quick gg or gx never flashes the hint.
+    interval: 150
+    onTriggered: {
+      if (app.chord === "") return
+      app.chordHasLink = app.selectedHasLink(app.isOpen("detail") ? detail.task : null)
+      app.chordHint = true
+    }
+  }
+
+  // The key after `g`, from the list or (with `detailTask`) the task view, which has only `g x`.
+  // Every key ends the chord and none falls through: `g x` never completes a task, `g Esc` only
+  // cancels. Returns false when the key is not consumed: a lone modifier (the chord keeps waiting)
+  // or a Ctrl/Alt shortcut (it ends the chord and works as usual).
+  function finishChord(event, detailTask) {
+    if (event.key === Qt.Key_Shift || event.key === Qt.Key_Control || event.key === Qt.Key_Alt
+        || event.key === Qt.Key_Meta || event.key === Qt.Key_Super_L || event.key === Qt.Key_Super_R) return false
+    endChord()
+    if (event.modifiers & (Qt.ControlModifier | Qt.AltModifier)) return false
+    var t = event.text
+    if (t === "x") {
+      if (detailTask) openTaskLink(detailTask.content, detailTask.description)
+      else if (selectedId) openSelectedLink()
+    } else if (!detailTask) {
+      if (t === "g") jumpEdge(false)
+      else if (t === "i") goProject("inbox")
+      else if (t === "s" || t === "/") focusSearch()
+    }
+    return true
+  }
+
+  function openTaskLink(content, description) {
+    var url = Markdown.firstLink(content) || Markdown.firstLink(description)
+    if (url) openLink(url)
+    else toast.show("No link in this task", false)
+  }
+
+  // The row has the title; the description comes from the engine (the row's note is cut short).
+  function openSelectedLink() {
+    var row = rowOf(selectedId)
+    var url = row ? Markdown.firstLink(row.content) : ""
+    if (url) { openLink(url); return }
+    req("getTask", { id: selectedId }, function(ok, r) {
+      if (ok) app.openTaskLink(r.content, r.description)
+    })
+  }
+
+  // Whether `g x` has a link, for the hint (the row's note is the description's first line).
+  function selectedHasLink(detailTask) {
+    if (detailTask) return !!(Markdown.firstLink(detailTask.content) || Markdown.firstLink(detailTask.description))
+    var row = rowOf(selectedId)
+    return !!row && !!(Markdown.firstLink(row.content) || Markdown.firstLink(row.note))
+  }
+
   // ---- Adding
 
   function defaultContext() {
@@ -689,12 +765,7 @@ FocusScope {
   function handleListKey(event) {
     var t = event.text
     var ctrl = event.modifiers & Qt.ControlModifier
-    if (chord === "g") {
-      chord = ""
-      if (t === "g") { jumpEdge(false); event.accepted = true; return }
-      if (t === "i") { goProject("inbox"); event.accepted = true; return }
-      if (t === "s") { focusSearch(); event.accepted = true; return }
-    }
+    if (chord !== "" && finishChord(event, null)) { event.accepted = true; return }
     if (ctrl) {
       if (event.key === Qt.Key_BracketRight) indent()
       else if (event.key === Qt.Key_BracketLeft) outdent()
@@ -731,7 +802,7 @@ FocusScope {
           case "k": move(-1); break
           case "J": extendSelection(1); break
           case "K": extendSelection(-1); break
-          case "g": chord = "g"; break
+          case "g": beginChord(); break
           case "G": jumpEdge(true); break
           case "}": jumpSection(1); break
           case "{": jumpSection(-1); break
@@ -943,6 +1014,23 @@ FocusScope {
   }
 
   // ---- Dialogs
+
+  ChordHint {
+    theme: app.theme
+    app: app
+    inDetail: app.isOpen("detail")
+    anchors.right: parent.right
+    anchors.bottom: parent.bottom
+    anchors.margins: app.theme.space(22)
+  }
+
+  // A click ends a waiting chord (and passes through).
+  MouseArea {
+    anchors.fill: parent
+    z: 1000
+    enabled: app.chord !== ""
+    onPressed: function(mouse) { app.endChord(); mouse.accepted = false }
+  }
 
   QuickAdd { id: quickAdd; theme: app.theme; app: app }
   TaskDetail { id: detail; theme: app.theme; app: app }

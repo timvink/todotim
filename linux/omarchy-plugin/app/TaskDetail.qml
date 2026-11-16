@@ -4,7 +4,7 @@ import "Markdown.js" as Markdown
 
 // The task view: title, description, due date, priority, labels, project and sub-tasks.
 // Outside the text fields the list's keys work on this task (e, 1–4, t, @, m, j/k for the
-// next or previous task, Delete); Enter edits the title; Esc saves and closes.
+// next or previous task, Delete, g x to open its link); Enter edits the title; Esc saves and closes.
 Modal {
   id: root
   property var app
@@ -72,6 +72,10 @@ Modal {
     if (title.activeFocus || notes.activeFocus) return
     var ctrl = event.modifiers & Qt.ControlModifier
     var t = event.text
+    if (app.chord !== "" && app.finishChord(event, root.task || { content: title.text, description: notes.text })) {
+      event.accepted = true
+      return
+    }
     if (event.key === Qt.Key_Escape) close()
     else if (event.key === Qt.Key_Return || event.key === Qt.Key_Enter) { title.forceActiveFocus(); title.cursorPosition = title.text.length }
     else if (t === "j" || event.key === Qt.Key_Down) { save(); app.moveDetail(1) }
@@ -84,6 +88,7 @@ Modal {
     else if (t === "d") notes.forceActiveFocus()
     else if (t === "a") addSubtask()
     else if (t === "u" && !ctrl) app.undoFromToast()
+    else if (t === "g" && !ctrl) app.beginChord()
     else if (event.key === Qt.Key_Delete || (ctrl && event.key === Qt.Key_Backspace)) app.confirmDelete(taskId)
     else return
     event.accepted = true

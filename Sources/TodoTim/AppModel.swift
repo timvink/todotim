@@ -798,6 +798,56 @@ final class AppModel {
         return true
     }
 
+    // MARK: - Key chords
+
+    /// A `g` waits for its second key (`KeyRouter`). Not observed; only `showChordHint` redraws.
+    @ObservationIgnored private(set) var chordPending = false
+    /// The menu of `g` chords at the bottom right, once the second key has not come within
+    /// `chordHintDelay` (so a quick `gg` or `gx` does not flash it).
+    private(set) var showChordHint = false
+    @ObservationIgnored private var chordHintTask: Task<Void, Never>?
+    static let chordHintDelay: Duration = .milliseconds(150)
+
+    func beginChord() {
+        chordPending = true
+        chordHintTask?.cancel()
+        chordHintTask = Task { [weak self] in
+            try? await Task.sleep(for: Self.chordHintDelay)
+            guard !Task.isCancelled, let self, self.chordPending else { return }
+            self.showChordHint = true
+        }
+    }
+
+    func endChord() {
+        guard chordPending else { return }
+        chordPending = false
+        chordHintTask?.cancel()
+        chordHintTask = nil
+        if showChordHint { showChordHint = false }
+    }
+
+    /// The task `g x` opens: the open task, else the selected one.
+    var linkTaskID: EntityID? { detailTaskID ?? selectedTaskID }
+
+    /// The first link in the task's title, else in its description: what `RichText` underlines.
+    func firstLink(of id: EntityID) -> URL? {
+        guard let t = store.task(id) else { return nil }
+        for text in [t.content, t.description] {
+            if let url = RichText.render(text).runs.lazy.compactMap(\.link).first { return url }
+        }
+        return nil
+    }
+
+    /// `g x`: opens the task's first link in the default browser.
+    func openLink() {
+        guard let id = linkTaskID else { return }
+        guard let url = firstLink(of: id), RichText.isAllowed(url) else {
+            showToast("No link in this task", undo: nil)
+            return
+        }
+        NSWorkspace.shared.open(url)
+    }
+
     func showToast(_ message: String, undo: (() -> Void)?) {
         let info = ToastInfo(message: message, undo: undo)
         toast = info

@@ -9,6 +9,11 @@ function escape(s) {
   return String(s).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;")
 }
 
+// [text](url) links and bare http(s) URLs; `toStyled` and `firstLink` share them.
+var markdownLink = /\[([^\]\n]+)\]\(([^)\s]+)\)/g
+var bareUrl = /\bhttps?:\/\/[^\s<>()]+[^\s<>().,;:!?'"]/g
+var codeSpan = /(`[^`\n]+`)/
+
 function safeUrl(url) {
   return /^(https?:\/\/|mailto:)/i.test(url) ? url : ""
 }
@@ -16,7 +21,7 @@ function safeUrl(url) {
 function toStyled(text, codeColor) {
   var src = String(text || "")
   // Split out code spans first so their content is not formatted.
-  var parts = src.split(/(`[^`\n]+`)/)
+  var parts = src.split(codeSpan)
   var out = ""
   for (var i = 0; i < parts.length; i++) {
     var part = parts[i]
@@ -26,13 +31,13 @@ function toStyled(text, codeColor) {
     }
     var tokens = []
     // [text](url) links: replaced by placeholders before escaping.
-    part = part.replace(/\[([^\]\n]+)\]\(([^)\s]+)\)/g, function(m, label, url) {
+    part = part.replace(markdownLink, function(m, label, url) {
       var safe = safeUrl(url)
       if (!safe) return m
       tokens.push("<a href=\"" + escape(safe) + "\">" + escape(label) + "</a>")
       return "{{md" + (tokens.length - 1) + "}}"
     })
-    part = part.replace(/\bhttps?:\/\/[^\s<>()]+[^\s<>().,;:!?'"]/g, function(url) {
+    part = part.replace(bareUrl, function(url) {
       tokens.push("<a href=\"" + escape(url) + "\">" + escape(url) + "</a>")
       return "{{md" + (tokens.length - 1) + "}}"
     })
@@ -46,6 +51,26 @@ function toStyled(text, codeColor) {
     out += s
   }
   return out.replace(/\n/g, "<br>")
+}
+
+// The first link `toStyled` would draw (outside code spans), or "": what `g x` opens.
+function firstLink(text) {
+  var parts = String(text || "").split(codeSpan)
+  for (var i = 0; i < parts.length; i++) {
+    if (i % 2 === 1) continue
+    var best = null, m
+    // Not new RegExp(x.source): Qt's engine escapes the slashes in `source` twice.
+    markdownLink.lastIndex = 0
+    while ((m = markdownLink.exec(parts[i])) !== null) {
+      if (safeUrl(m[2])) { best = { index: m.index, url: m[2] }; break }
+    }
+    bareUrl.lastIndex = 0
+    var bare = bareUrl.exec(parts[i])
+    markdownLink.lastIndex = bareUrl.lastIndex = 0
+    if (bare && (!best || bare.index < best.index)) best = { index: bare.index, url: bare[0] }
+    if (best) return best.url
+  }
+  return ""
 }
 
 function plain(text) {

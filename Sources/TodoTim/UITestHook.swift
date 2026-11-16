@@ -22,7 +22,7 @@ import TodoCore
 ///     enddrag              cancel the drag
 ///     collapse S           toggle section S
 ///     order                print the visible task titles with depths
-///     key esc|up|down|return|j|k|h|l|g|G|a|e|t|v|m|@|/|u|x|J|K|{|}|d|left|right|home|end|pageup|pagedown|delete|cmd-j|cmd-k|ctrl-j|ctrl-k|shift-up|shift-down   post a key press to the app's own queue
+///     key esc|up|down|return|j|k|h|l|g|G|i|s|a|e|t|v|m|@|/|u|x|J|K|{|}|d|left|right|home|end|pageup|pagedown|delete|cmd-j|cmd-k|ctrl-j|ctrl-k|shift-up|shift-down   post a key press to the app's own queue
 ///     search TEXT          open search with this query
 ///     state                print the list, the selection and which modals are open
 ///     addtask TEXT         add a task with this raw title to the current project
@@ -136,7 +136,7 @@ enum UITestHook {
                                                     "return": ("\r", 36), "j": ("j", 38), "k": ("k", 40), "h": ("h", 4),
                                                     "l": ("l", 37), "g": ("g", 5), "G": ("G", 5), "a": ("a", 0), "e": ("e", 14),
                                                     "t": ("t", 17), "v": ("v", 9), "@": ("@", 19), "/": ("/", 44), "u": ("u", 32),
-                                                    "x": ("x", 7), "J": ("J", 38), "K": ("K", 40), "d": ("d", 2),
+                                                    "x": ("x", 7), "i": ("i", 34), "s": ("s", 1), "J": ("J", 38), "K": ("K", 40), "d": ("d", 2),
                                                     "left": ("\u{F702}", 123), "right": ("\u{F703}", 124),
                                                     "home": ("\u{F729}", 115), "end": ("\u{F72B}", 119),
                                                     "pageup": ("\u{F72C}", 116), "pagedown": ("\u{F72D}", 121),

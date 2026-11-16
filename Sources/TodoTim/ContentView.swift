@@ -36,6 +36,7 @@ struct ContentView: View {
         .onChange(of: undoManager) { _, um in model.undoManager = um }
         // Task view, Quick Add, the move dialog and the shortcuts list are panels inside the window, like Todoist.
         .overlay { ModalLayer().ignoresSafeArea() }
+        .overlay(alignment: .bottomTrailing) { ChordHintView().padding(20).allowsHitTesting(false) }
         .sheet(isPresented: $model.showAddProject) {
             ProjectFormView(project: nil).environment(model).environment(store)
         }
@@ -197,6 +198,44 @@ extension View {
             .transition(.asymmetric(
                 insertion: .opacity.combined(with: .scale(scale: 0.97, anchor: .top)).combined(with: .offset(y: -lift)),
                 removal: .opacity))
+    }
+}
+
+/// The keys that can follow `g`, like Neovim's which-key, while a chord waits (`AppModel.showChordHint`).
+struct ChordHintView: View {
+    @Environment(AppModel.self) private var model
+
+    var body: some View {
+        ZStack(alignment: .bottomTrailing) {
+            if model.showChordHint { content.transition(.opacity) }
+        }
+        .animation(.easeOut(duration: 0.1), value: model.showChordHint)
+    }
+
+    private var content: some View {
+        let inList = model.detailTaskID == nil
+        let hasLink = model.linkTaskID.flatMap { model.firstLink(of: $0) } != nil
+        return VStack(alignment: .leading, spacing: 6) {
+            Text("g").font(Fonts.bodySemibold).foregroundStyle(Theme.accent)
+            if inList {
+                row("g", "First task in section")
+                row("i", "Inbox")
+                row("s", "Search")
+            }
+            row("x", "Open link", enabled: hasLink)
+        }
+        .padding(.horizontal, 14).padding(.vertical, 10)
+        .background(RoundedRectangle(cornerRadius: Theme.panelRadius, style: .continuous).fill(Ctp.surface0.color))
+        .overlay(RoundedRectangle(cornerRadius: Theme.panelRadius, style: .continuous).strokeBorder(Theme.panelBorder))
+        .shadow(color: Theme.shadow, radius: 14, y: 4)
+    }
+
+    private func row(_ key: String, _ action: String, enabled: Bool = true) -> some View {
+        HStack(spacing: 12) {
+            Text(key).font(Fonts.bodySemibold).frame(width: 12, alignment: .leading)
+            Text(action).font(Fonts.body)
+        }
+        .foregroundStyle(enabled ? Theme.text : Theme.tertiaryText)
     }
 }
 
