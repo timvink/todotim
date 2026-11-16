@@ -3,6 +3,7 @@ package app.todotim.android.data
 import app.todotim.core.dav.SyncError
 import app.todotim.core.store.Database
 import app.todotim.core.store.TodoStore
+import app.todotim.core.sync.Credentials
 import app.todotim.core.sync.SyncController
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
@@ -63,16 +64,16 @@ class SyncManager(
     /** [followUp]: for a follow-up sync, the unsynced count the sync before it ended with; it is followed up
      *  again only when it brought that count down (otherwise its writes were refused and it would loop). */
     private suspend fun sync(manual: Boolean, followUp: Int?): Boolean {
-        val account = credentials()
-        if (account == null) {
-            if (manual) errorEvents.tryEmit("No server set up. Add one in Settings.")
-            return false
-        }
         lastAttemptAt = clock()
         running.incrementAndGet()
         state.update { it.copy(isSyncing = true) }
         try {
-            val result = controller.syncNow(account.settings, account.password)
+            // The account is read when the sync before has finished, so a sync never runs with one Settings replaced.
+            val result = controller.syncNow(credentials)
+            if (result == null) {
+                if (manual) errorEvents.tryEmit("No server set up. Add one in Settings.")
+                return false
+            }
             state.update { it.copy(error = null, warnings = result.warnings) }
             scheduleFollowUp(followUp)
             return true

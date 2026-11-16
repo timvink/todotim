@@ -16,6 +16,9 @@ import java.time.ZoneId
 /** The account to sync with. The password is the app's to store (and pass to [SyncController.syncNow]). */
 data class SyncSettings(val serverUrl: String, val username: String)
 
+/** What a sync needs. An empty [password] makes the sync fail with [SyncError.MissingPassword]. */
+data class Credentials(val settings: SyncSettings, val password: String)
+
 /**
  * Runs syncs for one [TodoStore], one at a time: connects with the cached calendar home (discovering it only the
  * first time, for another account, or when the home answers 404/403), syncs, records the home, and saves the
@@ -36,16 +39,29 @@ class SyncController(
 
     /** Syncs now; waits for a sync already running. Throws [SyncError] when the sync could not run at all. */
     suspend fun syncNow(settings: SyncSettings, password: String, now: () -> Long = System::currentTimeMillis): SyncResult =
+        syncNow({ Credentials(settings, password) }, now)!!
+
+    /**
+     * Syncs with the account [credentials] gives, read once the sync running before has finished, so a sync never
+     * runs with an account that Settings replaced while it waited. Returns null when there is no account.
+     *
+     * For another account, the store is reset ([TodoStore.resetAccount]) only after the new server answered (its
+     * calendars listed): a mistyped URL or username never drops local data.
+     */
+    suspend fun syncNow(credentials: suspend () -> Credentials?, now: () -> Long = System::currentTimeMillis): SyncResult? =
         running.withLock {
+            val (settings, password) = credentials() ?: return@withLock null
             if (password.isEmpty()) throw SyncError.MissingPassword
             val account = Account(normalizedServerUrl(settings.serverUrl), settings.username.trim())
             val stored = store.database.value.account
-            if (stored == null || Account(normalizedServerUrl(stored.serverUrl), stored.username) != account) {
-                store.resetAccount(account)
-            }
-            val cached = store.database.value.home
+            val sameAccount = stored != null && Account(normalizedServerUrl(stored.serverUrl), stored.username) == account
+            val cached = if (sameAccount) store.database.value.home else null
             try {
                 var server = connect(settings, password, cached)
+                if (!sameAccount) {
+                    server.calendars() // Discovery can fall back to a guessed home: check it before dropping anything.
+                    store.resetAccount(account)
+                }
                 val result = try {
                     store.setHome(server.calendarHome)
                     CalDAVSync(store, server, zone).run(now())
@@ -58,7 +74,8 @@ class SyncController(
                 }
                 result
             } finally {
-                persistence?.flush(store)
+                // A failed save is reported by [persistence] and retried; it must not replace the sync's outcome.
+                persistence?.flushQuietly(store)
             }
         }
 

@@ -51,7 +51,8 @@ data class SyncResult(
  *   changes of each calendar whose sync token moved, and merge each changed task: without local edits the server
  *   version is taken; with local edits field by field ([TaskFields.merge]). The shadow becomes the server copy.
  *   An object that cannot be read leaves its task as it is and blocks writes for it. A removed object drops its
- *   task, local edits included.
+ *   task, local edits included. A removed calendar drops its tasks too, except those with local edits, which
+ *   become new tasks in the inbox.
  * - **Push**: conditional writes of pending deletes, new tasks (parents first) and edited tasks (MOVE first when the
  *   project changed). A 412 leaves the task for another pass, which pulls and merges again (at most [maxPasses]).
  *
@@ -123,11 +124,25 @@ class CalDAVSync(
         val pending = base.pendingDeletes.toMutableMap()
         fun calendarOf(path: String) = path.substringBeforeLast('/', "")
 
-        // Calendars gone from the server (or no longer a project): their tasks go too.
-        for ((id, s) in base.shadows) {
-            if (calendarOf(s.path) !in calendars) {
+        // Calendars gone from the server (or no longer a project): their tasks go too, except those with edits not
+        // yet uploaded, which stay as new tasks in the inbox (uploaded there by the push).
+        val goneShadows = base.shadows.filter { calendarOf(it.value.path) !in calendars }
+        if (goneShadows.isNotEmpty()) {
+            for ((id, s) in goneShadows) {
                 shadows.remove(id)
-                if (tasks.remove(id) != null) removed++
+                val local = tasks[id] ?: continue
+                if (!TaskFields.edited(local, s.task)) {
+                    tasks.remove(id)
+                    removed++
+                }
+            }
+            val localOnly = tasks.keys.filterTo(HashSet()) { it !in shadows }
+            for (id in localOnly) {
+                val t = tasks.getValue(id)
+                when {
+                    id in goneShadows -> tasks[id] = TodoStore.keepLocalOnly(t, localOnly)
+                    t.parentId in goneShadows && t.parentId !in tasks -> tasks[id] = t.copy(parentId = null) // went with its list
+                }
             }
         }
         pending.entries.removeAll { calendarOf(it.value.path) !in calendars }
