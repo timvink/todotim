@@ -658,7 +658,8 @@ FocusScope {
     openOverlay("labels")
     var gen = labelPicker.generation
     req("getTask", { id: id }, function(ok, r) {
-      if (gen !== labelPicker.generation || !ok) return
+      if (gen !== labelPicker.generation) return
+      if (!ok) { app.closeOverlay("labels"); toast.show(r, false); return }
       app.pickerLabels = r.labels.map(function(l) { return l.name })
       app.pickerLabelsLoaded = true
     })

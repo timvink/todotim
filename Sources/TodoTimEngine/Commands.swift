@@ -148,10 +148,12 @@ extension Engine {
             let lid = try string(r, "id")
             let name = r["name"]?.string?.trimmingCharacters(in: .whitespaces)
             let color = r["color"]?.string
+            let oldName = store.labels.first { $0.id == lid }?.name
             store.updateLabel(lid) { l in
                 if let name, !name.isEmpty { l.name = name }
                 if let color { l.color = color }
             }
+            if case .label(let current) = view, current == oldName, let name, !name.isEmpty { view = .label(name) }
             return .null
         case "deleteLabel":
             store.deleteLabel(try string(r, "id"))
