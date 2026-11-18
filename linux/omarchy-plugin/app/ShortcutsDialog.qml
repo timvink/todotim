@@ -19,7 +19,7 @@ Modal {
       ["Shift+a", "Add task at the top of the section"], ["s", "Add section"],
       ["Enter", "Open task; in it, edit the title (d: notes, a: add sub-task)"] ] },
     { title: "Edit", keys: [
-      ["x / e", "Complete or reopen the selected tasks"], ["g x", "Open the task's first link in the browser"], ["1 – 4", "Set priority"], ["t", "Set date"], ["@", "Labels"],
+      ["x / e", "Complete or reopen the selected tasks"], ["g x", "Open the task's first link in the browser"], ["1 – 3", "Set priority"], ["0", "Remove priority"], ["t", "Set date"], ["@", "Labels"],
       ["m / v", "Move to a section, project or task"], ["Ctrl+] / Ctrl+[", "Indent / outdent"],
       ["Ctrl+↑ / Ctrl+↓, Ctrl+k / Ctrl+j", "Move up / down"], ["Delete, Ctrl+Backspace", "Delete task"],
       ["Ctrl+a", "Select every task in the list"], ["y, Ctrl+c", "Copy the selected tasks' titles"],

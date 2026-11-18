@@ -124,8 +124,8 @@ final class KeyRouter {
             case (Key.up, _), (_, "k"): model.moveDetail(-1)
             case (Key.down, _), (_, "j"): model.moveDetail(1)
             case (_, "e"), (_, "x"): if let id = model.detailTaskID { model.toggleComplete(id) }
-            case (_, "1"), (_, "2"), (_, "3"), (_, "4"):
-                model.setPriority(Priority(rawValue: Int(chars)!)!)
+            case (_, "0"), (_, "1"), (_, "2"), (_, "3"), (_, "4"):
+                model.setPriority(Priority(key: chars))
             case (_, "t"): model.popover = .date
             case (_, "@"): model.popover = .labels
             case (_, "m"), (_, "v"): model.showMoveDialog()
@@ -175,9 +175,9 @@ final class KeyRouter {
         case "a": model.addTaskOrSubtask()
         case "A": model.addTaskInCurrentSection(atTop: true)
         case "e", "x": model.completeSelection()
-        case "1", "2", "3", "4":
+        case "0", "1", "2", "3", "4":
             guard let id = model.selectedTaskID, model.store.task(id) != nil else { return false }
-            model.setPriority(Priority(rawValue: Int(chars)!)!, for: id)
+            model.setPriority(Priority(key: chars), for: id)
         case "t": model.showPopover(.date)
         case "@": model.showPopover(.labels)
         case "m", "v":

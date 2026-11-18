@@ -81,7 +81,7 @@ Modal {
     else if (t === "j" || event.key === Qt.Key_Down) { save(); app.moveDetail(1) }
     else if (t === "k" || event.key === Qt.Key_Up) { save(); app.moveDetail(-1) }
     else if (t === "e" || t === "x" || (ctrl && (event.key === Qt.Key_Return))) app.toggleComplete(taskId)
-    else if (t >= "1" && t <= "4" && !ctrl) app.setPriority(taskId, Number(t))
+    else if (t >= "0" && t <= "4" && !ctrl) app.setPriority(taskId, Number(t) || 4)
     else if (t === "t") app.openDatePicker(taskId)
     else if (t === "@") app.openLabelPicker(taskId)
     else if (t === "m" || t === "v") app.openMoveDialog([taskId])
@@ -261,7 +261,7 @@ Modal {
       icon: Icons.flag
       text: root.task ? (root.task.priority < 4 ? "Priority " + root.task.priority : "No priority") : ""
       tone: root.task && root.task.priority < 4 ? root.theme.priorityColor(root.task.priority) : root.theme.dim
-      key: "1–4"
+      key: "0–3"
       onClicked: root.app.openPriorityPicker(root.taskId)
     }
     PropButton {

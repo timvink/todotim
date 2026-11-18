@@ -39,7 +39,7 @@ import app.todotim.core.EntityID
 import app.todotim.core.Label
 import app.todotim.core.Priority
 
-fun priorityName(p: Priority): String = "Priority ${p.level}"
+fun priorityName(p: Priority): String = if (p == Priority.P4) "No priority" else "Priority ${p.level}"
 
 /** Dropdown of p1–p4 with coloured flags. */
 @Composable

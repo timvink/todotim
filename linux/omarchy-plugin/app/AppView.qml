@@ -907,7 +907,7 @@ FocusScope {
           case "h": collapseSelected(); break
           case "l": expandSelected(); break
           case "e": case "x": completeSelected(); break
-          case "1": case "2": case "3": case "4": setPriority(selectedId, Number(t)); break
+          case "0": case "1": case "2": case "3": case "4": setPriority(selectedId, Number(t) || 4); break
           case "t": openDatePicker(selectedId); break
           case "@": openLabelPicker(selectedId); break
           case "m": case "v": openMoveDialog(selectedIds()); break
@@ -1191,7 +1191,7 @@ FocusScope {
       { key: 1, text: "Priority 1", icon: Icons.flag, color: app.theme.priorityColor(1), hint: "1" },
       { key: 2, text: "Priority 2", icon: Icons.flag, color: app.theme.priorityColor(2), hint: "2" },
       { key: 3, text: "Priority 3", icon: Icons.flag, color: app.theme.priorityColor(3), hint: "3" },
-      { key: 4, text: "Priority 4", icon: Icons.flag, color: app.theme.priorityColor(4), hint: "4" }
+      { key: 4, text: "No priority", icon: Icons.flag, color: app.theme.priorityColor(4), hint: "0" }
     ]
     onPicked: function(item) { app.setPriority(app.pickerTaskId, item.key); app.closeOverlay("priority") }
   }

@@ -255,6 +255,9 @@ struct Hairline: View {
 }
 
 extension Priority {
+    /// The priority of a number key: 1–3, and 0 or 4 for none (p4).
+    init(key: String) { self = Priority(rawValue: Int(key) ?? 4).flatMap { $0 == .p4 ? nil : $0 } ?? .p4 }
+
     var color: Color {
         switch self {
         case .p1: Ctp.red.color
@@ -273,7 +276,7 @@ extension Priority {
         }
     }
 
-    var title: String { "Priority \(rawValue)" }
+    var title: String { self == .p4 ? "No priority" : "Priority \(rawValue)" }
 }
 
 extension DueDate {
