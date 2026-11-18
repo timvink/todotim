@@ -237,12 +237,19 @@ final class KeyRouter {
             }
             return !["a", "c", "v", "x", "z", "q", "w", "h", ",", "`"].contains(chars.lowercased())
         }
-        // Before the field has focus, nothing may reach the list behind the dialog.
+        // Before the field has focus, nothing may reach the list behind the dialog: typing goes to
+        // the query, which then takes focus.
         if !model.isEditingText {
+            guard mods.intersection([.command, .control, .option]).isEmpty else { return false }
             if event.keyCode == Key.returnKey || event.keyCode == Key.enter {
                 model.performMove(move.highlighted)
+            } else if event.keyCode == Key.delete || event.keyCode == Key.forwardDelete {
+                move.type("", delete: true)
+            } else if let text = event.characters, !text.isEmpty,
+                      !text.unicodeScalars.contains(where: { CharacterSet.controlCharacters.contains($0) || (0xF700...0xF8FF).contains($0.value) }) {
+                move.type(text, delete: false)
             }
-            return mods.intersection([.command, .control, .option]).isEmpty
+            return true
         }
         return false
     }

@@ -14,6 +14,8 @@ final class MoveDialogState {
     let currentProjectID: EntityID?
     var picksProject: Bool { taskIDs.isEmpty }
     var query = ""
+    /// Bumped when typing arrives while the field lacks focus, so the view focuses it.
+    private(set) var focusRequest = 0
     private(set) var targets: [MoveTarget] = []
     /// Index into `targets`.
     private(set) var highlight = 0
@@ -31,6 +33,12 @@ final class MoveDialogState {
     init(taskIDs: [EntityID]) {
         self.taskIDs = taskIDs
         currentProjectID = nil
+    }
+
+    /// Text typed while the field lacked focus: goes into the query (Delete removes a character).
+    func type(_ text: String, delete: Bool) {
+        if delete { if !query.isEmpty { query.removeLast() } } else { query += text }
+        focusRequest += 1
     }
 
     /// The `g p` project picker.
@@ -118,6 +126,11 @@ struct MoveDialogView: View {
             focused = true
         }
         .onChange(of: state.query) { state.refresh(store) }
+        .onChange(of: state.focusRequest) {
+            focused = true
+            // A field that takes focus selects its text; the next key must append, not replace.
+            DispatchQueue.main.async { (NSApp.keyWindow?.firstResponder as? NSTextView)?.moveToEndOfDocument(nil) }
+        }
         .onChange(of: store.structureVersion) { state.refresh(store) }
         .onChange(of: store.nameVersion) { state.refresh(store) }
     }
