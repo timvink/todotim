@@ -53,6 +53,13 @@ final class KeyRouter {
         // Only the main window; popovers, alerts and Settings handle their own keys.
         guard let window = event.window, let main = model.mainWindow, window === main,
               main.attachedSheet == nil else { return false }
+        if event.keyCode == Key.returnKey || event.keyCode == Key.enter,
+           event.modifierFlags.intersection([.command, .control, .option, .shift]) == .shift,
+           let editor = main.firstResponder as? NSTextView, editor.isEditable,
+           let field = editor.delegate, field === model.descriptionEditor {
+            editor.insertNewlineIgnoringFieldEditor(nil)
+            return true
+        }
         let chars = event.charactersIgnoringModifiers ?? ""
         if model.chordPending {
             if event.modifierFlags.intersection([.command, .control, .option]).isEmpty { return finishChord(chars) }
@@ -252,5 +259,21 @@ final class KeyRouter {
             return true
         }
         return false
+    }
+}
+
+extension View {
+    /// A multi-line description field: Return submits, Shift+Return inserts a newline. The field
+    /// editor sends both as `insertNewline:`, which without `onSubmit` ends editing and selects all
+    /// the text, so `KeyRouter` turns Shift+Return into a newline before the field sees it.
+    func descriptionField(focused: Bool, model: AppModel, onSubmit submit: @escaping () -> Void) -> some View {
+        onSubmit(submit)
+            .onChange(of: focused, initial: true) { _, focused in
+                guard focused else { return }
+                // The field editor is the first responder only after this focus change.
+                DispatchQueue.main.async {
+                    model.descriptionEditor = (model.mainWindow?.firstResponder as? NSTextView)?.delegate
+                }
+            }
     }
 }

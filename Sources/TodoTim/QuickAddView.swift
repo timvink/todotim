@@ -13,6 +13,7 @@ struct QuickAddView: View {
     /// scrolls inside the field, and the fills would no longer sit behind their tokens.
     @State private var inputWidth: CGFloat = 0
     @FocusState private var focused: Bool
+    @FocusState private var detailsFocused: Bool
 
     private struct Resolved {
         var parsed: ParsedTask
@@ -111,6 +112,8 @@ struct QuickAddView: View {
                     .textFieldStyle(.plain)
                     .foregroundStyle(Theme.text)
                     .lineLimit(1...4)
+                    .focused($detailsFocused)
+                    .descriptionField(focused: detailsFocused, model: model, onSubmit: add)
                     .fieldPrompt("Description", show: details.isEmpty)
                     .font(Fonts.body)
                 warnings(r)
@@ -175,7 +178,7 @@ struct QuickAddView: View {
     private func add() {
         let r = current()
         let content = r.parsed.content.trimmingCharacters(in: .whitespaces)
-        guard !content.isEmpty else { return }
+        guard !content.isEmpty else { focused = true; return }
         let t = store.addTask(content: content, projectId: r.project.id, sectionId: r.section?.id,
                               description: details.trimmingCharacters(in: .whitespacesAndNewlines),
                               priority: r.parsed.priority ?? .p4, due: r.parsed.due, labels: r.parsed.labels)

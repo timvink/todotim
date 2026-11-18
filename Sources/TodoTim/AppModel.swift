@@ -164,6 +164,8 @@ final class AppModel {
     @ObservationIgnored weak var listScrollView: NSScrollView?
     /// A field the open task sheet should focus (Return: title, d: description); the sheet clears it.
     var detailFocusRequest: DetailField?
+    /// The delegate of the field editor while a description field has focus (see `descriptionField`).
+    @ObservationIgnored weak var descriptionEditor: AnyObject?
     /// Where the keyboard was last in this list: the last selected task, or the section the
     /// inline editor opened in. Without a selection, j/k, gg and G start from its section.
     @ObservationIgnored private var anchor: NavigationAnchor?

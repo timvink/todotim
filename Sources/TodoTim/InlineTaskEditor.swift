@@ -30,6 +30,7 @@ struct InlineTaskEditor: View {
                     .foregroundStyle(Theme.text)
                     .lineLimit(1...6)
                     .focused($focus, equals: .details)
+                    .descriptionField(focused: focus == .details, model: model, onSubmit: submit)
                     .fieldPrompt("Description", show: draft.details.isEmpty)
                     .font(Fonts.body)
                 HStack(spacing: 8) {
@@ -87,7 +88,7 @@ struct InlineTaskEditor: View {
         let projectId = draft.projectId, sectionId = draft.sectionId
         let priority = draft.priority, due = draft.due, labels = draft.labels
         let raw = draft.title.trimmingCharacters(in: .whitespaces)
-        guard !raw.isEmpty, let target = model.editor else { return }
+        guard !raw.isEmpty, let target = model.editor else { focus = .title; return }
         let projectNames = model.allProjects.map(\.name)
         let parsed = QuickAddParser.parse(raw, projectNames: projectNames,
                                           sectionNames: store.sections(in: projectId).map(\.name))

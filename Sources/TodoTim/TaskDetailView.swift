@@ -183,7 +183,7 @@ fileprivate struct TaskDetailContent: View {
                 }
                 .frame(width: Self.column, height: 24)
                 DetailTextFields(taskID: task.id, content: task.content, description: task.description,
-                                 isCompleted: task.isCompleted, focus: $focus)
+                                 isCompleted: task.isCompleted, detailsFocused: focus == .details, focus: $focus)
                     .id(task.id)
             }
             .padding(.bottom, 12)
@@ -484,6 +484,8 @@ private struct DetailTextFields: View {
     let content: String
     let description: String
     let isCompleted: Bool
+    /// Read by the sheet, which owns the focus state, so a focus change redraws this view.
+    let detailsFocused: Bool
     var focus: FocusState<DetailField?>.Binding
 
     @State private var title: String
@@ -496,11 +498,12 @@ private struct DetailTextFields: View {
     static let commitDelay: Duration = .milliseconds(300)
 
     init(taskID: EntityID, content: String, description: String, isCompleted: Bool,
-         focus: FocusState<DetailField?>.Binding) {
+         detailsFocused: Bool, focus: FocusState<DetailField?>.Binding) {
         self.taskID = taskID
         self.content = content
         self.description = description
         self.isCompleted = isCompleted
+        self.detailsFocused = detailsFocused
         self.focus = focus
         _title = State(initialValue: content)
         _details = State(initialValue: description)
@@ -526,6 +529,9 @@ private struct DetailTextFields: View {
                 .foregroundStyle(Theme.secondaryText)
                 .lineLimit(1...20)
                 .focused(focus, equals: .details)
+                .descriptionField(focused: detailsFocused, model: model) {
+                    commit(); focus.wrappedValue = nil
+                }
                 .onExitCommand { commit(); focus.wrappedValue = nil }
         }
         .onChange(of: title) { scheduleCommit() }
