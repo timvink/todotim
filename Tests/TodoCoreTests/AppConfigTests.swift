@@ -133,6 +133,9 @@ final class AppConfigTests: XCTestCase {
         XCTAssertTrue(unlocked.contains("in a terminal"), unlocked)
         let other = await SyncController.passwordCommandMessage("pass show x", failure, rbwUnlocked: { XCTFail(); return false })
         XCTAssertFalse(other.contains("rbw"), other)
+        let notFound = PasswordCommand.Failure(message: "password_command failed (exit 127)", exitCode: 127)
+        let missing = await SyncController.passwordCommandMessage("rbw get x", notFound, rbwUnlocked: { XCTFail(); return false })
+        XCTAssertTrue(missing.contains("could not find rbw"), missing)
     }
 }
 

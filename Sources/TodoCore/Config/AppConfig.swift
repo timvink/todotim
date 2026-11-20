@@ -201,6 +201,12 @@ public struct AppConfig: Equatable, Sendable {
 public enum PasswordCommand {
     public struct Failure: Error, LocalizedError {
         public var message: String
+        /// The shell's exit status when the command ran and failed; 127 means the shell did not find it.
+        public var exitCode: Int32?
+        public init(message: String, exitCode: Int32? = nil) {
+            self.message = message
+            self.exitCode = exitCode
+        }
         public var errorDescription: String? { message }
     }
 
@@ -355,7 +361,7 @@ public enum PasswordCommand {
         let signal = status & 0x7f
         if signal != 0 { throw Failure(message: "password_command was killed by signal \(signal)") }
         let code = (status >> 8) & 0xff
-        guard code == 0 else { throw Failure(message: "password_command failed (exit \(code))") }
+        guard code == 0 else { throw Failure(message: "password_command failed (exit \(code))", exitCode: code) }
         let password = String(data: stdout, encoding: .utf8)?
             .components(separatedBy: .newlines).first?.trimmingCharacters(in: .whitespaces) ?? ""
         guard !password.isEmpty || !requireOutput else { throw Failure(message: "password_command printed nothing") }
@@ -379,7 +385,7 @@ public enum PasswordCommand {
         if result.tooMuchOutput { throw Failure(message: "password_command printed more than \(maxOutput / 1024) KB") }
         if let signal = result.signal { throw Failure(message: "password_command was killed by signal \(signal)") }
         guard let code = result.exitCode else { throw Failure(message: "password_command did not finish") }
-        guard code == 0 else { throw Failure(message: "password_command failed (exit \(code))") }
+        guard code == 0 else { throw Failure(message: "password_command failed (exit \(code))", exitCode: code) }
         let password = String(data: result.stdout, encoding: .utf8)?
             .components(separatedBy: .newlines).first?.trimmingCharacters(in: .whitespaces) ?? ""
         guard !password.isEmpty || !requireOutput else { throw Failure(message: "password_command printed nothing") }

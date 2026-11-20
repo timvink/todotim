@@ -473,11 +473,17 @@ public final class SyncController {
         onDatabaseReplaced?()
     }
 
-    /// A failed `password_command`, saying what to do. A locked rbw vault (rbw's agent locks after a
-    /// timeout or a restart, and the command cannot ask for the master password) is named as such.
+    /// A failed `password_command`, saying what to do. A program the login shell cannot find (it
+    /// reads ~/.zprofile, not ~/.zshrc) and a locked rbw vault (rbw's agent locks after a timeout or a
+    /// restart, and the command cannot ask for the master password) are named as such.
     nonisolated static func passwordCommandMessage(_ command: String, _ error: Error,
                                                    rbwUnlocked: (() async -> Bool)? = nil) async -> String {
-        if PasswordCommand.program(of: command) == "rbw" {
+        let program = PasswordCommand.program(of: command)
+        if (error as? PasswordCommand.Failure)?.exitCode == 127 {
+            return "The login shell could not find \(program) (it reads ~/.zprofile, not ~/.zshrc). "
+                + "Give its full path in password_command, or add its directory to PATH in ~/.zprofile."
+        }
+        if program == "rbw" {
             let unlocked = await (rbwUnlocked ?? { await PasswordCommand.succeeds("rbw unlocked") })()
             if !unlocked {
                 return "The rbw vault is locked, so password_command could not read the password. "
