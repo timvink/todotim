@@ -1,0 +1,5 @@
+rules:
+  dependabot-cooldown:
+    ignore:
+      # Without a cooldown key Dependabot waits 3 days before a version update.
+      - dependabot.yml
