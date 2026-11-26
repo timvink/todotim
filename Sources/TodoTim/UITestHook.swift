@@ -25,7 +25,7 @@ import TodoCore
 ///     enddrag              cancel the drag
 ///     collapse S           toggle section S
 ///     order                print the visible task titles with depths
-///     key esc|up|down|return|j|k|h|l|g|G|i|s|a|e|t|v|m|@|/|u|x|J|K|{|}|d|left|right|home|end|pageup|pagedown|delete|cmd-j|cmd-k|cmd-a|cmd-c|ctrl-j|ctrl-k|shift-up|shift-down|y|q|?|p   post a key press to the app's own queue
+///     key esc|up|down|return|j|k|h|l|g|G|i|s|a|A|e|t|v|m|@|/|u|x|J|K|{|}|d|left|right|home|end|pageup|pagedown|delete|cmd-j|cmd-k|cmd-a|cmd-c|ctrl-j|ctrl-k|shift-up|shift-down|y|q|?|p   post a key press to the app's own queue
 ///     search TEXT          open search with this query
 ///     state                print the list, the selection and which modals are open
 ///     addtask TEXT         add a task with this raw title to the current project
@@ -143,7 +143,7 @@ enum UITestHook {
             // key esc|up|down|<char>: a key press posted to this app's own queue.
             let codes: [String: (String, UInt16)] = ["esc": ("\u{1b}", 53), "up": ("\u{F700}", 126), "down": ("\u{F701}", 125),
                                                     "return": ("\r", 36), "j": ("j", 38), "k": ("k", 40), "h": ("h", 4),
-                                                    "l": ("l", 37), "g": ("g", 5), "G": ("G", 5), "a": ("a", 0), "e": ("e", 14),
+                                                    "l": ("l", 37), "g": ("g", 5), "G": ("G", 5), "a": ("a", 0), "A": ("A", 0), "e": ("e", 14),
                                                     "t": ("t", 17), "v": ("v", 9), "@": ("@", 19), "/": ("/", 44), "u": ("u", 32),
                                                     "x": ("x", 7), "i": ("i", 34), "s": ("s", 1), "J": ("J", 38), "K": ("K", 40), "d": ("d", 2),
                                                     "left": ("\u{F702}", 123), "right": ("\u{F703}", 124),
@@ -156,7 +156,7 @@ enum UITestHook {
                                                     "cmd-a": ("a", 0), "cmd-c": ("c", 8)]
             guard let w = model.mainWindow, let (chars, code) = codes[arg] else { break }
             let flags: NSEvent.ModifierFlags = arg.hasPrefix("cmd-") ? .command : arg.hasPrefix("ctrl-") ? .control
-                : arg.hasPrefix("shift-") || ["J", "K", "{", "}"].contains(arg) ? .shift : []
+                : arg.hasPrefix("shift-") || ["A", "J", "K", "{", "}"].contains(arg) ? .shift : []
             if let e = NSEvent.keyEvent(with: .keyDown, location: .zero, modifierFlags: flags, timestamp: ProcessInfo.processInfo.systemUptime,
                                         windowNumber: w.windowNumber, context: nil, characters: chars,
                                         charactersIgnoringModifiers: chars, isARepeat: false, keyCode: code) {
@@ -171,7 +171,10 @@ enum UITestHook {
             out("view=\(view) selected=\(model.selectedTaskID.flatMap { store.task($0)?.content } ?? "nil")"
                 + (onScreen.map { " onScreen=\($0)" } ?? "") + " editingText=\(model.isEditingText)"
                 + " multi=\(model.visibleTaskIDs().filter(model.multiSelection.contains).compactMap { store.task($0)?.content })")
-            out("detail=\(model.detailTaskID.flatMap { store.task($0)?.content } ?? "nil") quickAdd=\(model.showQuickAdd) move=\(model.moveDialog.map { "\($0.highlighted?.title ?? "-")" } ?? "nil") shortcuts=\(model.showShortcuts) editor=\(model.editor != nil) collapsed=\(model.collapsedSections.count)"
+            let items = model.cachedDisplay().items
+            let editorRow = items.firstIndex { $0.id == DisplayItem.editor(depth: 0).id }
+                .map { "\($0)/\(items.count) onScreen=\(model.visibleRows?.ids.contains(items[$0].id) == true)" }
+            out("detail=\(model.detailTaskID.flatMap { store.task($0)?.content } ?? "nil") quickAdd=\(model.showQuickAdd) move=\(model.moveDialog.map { "\($0.highlighted?.title ?? "-")" } ?? "nil") shortcuts=\(model.showShortcuts) editor=\(editorRow ?? "nil") collapsed=\(model.collapsedSections.count)"
                 + " scrollY=\(Int(model.listScrollView?.contentView.bounds.origin.y ?? -1)) deleteAsk=\(model.confirmDeleteTaskID != nil)"
                 + " focusRequest=\(model.detailFocusRequest.map { "\($0)" } ?? "nil")")
         case "addtask":

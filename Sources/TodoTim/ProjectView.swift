@@ -221,18 +221,7 @@ private struct SelectionScroller: View {
                 // While a key is held, jump without animation instead of restarting one per press.
                 let repeating = now - visible.lastScroll < 0.25
                 visible.lastScroll = now
-                if repeating || distance(to: id) > Self.animatedDistance {
-                    proxy.scrollTo(id)
-                } else {
-                    withAnimation(.easeOut(duration: 0.12)) { proxy.scrollTo(id) }
-                    // An animated scroll to a row the lazy stack has not built yet (one just
-                    // above the screen, e.g. `{` to a task whose sub-tasks are on screen) can
-                    // leave the list where it was. Once it would have ended, jump instead.
-                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.25) {
-                        guard model.selectedTaskID == id, !visible.ids.contains(id) else { return }
-                        proxy.scrollTo(id)
-                    }
-                }
+                reveal(id, animated: !repeating) { model.selectedTaskID == id }
             }
             // The selected row presents the `t` / `@` popover: it must be built, so on screen.
             .onChange(of: model.popover) { _, popover in
@@ -247,16 +236,29 @@ private struct SelectionScroller: View {
                 // Once the row is laid out, so the scroll knows its height. Without an anchor the
                 // scroll goes only as far as needed, and nowhere when the row is on screen.
                 DispatchQueue.main.async {
-                    if distance(to: Self.editorID) > Self.animatedDistance {
-                        proxy.scrollTo(Self.editorID)
-                    } else {
-                        withAnimation(.easeOut(duration: 0.12)) { proxy.scrollTo(Self.editorID) }
-                    }
+                    reveal(Self.editorID, animated: true) { model.editor != nil }
                 }
             }
     }
 
     private static let editorID = DisplayItem.editor(depth: 0).id
+
+    /// Scrolls row `id` on screen: animated when it is near, else a jump.
+    private func reveal(_ id: String, animated: Bool, stillWanted: @escaping () -> Bool) {
+        guard animated, distance(to: id) <= Self.animatedDistance else {
+            proxy.scrollTo(id)
+            return
+        }
+        withAnimation(.easeOut(duration: 0.12)) { proxy.scrollTo(id) }
+        // An animated scroll to a row the lazy stack has not built yet (one just off screen: `{`
+        // to a task whose sub-tasks are on screen, or the editor opening below the screen) can
+        // leave the list where it was, and an unbuilt editor never takes focus. Once the scroll
+        // would have ended, jump instead.
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.25) {
+            guard stillWanted(), !visible.ids.contains(id) else { return }
+            proxy.scrollTo(id)
+        }
+    }
 
     /// Rows between `id` and the nearest row on screen.
     private func distance(to id: String) -> Int {
@@ -405,7 +407,8 @@ struct SectionHeaderView: View {
                         .focused($nameFocused)
                         .onSubmit(commitRename)
                         .onExitCommand { model.renamingSectionID = nil }
-                        .onAppear { name = model.sectionRenameDraft ?? section.name; nameFocused = true }
+                        .onAppear { name = model.sectionRenameDraft ?? section.name }
+                        .focusOnAppear { nameFocused = true }
                         .onChange(of: name) { model.sectionRenameDraft = name }
                     Button("Save", action: commitRename).buttonStyle(AccentButtonStyle()).padding(.leading, 8)
                     Button("Cancel") { model.renamingSectionID = nil }.buttonStyle(SoftButtonStyle()).padding(.leading, 6)
@@ -510,7 +513,8 @@ struct AddSectionGap: View {
             }
             .padding(.leading, Theme.gutter)
             .padding(.vertical, 12)
-            .onAppear { name = model.sectionEditorDraft; focused = true }
+            .onAppear { name = model.sectionEditorDraft }
+            .focusOnAppear { focused = true }
             .onChange(of: name) { model.sectionEditorDraft = name }
         } else {
             Button {

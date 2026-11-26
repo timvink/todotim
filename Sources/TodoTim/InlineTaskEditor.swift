@@ -80,7 +80,7 @@ struct InlineTaskEditor: View {
         .padding(.leading, CGFloat(depth) * Theme.indent + Theme.gutter)
         .padding(.vertical, 8)
         .onExitCommand { model.editor = nil }
-        .onAppear { focus = .title }
+        .focusOnAppear { focus = .title }
     }
 
     private func submit() {

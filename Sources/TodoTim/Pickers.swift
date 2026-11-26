@@ -463,6 +463,16 @@ extension View {
         }
         .accessibilityLabel(Text(prompt))
     }
+
+    /// Runs `focus` (setting a `FocusState`) when the view appears, and again one run-loop turn
+    /// later: a field that is not in the window yet drops the first one silently. Rows the lazy
+    /// task list builds while it scrolls to them (the inline editor) are such fields.
+    func focusOnAppear(_ focus: @escaping () -> Void) -> some View {
+        onAppear {
+            focus()
+            DispatchQueue.main.async(execute: focus)
+        }
+    }
 }
 
 /// The project and section of the inline editor, as a menu of every project and its sections.
