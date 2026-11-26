@@ -628,6 +628,60 @@ final class SyncControllerConfigTests: XCTestCase {
         guard case .idle = c.status else { return XCTFail("status \(c.status)") }
         XCTAssertEqual(runs(), 4)
     }
+
+    /// A vault that was locked when the command ran (at launch): automatic syncs run it again once
+    /// the vault is unlocked, without Sync Now, and never while it is still locked.
+    func testPasswordCommandRunsAgainOnceVaultIsUnlocked() async throws {
+        let defaults = UserDefaults(suiteName: suite)!
+        defaults.removePersistentDomain(forName: suite)
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let dir = FileManager.default.temporaryDirectory.appendingPathComponent("todotim-pwcmd-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let pw = dir.appendingPathComponent("pw"), log = dir.appendingPathComponent("runs")
+        func runs() -> Int { ((try? String(contentsOf: log, encoding: .utf8)) ?? "").split(separator: "\n").count }
+        let config = AppConfig(sync: SyncSettings(serverURL: "https://cloud.example.com/remote.php/dav/", username: "tim", enabled: true),
+                               passwordCommand: "echo run >> '\(log.path)'; cat '\(pw.path)'")
+        let remote = FakeCalDAVServer()
+        let c = SyncController(store: TodoStore(), defaults: defaults, credentials: InMemoryCredentialStore(), config: config,
+                               configPath: "/tmp/test.toml", stateURL: nil) { _, _, _ in remote }
+        let vault = AcceptedPassword()  // password "" = locked
+        c.passwordSourceReady = { _ in await vault.password == "open" }
+        c.syncInterval = .seconds(3600)
+        c.debounceInterval = .milliseconds(1)
+
+        await c.syncNow()  // locked: the command fails
+        guard case .error = c.status else { return XCTFail("status \(c.status)") }
+        XCTAssertEqual(runs(), 1)
+        c.scheduleSync()
+        try await Task.sleep(for: .milliseconds(200))
+        XCTAssertEqual(runs(), 1, "not again while the vault is locked")
+
+        vault.password = "open"
+        try Data("secret".utf8).write(to: pw)
+        c.scheduleSync()
+        try await Task.sleep(for: .milliseconds(300))
+        guard case .idle = c.status else { return XCTFail("status \(c.status)") }
+        XCTAssertEqual(c.storedPassword(), "secret")
+        XCTAssertEqual(runs(), 2)
+    }
+
+    func testRbwUnlockedAsksTheCommandsOwnRbw() async throws {
+        let dir = FileManager.default.temporaryDirectory.appendingPathComponent("todotim-rbw-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let rbw = dir.appendingPathComponent("rbw")
+        try Data("#!/bin/sh\n[ \"$1\" = unlocked ] && [ -f '\(dir.path)/open' ]\n".utf8).write(to: rbw)
+        try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: rbw.path)
+        let command = "\(rbw.path) get 'Nextcloud app' tim"
+        let locked = await SyncController.rbwUnlocked(command)
+        XCTAssertEqual(locked, false)
+        try Data().write(to: dir.appendingPathComponent("open"))
+        let unlocked = await SyncController.rbwUnlocked(command)
+        XCTAssertEqual(unlocked, true)
+        let other = await SyncController.rbwUnlocked("pass show nextcloud")
+        XCTAssertNil(other)
+    }
     #endif
 }
 

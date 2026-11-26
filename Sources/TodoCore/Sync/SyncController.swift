@@ -101,6 +101,11 @@ public final class SyncController {
     @ObservationIgnored private var passwordCommandAttempted = false
     /// Why the last `password_command` run gave no password, for every sync until it runs again.
     @ObservationIgnored private var passwordCommandError: String?
+    /// Whether the last `password_command` run itself failed (not: its password was refused).
+    @ObservationIgnored private var passwordCommandFailed = false
+    /// Whether `password_command` would now succeed without asking for anything: for rbw, whether
+    /// its vault is unlocked. nil when that cannot be known (only Sync Now runs the command again).
+    @ObservationIgnored var passwordSourceReady: (String) async -> Bool? = SyncController.rbwUnlocked
     /// Password kept in memory only: from `password_command` (which replaces the Keychain, whose
     /// access prompt returns with every update of an ad-hoc signed app), or one whose Keychain save
     /// failed. For the account it belongs to.
@@ -267,6 +272,13 @@ public final class SyncController {
         // A settings change while waiting (`restartLoop`) has set the status; leave it.
         guard self.settings == settings, !Task.isCancelled else { return }
         var passwordIsNew = false
+        // A locked rbw vault made the command fail (at launch, say). Run it again once the vault is
+        // unlocked, so sync recovers without Sync Now; `rbw unlocked` never asks for the password.
+        if password.isEmpty, passwordCommandAttempted, passwordCommandFailed, let command = passwordCommand,
+           await passwordSourceReady(command) == true {
+            guard self.settings == settings, !Task.isCancelled else { return }
+            passwordCommandAttempted = false
+        }
         if password.isEmpty, let command = passwordCommand, !passwordCommandAttempted {
             passwordCommandAttempted = true
             status = .syncing
@@ -274,12 +286,14 @@ public final class SyncController {
                 password = try await PasswordCommand.run(command)
                 storePassword(password, for: account)
                 passwordCommandError = nil
+                passwordCommandFailed = false
                 passwordIsNew = true
             } catch is CancellationError {
                 passwordCommandAttempted = false
                 if self.settings == settings { status = .idle(lastSync: lastSync) }
                 return
             } catch {
+                passwordCommandFailed = true
                 passwordCommandError = await Self.passwordCommandMessage(command, error)
             }
             guard self.settings == settings, !Task.isCancelled else { return }
@@ -484,13 +498,22 @@ public final class SyncController {
                 + "Give its full path in password_command, or add its directory to PATH in ~/.zprofile."
         }
         if program == "rbw" {
-            let unlocked = await (rbwUnlocked ?? { await PasswordCommand.succeeds("rbw unlocked") })()
+            let unlocked = await (rbwUnlocked ?? { await Self.rbwUnlocked(command) ?? false })()
             if !unlocked {
                 return "The rbw vault is locked, so password_command could not read the password. "
-                    + "Unlock it with rbw unlock in a terminal, then sync again."
+                    + "Unlock it with rbw unlock in a terminal; sync then resumes within a minute."
             }
         }
         return message(for: error) + ". Run the password_command from ~/.todotim.toml in a terminal to see why."
+    }
+
+    /// For a `password_command` that runs rbw: whether its vault is unlocked, asked of the same rbw
+    /// (the command's first word, with its path: the login shell's PATH may lack it). nil for other
+    /// programs.
+    nonisolated static func rbwUnlocked(_ command: String) async -> Bool? {
+        guard PasswordCommand.program(of: command) == "rbw",
+              let rbw = command.split(whereSeparator: \.isWhitespace).first else { return nil }
+        return await PasswordCommand.succeeds("\(rbw) unlocked")
     }
 
     nonisolated static func message(for error: Error) -> String {

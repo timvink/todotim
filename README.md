@@ -196,7 +196,7 @@ stops them from reading it, sync settings included), so update both before you a
 
 `password_command` runs in your login shell, so tools from Homebrew (or your Linux `PATH`) are found. Leave it out to enter the
 password in Settings instead. When it fails, click **Sync failed** in the sidebar (in Omarchy it opens Settings) to see why; a locked
-rbw vault is named as such (unlock it with `rbw unlock`, then sync again). TodoTim versions before CalDAV sync used `folder` and a
+rbw vault is named as such. Sync resumes within a minute after `rbw unlock`: TodoTim asks the same rbw whether it is unlocked (which never prompts) and then runs the command again. Other commands run again only on Sync Now. TodoTim versions before CalDAV sync used `folder` and a
 `.../remote.php/dav/files/USERNAME/` URL. TodoTim ignores `folder` now, and accepts that URL as the DAV root.
 
 ## Security
