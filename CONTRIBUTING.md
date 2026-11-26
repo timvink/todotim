@@ -70,9 +70,10 @@ together.)
 
 Users verify a download with `gh attestation verify <file> --repo timvink/todotim`.
 
-The Mac app is signed with the hardened runtime (`scripts/bundle.sh`). When the repository has the signing
-secrets, the build job signs it with a Developer ID, notarizes and staples it; without them it is ad-hoc signed,
-and on first launch users approve it in **System Settings › Privacy & Security › Open Anyway** (don't tell them
+The Mac app is signed with the hardened runtime (`scripts/bundle.sh`), with the certificate in the repository's
+signing secrets: today a self-signed one, which keeps Keychain access across updates. With a Developer ID
+certificate and the notary secrets, the build job would also notarize and staple it. Without notarization, users
+approve the app on first launch in **System Settings › Privacy & Security › Open Anyway** (don't tell them
 to remove the quarantine attribute). The APK is always signed with the one release key. See
 [docs/signing.md](docs/signing.md) for both setups.
 

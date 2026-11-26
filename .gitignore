@@ -8,3 +8,5 @@ dist/
 .build-linux-static/
 # The engine copied next to a symlinked dev plugin (docs/linux.md).
 linux/omarchy-plugin/bin/
+# The Mac release signing certificate and its password (docs/signing.md), backed up in the vault.
+signing/

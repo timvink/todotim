@@ -80,8 +80,10 @@ proving that GitHub Actions built it from this repository.
 4. Open the app. macOS blocks it the first time. Go to **System Settings › Privacy & Security**, scroll to
    the message about TodoTim, click **Open Anyway**, and confirm.
 
-TodoTim is ad-hoc signed with the hardened runtime, but not signed with an Apple Developer ID and not
-notarized. macOS therefore cannot tell you who published it, and Apple has not scanned it. The attestation
+TodoTim is signed with the hardened runtime and its own self-signed certificate (from 0.13.3; earlier
+releases are ad-hoc signed), not with an Apple Developer ID, and not notarized. macOS therefore cannot tell you
+who published it, and Apple has not scanned it. The certificate does keep the Keychain from asking for your
+password again after each update. The attestation
 check in step 2 is what ties the download to this repository. Don't remove the quarantine attribute with
 `xattr`; use **Open Anyway** for this one app instead. (Developer ID signing plus notarization would remove this
 step, but needs a paid Apple Developer account.)
@@ -179,7 +181,7 @@ repository = "https://github.com/timvink/todotim"
 enabled = true
 server_url = "https://your.cloud/remote.php/dav/"
 username = "USERNAME"
-# Optional. Prints the password; runs once per launch, and TodoTim keeps it in memory instead of the Keychain.
+# Optional, instead of the Keychain. Prints the password; runs once per launch, and TodoTim keeps it in memory.
 password_command = "rbw get 'Nextcloud app password'"
 # Optional, Nextcloud only. Users each new list is shared with (read-write), e.g. an assistant's account.
 share_with = ["tasks-agent"]

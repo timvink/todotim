@@ -44,8 +44,10 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-      # Developer ID signing and notarization run only when all five secrets exist (docs/signing.md);
-      # otherwise the app is ad-hoc signed. Each secret is passed only to the step that uses it.
+      # Signing (docs/signing.md): with the two certificate secrets the app is signed with that certificate,
+      # otherwise ad-hoc. A self-signed certificate keeps the Keychain access across updates; a Developer ID
+      # certificate plus the three notary secrets also gets the app notarized. Each secret is passed only to
+      # the step that uses it.
       - name: Check signing secrets
         id: signing
         env:
@@ -55,27 +57,31 @@ jobs:
           NOTARY_KEY_ID: ${{ secrets.NOTARY_KEY_ID }}
           NOTARY_ISSUER_ID: ${{ secrets.NOTARY_ISSUER_ID }}
         run: |
-          set=0
-          for name in MACOS_CERT_P12_BASE64 MACOS_CERT_PASSWORD NOTARY_KEY_P8_BASE64 NOTARY_KEY_ID NOTARY_ISSUER_ID; do
-            if [[ -n "${!name}" ]]; then set=$((set + 1)); fi
-          done
-          if [[ "$set" == 5 ]]; then
-            echo "enabled=true" >> "$GITHUB_OUTPUT"
-            echo "Signing with Developer ID and notarizing."
-          elif [[ "$set" == 0 ]]; then
-            echo "enabled=false" >> "$GITHUB_OUTPUT"
-            echo "No signing secrets: building an ad-hoc signed app."
-          else
-            echo "::error::Only $set of the 5 signing secrets are set; set all of them or none (docs/signing.md)"
+          count() { local n=0 name; for name; do if [[ -n "${!name}" ]]; then n=$((n + 1)); fi; done; echo "$n"; }
+          cert=$(count MACOS_CERT_P12_BASE64 MACOS_CERT_PASSWORD)
+          notary=$(count NOTARY_KEY_P8_BASE64 NOTARY_KEY_ID NOTARY_ISSUER_ID)
+          if [[ "$cert" == 1 || "$notary" == 1 || "$notary" == 2 ]]; then
+            echo "::error::Set both certificate secrets and all three notary secrets, or none of a group (docs/signing.md)"
             exit 1
           fi
+          if [[ "$notary" == 3 && "$cert" == 0 ]]; then
+            echo "::error::Notarizing needs the Developer ID certificate secrets (docs/signing.md)"
+            exit 1
+          fi
+          if [[ "$cert" == 2 ]]; then
+            echo "sign=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "No signing secrets: building an ad-hoc signed app."
+          fi
+          if [[ "$notary" == 3 ]]; then echo "notarize=true" >> "$GITHUB_OUTPUT"; fi
       - name: Test
         run: swift test
       - name: Import signing certificate
-        if: steps.signing.outputs.enabled == 'true'
+        if: steps.signing.outputs.sign == 'true'
         env:
           MACOS_CERT_P12_BASE64: ${{ secrets.MACOS_CERT_P12_BASE64 }}
           MACOS_CERT_PASSWORD: ${{ secrets.MACOS_CERT_PASSWORD }}
+          NOTARIZE: ${{ steps.signing.outputs.notarize }}
         run: |
           keychain="$RUNNER_TEMP/signing.keychain-db"
           keychain_password="$(openssl rand -hex 32)"
@@ -88,17 +94,29 @@ jobs:
           # Let codesign use the key without a UI prompt, and put the keychain in the search list.
           security set-key-partition-list -S apple-tool:,apple:,codesign: -s -k "$keychain_password" "$keychain" > /dev/null
           security list-keychains -d user | xargs security list-keychains -d user -s "$keychain"
-          identity="$(security find-identity -v -p codesigning "$keychain" | awk -F '"' '/"Developer ID Application: / { print $2; exit }')"
+          # -v would list only certificates the system trusts, which leaves out a self-signed one; codesign
+          # signs with it all the same. The SHA-1 hash names the identity without ambiguity.
+          line="$(security find-identity -p codesigning "$keychain" | awk '/^ *1\) / { print; exit }')"
+          identity="$(awk '{ print $2 }' <<< "$line")"
           if [[ -z "$identity" ]]; then
-            echo "::error::No valid 'Developer ID Application' identity in MACOS_CERT_P12_BASE64"
+            echo "::error::No code signing identity in MACOS_CERT_P12_BASE64"
             exit 1
           fi
-          echo "Signing identity: $identity"
+          echo "Signing identity: $line"
+          if [[ "$line" == *'"Developer ID Application: '* ]]; then
+            echo "Developer ID: signing with a secure timestamp."
+          elif [[ "$NOTARIZE" == true ]]; then
+            echo "::error::The notary secrets are set, but MACOS_CERT_P12_BASE64 holds no Developer ID Application certificate"
+            exit 1
+          else
+            # Apple's timestamp service serves only Apple-issued certificates.
+            echo "SIGN_TIMESTAMP=0" >> "$GITHUB_ENV"
+          fi
           echo "SIGN_IDENTITY=$identity" >> "$GITHUB_ENV"
       - name: Build universal app
         run: UNIVERSAL=1 scripts/bundle.sh
       - name: Notarize and staple
-        if: steps.signing.outputs.enabled == 'true'
+        if: steps.signing.outputs.notarize == 'true'
         env:
           NOTARY_KEY_P8_BASE64: ${{ secrets.NOTARY_KEY_P8_BASE64 }}
           NOTARY_KEY_ID: ${{ secrets.NOTARY_KEY_ID }}
@@ -128,7 +146,7 @@ jobs:
           cd dist
           shasum -a 256 "TodoTim-macOS-${VERSION}.zip" > "TodoTim-macOS-${VERSION}.zip.sha256"
       - name: Check Gatekeeper
-        if: steps.signing.outputs.enabled == 'true'
+        if: steps.signing.outputs.notarize == 'true'
         run: |
           check="$RUNNER_TEMP/gatekeeper"
           mkdir "$check"
@@ -136,7 +154,7 @@ jobs:
           xcrun stapler validate "$check/TodoTim.app"
           spctl -a -vv -t exec "$check/TodoTim.app"
       - name: Delete signing keychain
-        if: always() && steps.signing.outputs.enabled == 'true'
+        if: always() && steps.signing.outputs.sign == 'true'
         run: |
           security delete-keychain "$RUNNER_TEMP/signing.keychain-db" 2>/dev/null || true
           rm -f "$RUNNER_TEMP/cert.p12" "$RUNNER_TEMP/notary_key.p8"

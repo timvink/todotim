@@ -5,7 +5,8 @@
 #      APP=build/x/TodoTim.app  output bundle path (default build/TodoTim.app)
 #      VERSION=1.2.3            CFBundleShortVersionString (default 0.0.0-dev)
 #      UNIVERSAL=1              build for arm64 and x86_64
-#      SIGN_IDENTITY="Developer ID Application: Name (TEAMID)"  sign with it (default: ad-hoc)
+#      SIGN_IDENTITY="Developer ID Application: Name (TEAMID)"  sign with it (default: ad-hoc); a name or SHA-1 hash
+#      SIGN_TIMESTAMP=0         no secure timestamp (Apple's service serves only Apple-issued certificates)
 set -euo pipefail
 
 cd "$(dirname "$0")/.."
@@ -61,13 +62,16 @@ cat > "$APP/Contents/Info.plist" <<PLIST
 </plist>
 PLIST
 
-# Signature with the hardened runtime. With SIGN_IDENTITY: Developer ID plus a secure timestamp, as
-# notarization requires (see docs/signing.md). Otherwise ad-hoc, which cannot be notarized.
+# Signature with the hardened runtime. With SIGN_IDENTITY: that certificate (see docs/signing.md), plus a secure
+# timestamp unless SIGN_TIMESTAMP=0; notarization needs a Developer ID and the timestamp. Otherwise ad-hoc,
+# which cannot be notarized and loses Keychain access with every build.
 # No entitlements file: the app is not sandboxed and needs no hardened-runtime exception (no JIT, unsigned
 # executable memory, disabled library validation, DYLD variables or Apple Events). Outgoing network and its
 # own legacy Keychain items need no entitlement outside the sandbox.
 if [[ -n "${SIGN_IDENTITY:-}" ]]; then
-    codesign --force --options runtime --timestamp -s "$SIGN_IDENTITY" "$APP"
+    timestamp=--timestamp
+    if [[ "${SIGN_TIMESTAMP:-1}" == "0" ]]; then timestamp=--timestamp=none; fi
+    codesign --force --options runtime "$timestamp" -s "$SIGN_IDENTITY" "$APP"
 else
     codesign --force --options runtime --timestamp=none -s - "$APP"
 fi
